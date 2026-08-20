@@ -28,7 +28,7 @@ The first release must:
 
 - provide a normal `claude` executable that always runs inside Fence.
 - provide the same customized Claude artifact through package, Home Manager, devenv, and library interfaces.
-- preserve writable Claude state under the user's normal home directory.
+- preserve writable Claude state in a selected absolute configuration directory.
 - load packaged plugins and skills directly from immutable Nix store paths.
 - send GitHub API and Git traffic through RepoWolf.
 - block direct GitHub and other Git-host traffic.
@@ -114,13 +114,29 @@ The adapter passes all non-reserved user arguments unchanged and in their origin
 
 Den reserves the `den`, `superpowers`, `context-mode`, `frontend-design`, `slopbeth`, and `slopgent` plugin identifiers. It also reserves the `codegraph` MCP server and `den-fence` hook identifiers. Mutable user configuration can add non-conflicting entries, but it cannot disable or replace Den entries. The launcher fails before Fence starts when a user CLI argument, MCP entry, plugin setting, or hook setting conflicts with a reserved Den entry.
 
-Claude retains its normal writable state, including:
+Den selects Claude's writable configuration directory with this precedence:
 
-- `~/.claude/`
-- `~/.claude.json`
-- `~/.config/claude/`
+1. the explicit `configDir` constructor or module option.
+2. inherited `CLAUDE_CONFIG_DIR`.
+3. the default `~/.claude` directory.
 
-Den does not replace `HOME`. Den does not link packaged resources into these paths.
+An explicit or inherited value must be an absolute path. The launcher rejects relative values. It resolves all existing parent components before it applies ownership, permission, and overlap checks. It rejects a symbolic final component.
+
+A missing custom directory is created with mode `0700`. An existing custom directory must be owned by the invoking user. Its owner must have read, write, and execute access, and it must grant no group or other permissions. Den fails instead of changing permissions on an existing directory.
+
+A custom directory must have no effective ACL grant for another principal. Den inspects a new directory after creation because a parent ACL can add inherited entries. If a new directory fails this check, Den removes it and stops.
+
+Each canonical ancestor must prevent replacement by another principal. Group, other, or ACL write access is invalid unless the ancestor is a sticky directory owned by root or the invoking user. The launcher records the custom directory's device and inode, then repeats all checks immediately before Fence starts. A changed path fails closed.
+
+Default mode means that the fallback in step 3 selected `~/.claude`. In this mode, Fence grants write access to `~/.claude/` and the legacy state paths `~/.claude.json` and `~/.config/claude/`.
+
+Custom mode means that the explicit option or inherited variable selected the path. Den compares canonical paths for the custom directory, the three default paths, and all credential paths denied by Fence. The custom directory must be disjoint from each protected path. It cannot equal, contain, or be contained by one. This rule rejects broad values such as `/` and `$HOME`.
+
+In custom mode, the launcher sets `CLAUDE_CONFIG_DIR` to the canonical custom path. Fence grants Claude-state write access to that path. It also adds explicit write denials for `~/.claude/`, `~/.claude.json`, and `~/.config/claude/`. These denials take precedence over the worktree grant.
+
+`CLAUDE_CONFIG_DIR` relocates Claude settings, session history, plugins, and other filesystem-backed state. It relocates file-backed stored credentials on Linux. It does not relocate authentication from environment variables. macOS credentials can remain in Keychain and are not isolated by this option.
+
+Den does not replace `HOME`. Den does not link packaged resources into the selected writable directory.
 
 ### Packaged Claude resources
 
@@ -176,7 +192,7 @@ Context Mode remains one complete Claude plugin. Its store path includes:
 - required runtime dependencies.
 - its eight bundled skills: `context-mode`, `ctx-doctor`, `ctx-index`, `ctx-insight`, `ctx-purge`, `ctx-search`, `ctx-stats`, and `ctx-upgrade`.
 
-Nix performs all dependency installation. Runtime startup must not run `npm install`, marketplace installation, post-install healing, or network self-download. Context Mode writes session and knowledge state only under writable Claude state paths.
+Nix performs all dependency installation. Runtime startup must not run `npm install`, marketplace installation, post-install healing, or network self-download. Context Mode writes session and knowledge state only under the selected writable Claude configuration directory.
 
 A check must start the plugin from its immutable path with a temporary home directory. Any attempt to modify the plugin root is an error.
 
@@ -227,6 +243,7 @@ The public constructor has this shape:
 
 ```nix
 inputs.den.lib.${system}.mkClaude {
+  configDir = null;
   extraPkgs = [ pkgs.neovim ];
 
   docker = {
@@ -249,6 +266,10 @@ inputs.den.lib.${system}.mkClaude {
 
 All arguments are optional. `mkClaude { }` produces the same artifact as `packages.<system>.claude`.
 
+`configDir` is either `null` or an absolute path string. Its default is `null`, which permits runtime inheritance from `CLAUDE_CONFIG_DIR` before the normal fallback. A non-null value takes precedence over the inherited variable.
+
+For project-specific state, devenv or direnv computes an absolute value before launch. For example, a shell can export `CLAUDE_CONFIG_DIR="$PWD/.devenv/state/claude"`. The state directory must be excluded from Git because it can contain history, plugins, and credentials. Den does not resolve relative configuration paths against the working directory or Git root.
+
 `extraPkgs` is a list of Nix packages. The constructor does not add them to a host or user package set. Their store paths remain host-visible through Nix, but Den adds them only to the sandbox launcher, sandbox `PATH`, and Fence policy. RepoWolf shims remain before them in `PATH`, even if an extra package provides `gh`, `ssh`, or Git helpers.
 
 Each `socketPath` is either `null` or an absolute path. `null` enables runtime discovery. Each `hostPorts` value is a list of unique integers from 1 through 65535.
@@ -260,6 +281,7 @@ Each `socketPath` is either `null` or an absolute path. `null` enables runtime d
 ```nix
 programs.den.claude = {
   enable = true;
+  configDir = null;
   extraPkgs = [ pkgs.neovim ];
 
   docker = {
@@ -299,20 +321,25 @@ The launcher performs these steps for each invocation:
 5. Validate the RepoWolf token with the client-compatible `rw1_` format. Never include the token in an error or trace.
 6. Inspect the CA path with `lstat`. Reject a missing path, a symbolic link, a non-regular file, or an unreadable file.
 7. Convert the accepted CA path to an absolute path for the generated policy.
-8. Discover and validate enabled container sockets.
-9. Create separate policy and scratch directories with mode `0700`.
-10. Generate the Fence policy with mode `0600`, then change it to `0400` before Fence starts.
-11. Add the policy file and its parent directory to Fence's highest-precedence write-deny list.
-12. Export the policy path as the internal `DEN_FENCE_POLICY_FILE` variable for the macOS hook.
-13. Build a controlled sandbox environment and `PATH`.
-14. Add process-local Git configuration that rewrites GitHub HTTPS URLs to RepoWolf SSH URLs and clears credential helpers.
-15. Set `GIT_SSH_COMMAND` to the immutable `repowolf-git-ssh` path.
-16. Start `${fence}/bin/fence --settings "$DEN_FENCE_POLICY_FILE" --` with the Claude command.
-17. Start Claude with mandatory Den arguments and each unchanged non-reserved user argument.
-18. Preserve standard input, standard output, standard error, foreground process-group state, and terminal resize behavior.
-19. Forward `SIGINT`, `SIGTERM`, `SIGHUP`, and `SIGQUIT`. Preserve `SIGWINCH`, `SIGTSTP`, and `SIGCONT` job-control behavior.
-20. Return the Claude or Fence exit status, including the `128 + signal` convention for signal termination.
-21. Remove both private directories after Fence exits. Cleanup errors do not replace the child exit status.
+8. Select the Claude configuration directory from explicit `configDir`, inherited `CLAUDE_CONFIG_DIR`, or the default, in that order.
+9. In default mode, resolve the normal paths for Fence without applying custom-mode overlap, ownership, mode, ACL, or final-symlink rules.
+10. In custom mode, require an absolute path and apply canonical overlap, final-symlink, owner, mode, ACL, and safe-ancestor checks.
+11. Create a missing custom directory with mode `0700`, inspect its effective ACL, and remove it if the privacy checks fail.
+12. Discover and validate enabled container sockets.
+13. Create separate policy and scratch directories with mode `0700`.
+14. Generate the Fence policy with mode `0600`, then change it to `0400` before Fence starts.
+15. Add the policy file and its parent directory to Fence's highest-precedence write-deny list.
+16. Export the policy path as the internal `DEN_FENCE_POLICY_FILE` variable for the macOS hook.
+17. Build a controlled sandbox environment and `PATH`. Set `CLAUDE_CONFIG_DIR` when a custom directory is selected.
+18. Add process-local Git configuration that rewrites GitHub HTTPS URLs to RepoWolf SSH URLs and clears credential helpers.
+19. Set `GIT_SSH_COMMAND` to the immutable `repowolf-git-ssh` path.
+20. Revalidate the custom directory's canonical path, device, inode, owner, mode, ACL, and ancestors immediately before Fence starts.
+21. Start `${fence}/bin/fence --settings "$DEN_FENCE_POLICY_FILE" --` with the Claude command.
+22. Start Claude with mandatory Den arguments and each unchanged non-reserved user argument.
+23. Preserve standard input, standard output, standard error, foreground process-group state, and terminal resize behavior.
+24. Forward `SIGINT`, `SIGTERM`, `SIGHUP`, and `SIGQUIT`. Preserve `SIGWINCH`, `SIGTSTP`, and `SIGCONT` job-control behavior.
+25. Return the Claude or Fence exit status, including the `128 + signal` convention for signal termination.
+26. Remove both private directories after Fence exits. Cleanup errors do not replace the child exit status.
 
 The launcher replaces host `PATH` and inherited Git transport configuration. It removes `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `SSH_AUTH_SOCK`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`, and inherited `GIT_CONFIG_KEY_*` and `GIT_CONFIG_VALUE_*` entries. It then installs only Den's controlled Git environment and sets `GIT_TERMINAL_PROMPT=0`.
 
@@ -400,14 +427,15 @@ The normal policy grants:
 - read and execute access to required Nix store closures.
 - write access to the launch working tree.
 - write access to the separate Den scratch directory.
-- write access to normal Claude state paths.
+- write access to the selected Claude configuration directory and only the applicable legacy paths.
+- custom-mode write denials for all three default Claude paths.
 - read-only access to the validated CA file and policy file.
 - an explicit write denial for the policy file and its parent directory.
 - no general access to credential directories.
 
 The policy retains explicit read denials for SSH private keys, GnuPG, cloud credentials, Kubernetes credentials, and Docker credentials. It also denies package registry credentials, netrc files, and Git credential stores.
 
-Filesystem denials take precedence over grants. Den resolves each dynamic path before policy generation. A symbolic link under the worktree, Claude state, scratch directory, or socket path does not grant access to a denied target. The launcher rejects a dynamic path when safe resolution cannot prove its target.
+Filesystem denials take precedence over grants. Den resolves each dynamic path before policy generation. A symbolic link under the worktree, selected Claude configuration directory, scratch directory, or socket path does not grant access to a denied target. The launcher rejects a dynamic path when safe resolution cannot prove its target.
 
 Packaged plugin and tool paths are read-only. `extraPkgs` closures are read-only and executable.
 
@@ -498,6 +526,13 @@ The launcher fails before Claude starts for these conditions:
 - the endpoint is not an HTTPS origin.
 - the broker hostname is noncanonical, is an IP literal, or matches a denied Git host.
 - a user argument or mutable Claude entry conflicts with a reserved Den entry.
+- an explicit or inherited Claude configuration directory is relative.
+- a custom configuration path overlaps a default Claude path or denied credential path.
+- a custom configuration path has a symbolic final component.
+- an existing custom directory has the wrong owner, lacks owner access, grants group or other permissions, or has a non-owner ACL grant.
+- a custom directory has an ancestor that another principal can replace.
+- the custom directory changes identity before Fence starts.
+- the selected Claude configuration path cannot be resolved safely, created, or used as a directory.
 - the token format is invalid.
 - the CA path is missing, unreadable, symbolic, or not a regular file.
 - a configured socket path is not absolute.
@@ -535,6 +570,9 @@ A platform output must not silently omit Context Mode, CodeGraph, RepoWolf, a re
 - RepoWolf server prerequisites.
 - `REPOWOLF_ENDPOINT`, `REPOWOLF_TOKEN`, and `REPOWOLF_CA_FILE` requirements.
 - package, Home Manager, devenv, and direct-library examples.
+- `configDir` precedence, absolute-path requirement, default mode, custom mode, ownership, mode, ACL, ancestor, symlink, overlap, and revalidation rules.
+- a project-specific example that supplies an absolute ignored state path through devenv or direnv.
+- the macOS Keychain limitation for configuration-directory isolation.
 - `extraPkgs` behavior and path precedence.
 - Docker options, socket discovery, and the daemon warning.
 - Podman options, rootless defaults, and the daemon warning.
@@ -547,9 +585,9 @@ A platform output must not silently omit Context Mode, CodeGraph, RepoWolf, a re
 - Frontend Design, Slopbeth, and Slopgent.
 - full Context Mode integration.
 - CodeGraph 1.5.0 and declarative MCP behavior.
-- immutable resource loading and writable Claude state.
+- immutable resource loading, `configDir` precedence, absolute-path validation, and writable Claude state.
 - macOS Fence hook behavior and coverage limits.
-- troubleshooting for RepoWolf variables, CA files, sockets, plugins, MCP startup, and Fence errors.
+- troubleshooting for RepoWolf variables, CA files, custom-directory privacy checks, sockets, plugins, MCP startup, and Fence errors.
 - limitations, including blocked direct Git hosts and unsupported remote container endpoints.
 
 Examples must use `claude`, not a Den-specific command.
@@ -561,6 +599,18 @@ Examples must use `claude`, not a Den-specific command.
 Automated tests must cover:
 
 - missing and empty RepoWolf variables.
+- explicit `configDir`, inherited `CLAUDE_CONFIG_DIR`, and fallback precedence.
+- rejection of relative explicit and inherited configuration paths.
+- missing custom-directory creation with exact mode `0700`.
+- existing custom-directory owner, owner-access, group-permission, other-permission, ACL, non-directory, and unwritable cases.
+- inherited ACL detection after creation on platforms that support ACLs.
+- canonical parent components and rejection of a symbolic final component.
+- safe and unsafe ancestor mode, ACL, ownership, and sticky-directory cases.
+- device and inode replacement between initial validation and the final pre-Fence check.
+- a canonical overlap matrix for `/`, `$HOME`, all three default paths, descendants, ancestors, denied credential paths, and disjoint paths.
+- default-mode grants for the three normal Claude paths.
+- custom-mode grants for only the selected Claude configuration directory.
+- custom-mode default-path denials when the independent worktree grant contains those paths.
 - accepted and rejected endpoint forms, including uppercase, trailing-dot, Unicode, IP-literal, and denied Git-host cases.
 - token format validation without value disclosure.
 - regular, unreadable, missing, directory, and symbolic CA paths.
@@ -596,6 +646,9 @@ Host-level integration jobs must use the packaged Fence executable. They must ve
 - hosts mapped to GitHub, GitLab, and Bitbucket deny rules remain unreachable without live external requests.
 - a representative allowed registry hostname reaches a local fixture.
 - a denied credential path remains unreadable through a worktree or Claude-state symbolic link.
+- custom-mode default paths remain unwritable when the test worktree is also the temporary home directory.
+- Linux POSIX ACL and macOS ACL grants to another principal cause custom-directory validation to fail.
+- a replaceable custom-directory ancestor and a validation-time path swap both fail closed.
 - the policy file cannot be truncated, replaced, renamed, or made writable from inside Fence.
 - a later macOS Bash hook still denies a command after each policy mutation attempt.
 - Linux argv command rules deny descendant commands with multiple tokens.
@@ -628,17 +681,29 @@ Nix checks must verify:
 
 ### Claude startup checks
 
-A temporary-home startup check must:
+Temporary-home startup checks must cover both state modes.
+
+The default-mode check must:
 
 1. create an empty writable home directory.
-2. provide only the three required RepoWolf variables, with a fake valid token and regular CA file.
-3. start the packaged `claude` through its normal wrapper.
-4. avoid live Anthropic or GitHub traffic.
-5. confirm that all plugin and MCP configuration parses.
-6. confirm that immutable plugin roots remain unchanged.
-7. fail only at the expected offline provider or authentication boundary when a full prompt cannot run.
+2. leave `configDir` and `CLAUDE_CONFIG_DIR` unset.
+3. provide only the three required RepoWolf variables, with a fake valid token and regular CA file.
+4. start the packaged `claude` through its normal wrapper.
+5. confirm that Claude can write the normal state paths.
 
-The check fails on plugin-load, missing-module, MCP-command, package-resolution, or store-write errors.
+The custom-mode checks must:
+
+1. create one ignored project-state directory inside the worktree.
+2. create a second directory outside both the temporary home and worktree.
+3. select each path through `configDir`, then repeat through inherited `CLAUDE_CONFIG_DIR`.
+4. confirm that each created directory has mode `0700` and the correct owner.
+5. confirm that Claude and Context Mode can write the selected directory.
+6. confirm that Fence does not grant writes to `~/.claude/`, `~/.claude.json`, or `~/.config/claude/`.
+7. repeat canonical overlap and final-symlink cases against both path layouts.
+
+Both checks must avoid live Anthropic or GitHub traffic, parse all plugin and MCP configuration, and leave immutable plugin roots unchanged. A full prompt can stop only at the expected offline provider or authentication boundary.
+
+A check fails on plugin-load, missing-module, MCP-command, package-resolution, state-path, policy, or store-write errors.
 
 ### Module and API checks
 
@@ -647,6 +712,9 @@ Evaluation checks must verify:
 - `packages.<system>.default == packages.<system>.claude`.
 - no `packages.<system>.den` output and no `bin/den` executable in any closure.
 - `lib.<system>.mkClaude { }` matches the default package behavior.
+- `configDir` defaults to `null` in the constructor and both modules.
+- explicit constructor and module values require absolute path strings.
+- runtime precedence between the explicit option, inherited variable, and fallback.
 - Home Manager enable and disable behavior.
 - devenv enable and disable behavior.
 - both modules call the same constructor.
@@ -701,7 +769,7 @@ The design is complete when an implementation can demonstrate all of these resul
 3. RepoWolf is the only route for GitHub API and Git traffic.
 4. Direct Git-host traffic is denied.
 5. Packaged resources load without mutable installation.
-6. Normal Claude state remains writable.
+6. Filesystem-backed Claude state remains writable only in the selected directory and applicable default-mode legacy paths. Environment authentication is unchanged. macOS Keychain credentials remain outside this isolation.
 7. `extraPkgs` is absent from host package sets and host `PATH`, enters only the sandbox launch environment, and cannot shadow RepoWolf clients.
 8. Docker and Podman are disabled by default and expose only validated sockets when enabled.
 9. Container host-port access follows the documented platform rules.
