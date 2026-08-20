@@ -1,0 +1,710 @@
+# Den Claude Sandbox Design
+
+**Status:** Approved for specification review
+
+**Date:** 2026-08-20
+
+## Summary
+
+Den is a dendritic Nix flake and package family for sandboxed coding agents. The first release packages Claude Code behind Fence and RepoWolf.
+
+Users run the normal `claude` command. The command starts this process chain:
+
+```text
+Den launcher -> Fence -> Claude Code
+                         |-> packaged plugins and skills
+                         |-> Context Mode MCP server
+                         |-> CodeGraph MCP server
+                         `-> RepoWolf gh and Git SSH clients
+```
+
+Den has no `den` executable and no runtime dispatcher. Future agent packages use their normal executable names, such as `codex` or `opencode`.
+
+Fence is the local filesystem, process, command, and network enforcement boundary. RepoWolf is the repository authorization boundary for GitHub operations. Claude Code runs with `--dangerously-skip-permissions` because Fence supplies the permission boundary.
+
+## Goals
+
+The first release must:
+
+- provide a normal `claude` executable that always runs inside Fence.
+- provide the same customized Claude artifact through package, Home Manager, devenv, and library interfaces.
+- preserve writable Claude state under the user's normal home directory.
+- load packaged plugins and skills directly from immutable Nix store paths.
+- send GitHub API and Git traffic through RepoWolf.
+- block direct GitHub and other Git-host traffic.
+- support sandbox-only extra packages.
+- support optional Docker and Podman client access.
+- support Linux and macOS on x86-64 and ARM64.
+- provide behavioral checks for the launcher, policy, resources, modules, and package matrix.
+- document the security boundary and its limits.
+
+## Non-goals
+
+The first release does not:
+
+- provide or manage a RepoWolf server.
+- provide a `den` dispatcher.
+- support agents other than Claude Code.
+- install plugins or skills into mutable Claude plugin state.
+- expose direct GitHub credentials, unrestricted `gh`, or normal Git SSH credentials.
+- permit direct GitHub, GitLab, or Bitbucket network access.
+- support remote Docker or Podman TCP endpoints.
+- start Docker, Podman, or Podman machines.
+- provide a VM-grade isolation boundary.
+- make container daemon access safe.
+
+## Flake architecture
+
+Den uses `flake-parts` and `import-tree`. Its dendritic module layout follows the patterns in `/home/roche/projects/pi/roche-pi`.
+
+The flake supports these systems:
+
+- `x86_64-linux`
+- `aarch64-linux`
+- `x86_64-darwin`
+- `aarch64-darwin`
+
+The public outputs are:
+
+```text
+packages.<system>.claude
+packages.<system>.default
+lib.<system>.mkClaude
+homeModules.den
+devenvModules.den
+checks.<system>.*
+```
+
+`packages.<system>.default` equals `packages.<system>.claude`.
+
+`mkAgentSandbox` is the reusable internal factory. Agent adapters provide executable, resource, argument, environment, and MCP details. `mkClaude` is the stable public constructor for the Claude adapter. A future adapter can use the factory without adding a dispatcher.
+
+## Main components
+
+### `mkAgentSandbox`
+
+`mkAgentSandbox` constructs one sandboxed agent artifact. It owns behavior that is common to all adapters:
+
+- the Fence package and base policy.
+- runtime RepoWolf validation.
+- private policy generation.
+- Nix closure exposure.
+- `PATH` construction.
+- Git transport rewriting.
+- Docker and Podman capability wiring.
+- argument, signal, and exit-status forwarding.
+- temporary-file cleanup.
+
+The factory accepts an adapter and user customization. The adapter supplies the underlying executable, mandatory arguments, plugin roots, MCP configuration, runtime packages, and writable state paths.
+
+The factory keeps RepoWolf shims before every other package in `PATH`. The fixed base tools include Fence, `pkgs.gitMinimal`, Bash, and Coreutils. Adapter tools follow the base tools. `extraPkgs` comes last.
+
+### Claude adapter
+
+The Claude adapter supplies:
+
+- the pinned Claude Code package.
+- the mandatory `--dangerously-skip-permissions` argument.
+- immutable plugin roots.
+- the generated CodeGraph MCP configuration.
+- the Node.js runtime that Context Mode requires.
+- Claude state paths that Fence can write.
+
+The adapter passes all non-reserved user arguments unchanged and in their original order. It rejects user values for Den-owned flags, including `--plugin-dir`, `--mcp-config`, `--strict-mcp-config`, `--settings`, `--permission-mode`, and `--dangerously-skip-permissions`. This rule prevents duplicate-option precedence from changing mandatory resources or security behavior.
+
+Den reserves the `den`, `superpowers`, `context-mode`, `frontend-design`, `slopbeth`, and `slopgent` plugin identifiers. It also reserves the `codegraph` MCP server and `den-fence` hook identifiers. Mutable user configuration can add non-conflicting entries, but it cannot disable or replace Den entries. The launcher fails before Fence starts when a user CLI argument, MCP entry, plugin setting, or hook setting conflicts with a reserved Den entry.
+
+Claude retains its normal writable state, including:
+
+- `~/.claude/`
+- `~/.claude.json`
+- `~/.config/claude/`
+
+Den does not replace `HOME`. Den does not link packaged resources into these paths.
+
+### Packaged Claude resources
+
+Den builds resources as immutable derivations. Claude loads plugins with direct local plugin paths. Den does not use marketplace installation at runtime.
+
+The initial resource set is:
+
+| Resource | Initial source or version | Packaging behavior |
+|---|---|---|
+| Den skill snapshot | Roche Pi commit `eb86e2ebbc9cf7a6ee007ea45f8e550f7a8f68b3` | Copy the complete tracked directories into Den and load them as a Den plugin. |
+| Superpowers | `obra/superpowers` v6.2.0 | Load the complete Claude plugin from its immutable source. |
+| Simple English | `AminBlg/SimpleEnglish` v1.2.0, commit `eaa7fded155ad47e5baa072ebae4c70d1254e9e2` | Load the complete `simple-english` skill through the Den resource plugin. |
+| Context Mode | npm `context-mode` 1.0.169 | Build dependencies with Nix. Load its plugin, MCP server, hooks, tools, and bundled skills from the store. |
+| CodeGraph | npm `@colbymchenry/codegraph` 1.5.0 | Package the matching native bundle for each system and disable network self-download. |
+| Frontend Design | `anthropics/claude-plugins-official`, commit `d029127f7d29bdb8fd8902ac34dd7d5c8ba92b6e` | Load `plugins/frontend-design` as an immutable plugin. This is the latest upstream commit for that path on the design date. |
+| Slopbeth | `ehmo/slopkit` 1.4.1, commit `b33718bb9283c11b09567dc714f92d90ffb7bd16` | Load `plugins/slopbeth` as an immutable plugin. |
+| Slopgent | `ehmo/slopkit` 1.4.1, commit `b33718bb9283c11b09567dc714f92d90ffb7bd16` | Load `plugins/slopgent` as an immutable plugin. |
+
+The Den snapshot contains these 17 tracked Roche Pi skills:
+
+1. `bootstrapping-tilt-worktrees`
+2. `capturing-proof-screenshots`
+3. `claude-zellij-prompt`
+4. `commit`
+5. `frontend-design`
+6. `gitea`
+7. `github`
+8. `linear`
+9. `module-size`
+10. `nix-config`
+11. `notion`
+12. `patchmill-cleanup`
+13. `patchmill-label`
+14. `patchmill-plan`
+15. `patchmill-upload`
+16. `show-me`
+17. `thermo-nuclear-code-quality-review`
+
+The snapshot preserves all tracked files in those directories. Den also stores a snapshot manifest with the Roche Pi source commit, every relative file path, and each SHA-256 digest. Checks compare the vendored files with this fixed manifest, not with a manifest generated from the build input.
+
+The Den plugin and the Anthropic Frontend Design plugin remain separate plugin roots. This preserves both approved resources without overwriting snapshot files.
+
+Den does not copy Roche Pi extensions, generated extension resources, extension-supplied skills, themes, prompt templates, or other Pi configuration.
+
+### Context Mode integration
+
+Context Mode remains one complete Claude plugin. Its store path includes:
+
+- `.claude-plugin/plugin.json`.
+- `start.mjs` and the MCP server bundle.
+- `hooks/hooks.json` and all hook programs.
+- MCP tools.
+- required runtime dependencies.
+- its eight bundled skills: `context-mode`, `ctx-doctor`, `ctx-index`, `ctx-insight`, `ctx-purge`, `ctx-search`, `ctx-stats`, and `ctx-upgrade`.
+
+Nix performs all dependency installation. Runtime startup must not run `npm install`, marketplace installation, post-install healing, or network self-download. Context Mode writes session and knowledge state only under writable Claude state paths.
+
+A check must start the plugin from its immutable path with a temporary home directory. Any attempt to modify the plugin root is an error.
+
+### CodeGraph integration
+
+Den packages the 1.5.0 shim and the matching native package for each supported system:
+
+- `codegraph-linux-x64`
+- `codegraph-linux-arm64`
+- `codegraph-darwin-x64`
+- `codegraph-darwin-arm64`
+
+The wrapper sets `CODEGRAPH_NO_DOWNLOAD=1`, which is the 1.5.0 shim's supported self-download disable switch. CodeGraph cannot repair or upgrade itself at runtime.
+
+Den generates declarative Claude MCP configuration with this logical shape:
+
+```json
+{
+  "mcpServers": {
+    "codegraph": {
+      "type": "stdio",
+      "command": "/nix/store/...-codegraph-1.5.0/bin/codegraph",
+      "args": ["serve", "--mcp"]
+    }
+  }
+}
+```
+
+Claude loads this file in addition to user MCP configuration. Den does not run `codegraph install` and does not edit `~/.claude.json`.
+
+### RepoWolf client
+
+Den consumes the credential-free RepoWolf client from a pinned RepoWolf source. The client artifact contains:
+
+- `repowolf-client`.
+- `gh`, linked to `repowolf-client`.
+- `repowolf-git-ssh`, linked to `repowolf-client`.
+
+The client closure must not contain the RepoWolf service, normal GitHub CLI, OpenSSH credentials, RepoWolf service configuration, private keys, or provider credentials.
+
+The client must build for all four Den systems. The RepoWolf source and lock file provide the immutable revision.
+
+## Public configuration API
+
+### Direct construction
+
+The public constructor has this shape:
+
+```nix
+inputs.den.lib.${system}.mkClaude {
+  extraPkgs = [ pkgs.neovim ];
+
+  docker = {
+    enable = false;
+    package = pkgs.docker-client;
+    composePackage = pkgs.docker-compose;
+    socketPath = null;
+    hostPorts = [ ];
+  };
+
+  podman = {
+    enable = false;
+    package = pkgs.podman;
+    composePackage = pkgs.podman-compose;
+    socketPath = null;
+    hostPorts = [ ];
+  };
+}
+```
+
+All arguments are optional. `mkClaude { }` produces the same artifact as `packages.<system>.claude`.
+
+`extraPkgs` is a list of Nix packages. The constructor does not add them to a host or user package set. Their store paths remain host-visible through Nix, but Den adds them only to the sandbox launcher, sandbox `PATH`, and Fence policy. RepoWolf shims remain before them in `PATH`, even if an extra package provides `gh`, `ssh`, or Git helpers.
+
+Each `socketPath` is either `null` or an absolute path. `null` enables runtime discovery. Each `hostPorts` value is a list of unique integers from 1 through 65535.
+
+### Home Manager module
+
+`homeModules.den` provides:
+
+```nix
+programs.den.claude = {
+  enable = true;
+  extraPkgs = [ pkgs.neovim ];
+
+  docker = {
+    enable = false;
+    package = pkgs.docker-client;
+    composePackage = pkgs.docker-compose;
+    socketPath = null;
+    hostPorts = [ ];
+  };
+
+  podman = {
+    enable = false;
+    package = pkgs.podman;
+    composePackage = pkgs.podman-compose;
+    socketPath = null;
+    hostPorts = [ ];
+  };
+};
+```
+
+When enabled, the module calls `mkClaude` with the option values and adds only the resulting Claude artifact to `home.packages`.
+
+### devenv module
+
+`devenvModules.den` provides the same `programs.den.claude` option tree. When enabled, it calls `mkClaude` and adds the result to the devenv package list.
+
+The two modules do not maintain separate wrapper logic. The package output, both modules, and direct construction all use the same factory and Claude adapter.
+
+## Runtime flow
+
+The launcher performs these steps for each invocation:
+
+1. Read `REPOWOLF_ENDPOINT`, `REPOWOLF_TOKEN`, and `REPOWOLF_CA_FILE`.
+2. Validate all three values without printing their contents.
+3. Parse the endpoint as an HTTPS origin. Reject user information, non-root paths, queries, fragments, opaque URLs, and non-HTTPS schemes.
+4. Require a lowercase ASCII DNS hostname without a trailing dot. Reject Unicode hostnames, IP literals, and hostnames that match a denied Git host.
+5. Validate the RepoWolf token with the client-compatible `rw1_` format. Never include the token in an error or trace.
+6. Inspect the CA path with `lstat`. Reject a missing path, a symbolic link, a non-regular file, or an unreadable file.
+7. Convert the accepted CA path to an absolute path for the generated policy.
+8. Discover and validate enabled container sockets.
+9. Create separate policy and scratch directories with mode `0700`.
+10. Generate the Fence policy with mode `0600`, then change it to `0400` before Fence starts.
+11. Add the policy file and its parent directory to Fence's highest-precedence write-deny list.
+12. Export the policy path as the internal `DEN_FENCE_POLICY_FILE` variable for the macOS hook.
+13. Build a controlled sandbox environment and `PATH`.
+14. Add process-local Git configuration that rewrites GitHub HTTPS URLs to RepoWolf SSH URLs and clears credential helpers.
+15. Set `GIT_SSH_COMMAND` to the immutable `repowolf-git-ssh` path.
+16. Start `${fence}/bin/fence --settings "$DEN_FENCE_POLICY_FILE" --` with the Claude command.
+17. Start Claude with mandatory Den arguments and each unchanged non-reserved user argument.
+18. Preserve standard input, standard output, standard error, foreground process-group state, and terminal resize behavior.
+19. Forward `SIGINT`, `SIGTERM`, `SIGHUP`, and `SIGQUIT`. Preserve `SIGWINCH`, `SIGTSTP`, and `SIGCONT` job-control behavior.
+20. Return the Claude or Fence exit status, including the `128 + signal` convention for signal termination.
+21. Remove both private directories after Fence exits. Cleanup errors do not replace the child exit status.
+
+The launcher replaces host `PATH` and inherited Git transport configuration. It removes `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `SSH_AUTH_SOCK`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`, and inherited `GIT_CONFIG_KEY_*` and `GIT_CONFIG_VALUE_*` entries. It then installs only Den's controlled Git environment and sets `GIT_TERMINAL_PROMPT=0`.
+
+Other normal user variables remain available, including Claude authentication, locale, terminal, and editor variables. The three RepoWolf variables remain available because RepoWolf clients require them. No other variable becomes a RepoWolf prerequisite.
+
+The launcher must not enable shell tracing while secrets are present. Error messages can name an invalid environment variable, but cannot include its value.
+
+`SIGKILL` cannot trigger process cleanup. On each launch, Den removes stale Den-owned temporary directories that belong to the invoking user and pass a conservative age threshold. The README must document this exception.
+
+## RepoWolf Git routing
+
+Den sets process-local Git configuration through Git's environment configuration interface. It does not run `git config` and does not modify global, user, worktree, or repository configuration.
+
+The rewrite maps this prefix:
+
+```text
+https://github.com/
+```
+
+To this RepoWolf-compatible SSH prefix:
+
+```text
+git@github.com:
+```
+
+For example:
+
+```text
+https://github.com/owner/repository.git
+```
+
+becomes:
+
+```text
+git@github.com:owner/repository.git
+```
+
+Git then calls `repowolf-git-ssh` through `GIT_SSH_COMMAND`. The helper sends only supported Git smart-protocol operations to RepoWolf.
+
+Direct SSH and HTTPS access to GitHub remain blocked by Fence. The network policy is the final control if repository configuration tries another transport.
+
+## Fence policy
+
+### Policy source and generation
+
+Den vendors its static base policy in the repository. Its provenance is `sixfeetup/engineering-handbook` commit `4be05d63af92cf79231313a20df22b3c144795d0`, file `ai-tooling/sandboxing/fence.json`. The vendored Den file is the implementation input, so an external branch cannot change a build.
+
+The Den policy starts from that snapshot. It removes unrelated AI providers and direct Git hosts. It adds the exact service, deny, and precedence rules in this specification. It does not import `jail.nix` permissions.
+
+The initial Fence package is nixpkgs `fence` 0.1.58 from Den's locked nixpkgs input. The package must provide `--settings`, `--claude-pre-tool-use`, `fence -c`, Linux `command.runtimeExecPolicy = "argv"`, macOS `network.allowUnixSockets`, and Linux `network.allowLocalOutboundPorts`. Evaluation fails when the selected Fence package lacks a required capability.
+
+Each launch adds only runtime values that cannot exist in the Nix store policy:
+
+- the hostname from `REPOWOLF_ENDPOINT`.
+- the accepted CA file path.
+- validated container socket paths.
+- requested host ports.
+
+The generated file never contains `REPOWOLF_TOKEN`.
+
+### Network policy
+
+The policy denies unmatched outbound traffic by default. Den permits only these static service domains:
+
+- `api.anthropic.com`, `*.anthropic.com`, `claude.ai`, and `*.claude.ai`.
+- `registry.npmjs.org` and `*.npmjs.org`.
+- `registry.yarnpkg.com`.
+- `pypi.org` and `files.pythonhosted.org`.
+- `crates.io`, `static.crates.io`, and `index.crates.io`.
+- `proxy.golang.org` and `sum.golang.org`.
+- `formulae.brew.sh`.
+
+Each launch also permits the exact RepoWolf broker hostname.
+
+The deny list contains `github.com`, `*.github.com`, `githubusercontent.com`, `*.githubusercontent.com`, `gitlab.com`, `*.gitlab.com`, `bitbucket.org`, and `*.bitbucket.org`. These entries block web, API, raw content, archive, object, release-asset, and SSH endpoints.
+
+Denied domains take precedence over allowed domains. The launcher rejects a RepoWolf endpoint whose hostname matches a denied Git-host entry. Den does not allow a wildcard that re-enables a denied Git host.
+
+Metadata endpoints and denied telemetry from the reference policy remain blocked, including `169.254.169.254`, `metadata.google.internal`, `instance-data.ec2.internal`, and `statsig.anthropic.com`.
+
+### Filesystem policy
+
+The normal policy grants:
+
+- read and execute access to required Nix store closures.
+- write access to the launch working tree.
+- write access to the separate Den scratch directory.
+- write access to normal Claude state paths.
+- read-only access to the validated CA file and policy file.
+- an explicit write denial for the policy file and its parent directory.
+- no general access to credential directories.
+
+The policy retains explicit read denials for SSH private keys, GnuPG, cloud credentials, Kubernetes credentials, and Docker credentials. It also denies package registry credentials, netrc files, and Git credential stores.
+
+Filesystem denials take precedence over grants. Den resolves each dynamic path before policy generation. A symbolic link under the worktree, Claude state, scratch directory, or socket path does not grant access to a denied target. The launcher rejects a dynamic path when safe resolution cannot prove its target.
+
+Packaged plugin and tool paths are read-only. `extraPkgs` closures are read-only and executable.
+
+### Command policy and macOS hook
+
+Linux uses Fence's argv-aware descendant command policy when the host supports it. Fence fails closed when it cannot apply that configured policy.
+
+macOS uses Fence's whole-process `sandbox-exec` boundary for filesystem and network enforcement. macOS cannot apply argv-aware multi-token command rules to every descendant process.
+
+The Claude adapter therefore loads a store-managed `PreToolUse` hook for `Bash` on macOS. Its command runs `${fence}/bin/fence --claude-pre-tool-use --settings "$DEN_FENCE_POLICY_FILE"`. It denies blocked commands and rewrites allowed Bash commands through `fence -c` with that policy.
+
+The hook does not replace whole-agent wrapping. It strengthens command checks for Claude Bash tool calls. It does not inspect Claude's native file tools, which remain inside the outer Fence boundary.
+
+The Fence hook must compose with Context Mode's `PreToolUse` hook. Context Mode can block or reroute a large-output command. Fence must wrap each ordinary allowed Bash command and block each denied command. A combined hook adapter is required if Claude cannot merge both upstream hook results safely.
+
+Den loads the hook declaratively from the store. It does not run `fence hooks install` and does not edit user settings.
+
+## Docker support
+
+Docker support is disabled by default.
+
+When enabled, Den adds the configured Docker client and Compose packages to the sandbox closure. It never exposes the unrestricted host versions through path fallback.
+
+Socket selection uses this order:
+
+1. `docker.socketPath`, when configured.
+2. a valid Unix `DOCKER_HOST` value.
+3. a rootless socket at `$XDG_RUNTIME_DIR/docker.sock`.
+4. `$HOME/.docker/run/docker.sock` for Docker Desktop.
+5. `/run/docker.sock` or `/var/run/docker.sock`.
+
+`docker.socketPath` accepts only an absolute filesystem path. `DOCKER_HOST` accepts only `unix:///absolute/path` with no authority, query, fragment, or encoded path separator. Den rejects TCP, SSH, HTTP, `npipe`, relative, and malformed endpoints.
+
+The selected path must resolve to a Unix socket. Den resolves symbolic links for explicit, environment, and discovered paths. It exposes only the final socket path and updates `DOCKER_HOST` to `unix:///final/absolute/path`.
+
+Fence grants read-write access only to the selected socket. On macOS, the generated network policy also lists that socket in `network.allowUnixSockets`.
+
+Den forwards or sets `DOCKER_HOST` to the validated Unix endpoint. It does not expose `~/.docker` or Docker credential files.
+
+## Podman support
+
+Podman support is disabled by default.
+
+When enabled, Den adds the configured Podman and Podman Compose packages to the sandbox closure.
+
+Socket selection uses this order:
+
+1. `podman.socketPath`, when configured.
+2. a valid Unix `CONTAINER_HOST` value.
+3. `$XDG_RUNTIME_DIR/podman/podman.sock`.
+4. `/run/user/<uid>/podman/podman.sock`.
+
+On Linux, Den sets `XDG_RUNTIME_DIR` to `/run/user/<uid>` when the variable is unset. The selected Podman socket must be owned by the invoking user and must be a Unix socket. This keeps the default path rootless.
+
+On macOS, the user must provide `CONTAINER_HOST` or `podman.socketPath` when no conventional runtime socket exists. Den does not start or inspect a Podman machine.
+
+`podman.socketPath` accepts only an absolute filesystem path. `CONTAINER_HOST` accepts only `unix:///absolute/path` with no authority, query, fragment, or encoded path separator. Den rejects remote, relative, and malformed endpoints.
+
+Den resolves symbolic links for explicit, environment, and discovered paths. It exposes only the final socket path. Den sets `CONTAINER_HOST` to `unix:///final/absolute/path` and forwards the accepted `XDG_RUNTIME_DIR` value.
+
+Fence grants read-write access only to the selected socket. On macOS, the generated network policy also lists that socket in `network.allowUnixSockets`.
+
+## Container host-port access
+
+Each enabled container option can list `hostPorts`. Den combines and deduplicates the Docker and Podman lists.
+
+An empty list grants no host-loopback access. A non-empty list enables Fence local outbound access.
+
+On Linux, Den writes the exact combined ports to `network.allowLocalOutboundPorts`. Fence bridges only those host-loopback ports.
+
+On macOS, Fence ignores `allowLocalOutboundPorts` and permits all localhost ports when local outbound access is enabled. Module documentation and the README must show this platform limitation next to the option.
+
+A non-empty `hostPorts` list is invalid when its parent container integration is disabled.
+
+## Container security warning
+
+**WARNING:** Enable Docker or Podman socket access only for trusted work. A daemon socket can create containers, mount host paths, and reach resources outside Fence.
+
+Docker daemon access can provide effective host-root control. Rootless Podman still gives broad control over the user's containers, files, and network. Either socket can materially weaken or bypass the sandbox.
+
+Host-port access also expands the network boundary. On macOS, one requested port expands access to all host-loopback ports because of the Fence platform model.
+
+## Error handling
+
+The launcher fails before Claude starts for these conditions:
+
+- a required RepoWolf variable is missing or empty.
+- the endpoint is not an HTTPS origin.
+- the broker hostname is noncanonical, is an IP literal, or matches a denied Git host.
+- a user argument or mutable Claude entry conflicts with a reserved Den entry.
+- the token format is invalid.
+- the CA path is missing, unreadable, symbolic, or not a regular file.
+- a configured socket path is not absolute.
+- an endpoint names a non-Unix container transport.
+- an enabled container socket cannot be found or is not a socket.
+- a Podman socket is not owned by the invoking user.
+- a host port is invalid.
+- private policy creation fails.
+- Fence cannot apply the policy.
+
+Each error names the failed requirement and a corrective action. Errors do not print environment values, tokens, file contents, or generated environment configuration.
+
+Build-time checks fail for missing resources, duplicate output names, invalid plugin manifests, missing MCP commands, unsupported native packages, or unexpected closure contents.
+
+Fence or Claude runtime errors retain their original standard error and exit status. Cleanup uses best effort and does not hide the primary result.
+
+## Platform behavior
+
+| Platform | Fence behavior | Additional requirements |
+|---|---|---|
+| `x86_64-linux` | Whole-agent Linux sandbox with argv-aware command policy. | Package Linux x64 CodeGraph and RepoWolf clients. |
+| `aarch64-linux` | Whole-agent Linux sandbox with argv-aware command policy. | Package Linux ARM64 CodeGraph and RepoWolf clients. |
+| `x86_64-darwin` | Whole-agent macOS sandbox plus Claude Bash hook. | Package Darwin x64 CodeGraph and RepoWolf clients. Document localhost widening. |
+| `aarch64-darwin` | Whole-agent macOS sandbox plus Claude Bash hook. | Package Darwin ARM64 CodeGraph and RepoWolf clients. Document localhost widening. |
+
+A platform output must not silently omit Context Mode, CodeGraph, RepoWolf, a required plugin, or a required skill.
+
+## Documentation requirements
+
+`README.md` must contain:
+
+- the architecture and the Fence and RepoWolf boundaries.
+- a warning that Fence is not a VM-grade boundary.
+- all four supported platforms.
+- RepoWolf server prerequisites.
+- `REPOWOLF_ENDPOINT`, `REPOWOLF_TOKEN`, and `REPOWOLF_CA_FILE` requirements.
+- package, Home Manager, devenv, and direct-library examples.
+- `extraPkgs` behavior and path precedence.
+- Docker options, socket discovery, and the daemon warning.
+- Podman options, rootless defaults, and the daemon warning.
+- host-port behavior on Linux and macOS.
+- normal `claude` usage, non-reserved argument forwarding, and reserved Den flags.
+- inherited environment scrubbing and protected configuration precedence.
+- signal, terminal, exit-status, cleanup, and `SIGKILL` behavior.
+- the 17 Den snapshot skills.
+- Superpowers and Simple English.
+- Frontend Design, Slopbeth, and Slopgent.
+- full Context Mode integration.
+- CodeGraph 1.5.0 and declarative MCP behavior.
+- immutable resource loading and writable Claude state.
+- macOS Fence hook behavior and coverage limits.
+- troubleshooting for RepoWolf variables, CA files, sockets, plugins, MCP startup, and Fence errors.
+- limitations, including blocked direct Git hosts and unsupported remote container endpoints.
+
+Examples must use `claude`, not a Den-specific command.
+
+## Test plan
+
+### Pure launcher and policy checks
+
+Automated tests must cover:
+
+- missing and empty RepoWolf variables.
+- accepted and rejected endpoint forms, including uppercase, trailing-dot, Unicode, IP-literal, and denied Git-host cases.
+- token format validation without value disclosure.
+- regular, unreadable, missing, directory, and symbolic CA paths.
+- separate policy and scratch directories, policy mode `0400`, and write-deny precedence for the policy and its parent.
+- generated JSON syntax.
+- exact dynamic broker hostname insertion.
+- absence of the token from policy and diagnostics.
+- allowed Anthropic and registry hosts.
+- denied GitHub, GitLab, Bitbucket, metadata, and telemetry hosts.
+- deny precedence and no broad Git-host wildcard.
+- GitHub HTTPS rewrite configuration.
+- `pkgs.gitMinimal`, `GIT_SSH_COMMAND`, cleared credential helpers, and RepoWolf path precedence.
+- fake clone, fetch, and push flows that invoke `repowolf-git-ssh` without configuration changes.
+- removal of inherited GitHub tokens, SSH agents, askpass values, and Git environment configuration.
+- seeded `GIT_CONFIG_PARAMETERS` cases that contain credential-helper injection and embedded credential data.
+- continued availability of the three RepoWolf variables and normal Claude authentication variables.
+- unchanged non-reserved user arguments, including spaces and empty arguments.
+- rejection of reserved CLI flags, MCP names, plugin settings, and hook settings.
+- standard input, standard output, standard error, PTY, and resize forwarding.
+- normal, nonzero, and signaled child exits.
+- `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT`, `SIGWINCH`, `SIGTSTP`, and `SIGCONT` behavior.
+- temporary directory cleanup after success, error, and catchable signal exit.
+- stale temporary directory cleanup after simulated `SIGKILL` termination.
+- no user or repository Git configuration changes.
+
+Tests use fake RepoWolf, Fence, and Claude executables when they need deterministic process observations. Tests use valid fake tokens and never use live credentials.
+
+### Native Fence and RepoWolf enforcement checks
+
+Host-level integration jobs must use the packaged Fence executable. They must verify:
+
+- an allowed local TLS broker fixture is reachable through the generated broker rule.
+- hosts mapped to GitHub, GitLab, and Bitbucket deny rules remain unreachable without live external requests.
+- a representative allowed registry hostname reaches a local fixture.
+- a denied credential path remains unreadable through a worktree or Claude-state symbolic link.
+- the policy file cannot be truncated, replaced, renamed, or made writable from inside Fence.
+- a later macOS Bash hook still denies a command after each policy mutation attempt.
+- Linux argv command rules deny descendant commands with multiple tokens.
+- the macOS Claude hook reroutes allowed Bash commands and denies blocked commands.
+- RepoWolf `gh` and Git operations reach a local RepoWolf protocol fixture and never a provider endpoint.
+
+These jobs run outside a nested Nix build sandbox when Fence requires host namespace or `sandbox-exec` features. Fixtures remain local and credential-free.
+
+### Resource and closure checks
+
+Nix checks must verify:
+
+- the exact 17-skill snapshot inventory, Roche Pi source commit, fixed path manifest, and SHA-256 values.
+- valid plugin manifests for all packaged plugins.
+- separate discovery of both frontend-design resources.
+- Superpowers and Simple English versions.
+- Frontend Design and Slopkit revisions.
+- Context Mode plugin, MCP server, hooks, tools, dependencies, and eight bundled skills.
+- Context Mode and macOS Fence `PreToolUse` composition for rerouted, allowed, and denied Bash commands.
+- Context Mode startup from a read-only store path.
+- no Context Mode runtime installation or self-download.
+- CodeGraph version 1.5.0.
+- the matching CodeGraph native bundle for each system.
+- `CODEGRAPH_NO_DOWNLOAD=1` behavior during startup with network access unavailable.
+- declarative `codegraph serve --mcp` configuration.
+- RepoWolf `gh` and `repowolf-git-ssh` links.
+- absence of normal `gh`, RepoWolf server, credentials, and private keys from the client closure.
+- inclusion of Fence 0.1.58 capabilities, `pkgs.gitMinimal`, Claude, resources, MCP tools, and required runtimes.
+- exclusion of unrelated Roche Pi extensions and extension resources.
+
+### Claude startup checks
+
+A temporary-home startup check must:
+
+1. create an empty writable home directory.
+2. provide only the three required RepoWolf variables, with a fake valid token and regular CA file.
+3. start the packaged `claude` through its normal wrapper.
+4. avoid live Anthropic or GitHub traffic.
+5. confirm that all plugin and MCP configuration parses.
+6. confirm that immutable plugin roots remain unchanged.
+7. fail only at the expected offline provider or authentication boundary when a full prompt cannot run.
+
+The check fails on plugin-load, missing-module, MCP-command, package-resolution, or store-write errors.
+
+### Module and API checks
+
+Evaluation checks must verify:
+
+- `packages.<system>.default == packages.<system>.claude`.
+- no `packages.<system>.den` output and no `bin/den` executable in any closure.
+- `lib.<system>.mkClaude { }` matches the default package behavior.
+- Home Manager enable and disable behavior.
+- devenv enable and disable behavior.
+- both modules call the same constructor.
+- `extraPkgs` appears only in the sandbox closure and after RepoWolf shims.
+- custom Docker and Compose packages.
+- custom Podman and Podman Compose packages.
+- explicit and discovered socket wiring.
+- rejection of invalid socket and host-port values.
+- no container capability when its integration is disabled.
+
+### Container behavior checks
+
+Behavioral tests must create temporary Unix sockets and verify:
+
+- Docker and Podman are disabled by default.
+- Docker discovery order and `DOCKER_HOST` forwarding.
+- Podman rootless discovery, ownership, `CONTAINER_HOST`, and `XDG_RUNTIME_DIR` forwarding.
+- non-Unix endpoint rejection.
+- missing and non-socket path rejection.
+- symbolic socket resolution to one exact target.
+- one read-write Fence socket permission and no parent-directory grant.
+- macOS `allowUnixSockets` generation.
+- Linux exact host-port generation.
+- empty host-port behavior.
+- the documented macOS localhost widening.
+
+Tests do not need a live Docker or Podman daemon. Socket and policy behavior provides stable regression coverage without granting test builds daemon control.
+
+### Four-system matrix
+
+CI must evaluate every output for all four systems. It must provide four required native jobs: `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, and `aarch64-darwin`. A missing native runner fails the matrix instead of skipping that system.
+
+Each native job must build at least:
+
+- `packages.<system>.claude`.
+- the RepoWolf client.
+- the matching CodeGraph package.
+- Context Mode.
+- the resource bundle.
+- module evaluation checks.
+- pure behavioral checks.
+- the platform's native Fence and RepoWolf enforcement checks.
+
+Cross-evaluation does not replace any native job. Platform-specific Fence behavior requires native execution on every named system.
+
+## Acceptance criteria
+
+The design is complete when an implementation can demonstrate all of these results:
+
+1. `nix run .#claude -- --version` invokes Claude through Fence.
+2. The package is available as `claude` through every approved integration surface.
+3. RepoWolf is the only route for GitHub API and Git traffic.
+4. Direct Git-host traffic is denied.
+5. Packaged resources load without mutable installation.
+6. Normal Claude state remains writable.
+7. `extraPkgs` is absent from host package sets and host `PATH`, enters only the sandbox launch environment, and cannot shadow RepoWolf clients.
+8. Docker and Podman are disabled by default and expose only validated sockets when enabled.
+9. Container host-port access follows the documented platform rules.
+10. Non-reserved arguments, terminal state, supported signals, exit statuses, and documented cleanup behavior remain transparent.
+11. The full check suite passes in the four-system matrix.
+12. The README documents setup, operation, security warnings, troubleshooting, and limits.
