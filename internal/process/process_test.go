@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"reflect"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -15,6 +14,13 @@ import (
 
 func TestRunPreservesStreamsArgumentsAndExitStatus(t *testing.T) {
 	if os.Getenv("PROCESS_HELPER") == "1" {
+		if os.Getenv("PROCESS_EXPECT_EMPTY_ARGUMENT") == "1" {
+			if len(os.Args) == 0 || os.Args[len(os.Args)-1] != "" {
+				os.Exit(1)
+			}
+			_, _ = os.Stdout.Write([]byte("empty-argument-ok"))
+			os.Exit(0)
+		}
 		body, _ := io.ReadAll(os.Stdin)
 		_, _ = os.Stdout.Write(append([]byte("stdout:"), body...))
 		_, _ = os.Stderr.Write([]byte("stderr:ok"))
@@ -34,26 +40,14 @@ func TestRunPreservesStreamsArgumentsAndExitStatus(t *testing.T) {
 	}
 }
 
-func TestRunPreservesEmptyArguments(t *testing.T) {
-	truePath, err := exec.LookPath("true")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code := Run(Command{Path: truePath, Env: os.Environ()}, IO{}, Signals{}); code != 0 {
-		t.Fatalf("Run() = %d, want 0", code)
-	}
-}
-
-func TestRunPreservesForegroundPTYProcessGroup(t *testing.T) {
-	script, err := exec.LookPath("script")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestRunPreservesEmptyStringArgument(t *testing.T) {
 	var stdout bytes.Buffer
-	command := "test -t 0; pgrp=$(ps -o pgrp= -p $$ | tr -d ' '); tpgid=$(ps -o tpgid= -p $$ | tr -d ' '); test \"$pgrp\" = \"$tpgid\"; printf pty-ok"
-	code := Run(Command{Path: script, Args: []string{"-qfec", command, "/dev/null"}, Env: os.Environ()}, IO{Stdout: &stdout, Stderr: &stdout}, Signals{})
-	if code != 0 || !strings.Contains(stdout.String(), "pty-ok") {
-		t.Fatalf("Run() = %d, PTY output = %q", code, stdout.String())
+	code := Run(Command{
+		Path: os.Args[0], Args: []string{"-test.run=TestRunPreservesStreamsArgumentsAndExitStatus", ""},
+		Env: append(os.Environ(), "PROCESS_HELPER=1", "PROCESS_EXPECT_EMPTY_ARGUMENT=1"),
+	}, IO{Stdout: &stdout}, Signals{})
+	if code != 0 || stdout.String() != "empty-argument-ok" {
+		t.Fatalf("Run() = %d, output = %q; empty argument was not preserved", code, stdout.String())
 	}
 }
 

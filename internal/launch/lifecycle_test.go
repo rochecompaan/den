@@ -8,8 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -21,7 +21,6 @@ import (
 )
 
 func TestRunStartsFenceWithReadOnlyPolicyAndCleansTemporaryDirectories(t *testing.T) {
-	requireTrustedScratchRoot(t)
 	root := t.TempDir()
 	ca := filepath.Join(root, "ca.pem")
 	base := filepath.Join(root, "base.json")
@@ -72,10 +71,15 @@ exec "$@"
 	if err != nil {
 		t.Fatal(err)
 	}
-	code := Run(context.Background(), manifest.Manifest{
-		Platform: "darwin", FenceExecutable: fence, BasePolicy: base, ClosurePathsFile: closures, ScratchRoot: "/tmp", PathEntries: []string{filepath.Dir(stat)},
+	code := runWithLifecycle(context.Background(), manifest.Manifest{
+		Platform: "darwin", FenceExecutable: fence, BasePolicy: base, ClosurePathsFile: closures, ScratchRoot: "/test-only", PathEntries: []string{filepath.Dir(stat)},
 		Agent: manifest.Agent{Name: "test", Executable: agent, MandatoryArgs: []string{"--mandatory"}},
-	}, []string{"--user=value"})
+	}, []string{"--user=value"}, os.LookupEnv, os.Lstat, os.Environ, environment.Build, os.Stderr,
+		func(ctx context.Context, launcherManifest manifest.Manifest, arguments []string, config repowolf.Config, selection configdir.Selection, revalidate func() error, childEnvironment []string, docker, podman container.Socket, stderr io.Writer) int {
+			return runFenceWithTemporary(ctx, launcherManifest, arguments, config, selection, revalidate, childEnvironment, docker, podman, stderr,
+				func(string, int, time.Duration) error { return nil }, testTemporaryPair(root))
+		},
+	)
 	if code != 17 {
 		t.Fatalf("Run() = %d, want 17", code)
 	}
@@ -254,15 +258,27 @@ func TestRunRejectsDarwinSecurityOverridesBeforeStartingFence(t *testing.T) {
 	}
 }
 
-func requireTrustedScratchRoot(t *testing.T) {
-	t.Helper()
-	info, err := os.Lstat("/tmp")
-	if err != nil {
-		t.Skip("sandbox does not provide a trusted /tmp")
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || !info.IsDir() || info.Mode()&os.ModeSticky == 0 || stat.Uid != 0 {
-		t.Skip("sandbox does not provide a trusted /tmp")
+func testTemporaryPair(root string) temporaryPair {
+	return func(string) (string, string, func() error, error) {
+		parent := filepath.Join(root, "den-"+strconv.Itoa(os.Getuid()))
+		if err := os.MkdirAll(parent, 0o700); err != nil {
+			return "", "", nil, err
+		}
+		policyDir, err := os.MkdirTemp(parent, "policy-")
+		if err != nil {
+			return "", "", nil, err
+		}
+		scratchDir, err := os.MkdirTemp(parent, "scratch-")
+		if err != nil {
+			_ = os.RemoveAll(policyDir)
+			return "", "", nil, err
+		}
+		return policyDir, scratchDir, func() error {
+			if err := os.RemoveAll(policyDir); err != nil {
+				return err
+			}
+			return os.RemoveAll(scratchDir)
+		}, nil
 	}
 }
 
