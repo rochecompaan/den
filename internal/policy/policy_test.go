@@ -44,9 +44,14 @@ func TestBasePolicySecurityInvariants(t *testing.T) {
 	if len(got.Filesystem.AllowRead)+len(got.Filesystem.AllowExecute)+len(got.Filesystem.AllowWrite) != 0 {
 		t.Fatalf("base policy contains dynamic filesystem grants: %#v", got.Filesystem)
 	}
-	for _, required := range []string{"**/.env", "**/.env.*", "**/*.key", "**/*.pem", "**/*.p12", "**/*.pfx", "$HOME/.npm/_logs", "$HOME/.fence/debug", "/tmp/fence", "/private/tmp/fence"} {
+	for _, required := range []string{"**/.env", "**/.env.*", "**/*.key", "**/*.pem", "**/*.p12", "**/*.pfx", "~/.npm/_logs", "~/.fence/debug", "/tmp/fence", "/private/tmp/fence"} {
 		if !contains(got.Filesystem.DenyWrite, required) {
 			t.Errorf("denyWrite missing %q", required)
+		}
+	}
+	for _, ineffective := range []string{"$HOME/.npm/_logs", "$HOME/.fence/debug"} {
+		if contains(got.Filesystem.DenyWrite, ineffective) {
+			t.Errorf("denyWrite retained Fence-ineffective path %q", ineffective)
 		}
 	}
 	text := string(base)

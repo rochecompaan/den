@@ -31,8 +31,9 @@ JSON. Den then made only these policy changes:
   `nix/lib/protected-paths.nix` list, including the added Git configuration
   protections.
 - Retained the reference secret-file write denials and added write denials for
-  Fence 0.1.58's implicit `$HOME/.npm/_logs`, `$HOME/.fence/debug`,
-  `/tmp/fence`, and `/private/tmp/fence` paths.
+  Fence 0.1.58's implicit `~/.npm/_logs`, `~/.fence/debug`, `/tmp/fence`, and
+  `/private/tmp/fence` paths. Maintainer-approved Option A uses Fence's effective
+  `~` expansion instead of ineffective literal `$HOME` entries.
 - Retained the enabled reference command denials, `useDefaults`, and the
   accepted `chroot` shared-binary limitation; enabled Linux argv-aware runtime
   enforcement. The generator removes that Linux-only setting on macOS.

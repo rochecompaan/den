@@ -64,8 +64,8 @@
       "**/*.pem",
       "**/*.p12",
       "**/*.pfx",
-      "$HOME/.npm/_logs",
-      "$HOME/.fence/debug",
+      "~/.npm/_logs",
+      "~/.fence/debug",
       "/tmp/fence",
       "/private/tmp/fence"
     ]

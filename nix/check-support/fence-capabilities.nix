@@ -60,7 +60,7 @@ pkgs.runCommand "fence-capabilities"
           allowExecute: $closure,
           allowWrite: [$worktree, $state, $scratch],
           denyRead: [$home + "/secret"],
-          denyWrite: [$home + "/.npm/_logs", $home + "/.fence/debug", "/tmp/fence", "/private/tmp/fence", $policy, $policyDir]
+          denyWrite: ["~/.npm/_logs", "~/.fence/debug", "/tmp/fence", "/private/tmp/fence", $policy, $policyDir]
         },
         command: { deny: [], useDefaults: true, acceptSharedBinaryCannotRuntimeDeny: ["chroot"], runtimeExecPolicy: "argv" }
       }' > "$policy"
