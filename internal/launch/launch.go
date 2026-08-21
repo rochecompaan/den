@@ -7,8 +7,10 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/rochecompaan/den/internal/claude"
 	"github.com/rochecompaan/den/internal/configdir"
 	"github.com/rochecompaan/den/internal/container"
 	"github.com/rochecompaan/den/internal/environment"
@@ -27,7 +29,7 @@ func Run(ctx context.Context, launcherManifest manifest.Manifest, arguments []st
 func run(
 	ctx context.Context,
 	launcherManifest manifest.Manifest,
-	_ []string,
+	arguments []string,
 	lookup func(string) (string, bool),
 	lstat func(string) (fs.FileInfo, error),
 	environ func() []string,
@@ -38,6 +40,18 @@ func run(
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if launcherManifest.Agent.Name == "claude" {
+		if err := claude.ValidateArguments(arguments); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if launcherManifest.Platform == "darwin" {
+			if err := claude.ValidateDarwinArguments(arguments); err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+		}
 	}
 	home, _ := lookup("HOME")
 	var inherited *string
@@ -63,6 +77,21 @@ func run(
 			exitCode = 1
 		}
 	}()
+	if launcherManifest.Agent.Name == "claude" && launcherManifest.Platform == "darwin" {
+		workingDirectory, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintln(stderr, "cannot determine working directory for Claude settings validation")
+			return 1
+		}
+		configDirectory := selection.CanonicalPath
+		if selection.Mode == configdir.Default {
+			configDirectory = filepath.Join(home, ".claude")
+		}
+		if err := claude.ValidateDarwinSettings(claude.DarwinScopes(configDirectory, workingDirectory)); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
 	containerEnv := containerEnvironment(lookup)
 	dockerSocket, err := resolveDocker(launcherManifest.Docker, containerEnv, home)
 	if err != nil {
@@ -82,7 +111,11 @@ func run(
 		}
 	}
 
-	_ = build(environ(), environment.Controlled{
+	host := environ()
+	if launcherManifest.Agent.Name == "claude" && launcherManifest.Platform == "darwin" {
+		host = claude.ScrubDarwinEnvironment(host)
+	}
+	_ = build(host, environment.Controlled{
 		Endpoint:      config.Endpoint,
 		Token:         config.Token,
 		CAFile:        config.CAFile,

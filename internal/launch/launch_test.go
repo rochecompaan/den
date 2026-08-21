@@ -96,6 +96,70 @@ func TestRunBuildsControlledEnvironmentAfterValidation(t *testing.T) {
 	}
 }
 
+func TestRunRejectsClaudeReservedArgumentsBeforeBuildingEnvironment(t *testing.T) {
+	values := map[string]string{
+		"REPOWOLF_ENDPOINT": "https://broker.example.test/",
+		"REPOWOLF_TOKEN":    "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"REPOWOLF_CA_FILE":  "/canonical/ca.pem",
+		"HOME":              t.TempDir(),
+	}
+	called := false
+	got := run(context.Background(), manifest.Manifest{Agent: manifest.Agent{Name: "claude"}}, []string{"--settings=/tmp/override.json"},
+		lookup(values), func(string) (fs.FileInfo, error) { return launchFileInfo{mode: 0o444}, nil },
+		func() []string { return nil }, func([]string, environment.Controlled) []string { called = true; return nil }, &bytes.Buffer{})
+	if got != 1 || called {
+		t.Fatalf("run() = %d, environment builder called = %t", got, called)
+	}
+}
+
+func TestRunRejectsDarwinBareBeforeBuildingEnvironment(t *testing.T) {
+	values := map[string]string{
+		"REPOWOLF_ENDPOINT": "https://broker.example.test/",
+		"REPOWOLF_TOKEN":    "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"REPOWOLF_CA_FILE":  "/canonical/ca.pem",
+		"HOME":              t.TempDir(),
+	}
+	called := false
+	got := run(context.Background(), manifest.Manifest{Platform: "darwin", Agent: manifest.Agent{Name: "claude"}}, []string{"--bare=true"},
+		lookup(values), func(string) (fs.FileInfo, error) { return launchFileInfo{mode: 0o444}, nil },
+		func() []string { return nil }, func([]string, environment.Controlled) []string { called = true; return nil }, &bytes.Buffer{})
+	if got != 1 || called {
+		t.Fatalf("run() = %d, environment builder called = %t", got, called)
+	}
+}
+
+func TestRunScrubsClaudeCodeSimpleOnlyOnDarwin(t *testing.T) {
+	fenceExecutable := filepath.Join(t.TempDir(), "fence")
+	if err := os.WriteFile(fenceExecutable, []byte("#!/bin/sh\nprintf 'Linux Sandbox Features:\\n\\n  Capability         Required For              Status       Details\\n  -----------------  ------------------------  -----------  -------\\n  Network namespace  direct network isolation  ok           available\\n'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{
+		"REPOWOLF_ENDPOINT": "https://broker.example.test/",
+		"REPOWOLF_TOKEN":    "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"REPOWOLF_CA_FILE":  "/canonical/ca.pem",
+		"HOME":              t.TempDir(),
+	}
+	for _, platform := range []string{"darwin", "linux"} {
+		t.Run(platform, func(t *testing.T) {
+			var host []string
+			got := run(context.Background(), manifest.Manifest{Platform: platform, FenceExecutable: fenceExecutable, Agent: manifest.Agent{Name: "claude"}}, nil,
+				lookup(values), func(string) (fs.FileInfo, error) { return launchFileInfo{mode: 0o444}, nil },
+				func() []string { return []string{"CLAUDE_CODE_SIMPLE=1"} },
+				func(gotHost []string, _ environment.Controlled) []string { host = gotHost; return nil }, &bytes.Buffer{})
+			if got != 0 {
+				t.Fatalf("run() = %d, want 0", got)
+			}
+			contains := false
+			for _, entry := range host {
+				contains = contains || entry == "CLAUDE_CODE_SIMPLE=1"
+			}
+			if contains != (platform == "linux") {
+				t.Fatalf("host = %#v", host)
+			}
+		})
+	}
+}
+
 func TestRunSelectsCustomConfigurationAfterRepoWolfAndRollsItBack(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
