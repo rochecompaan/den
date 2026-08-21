@@ -124,6 +124,8 @@ pkgs.runCommand "pure-launcher"
     grep -Fqx 'argv[11]=<--mcp-config>' "$rootHost/fence-argv.log"
     grep -Fqx 'argv[12]=<user-mcp.json>' "$rootHost/fence-argv.log"
     grep -Fqx 'argv[13]=<--strict-mcp-config>' "$rootHost/fence-argv.log"
+    test "$(grep -c '^argv\[' "$rootHost/fence-argv.log")" = 14
+    if grep -q '^argv\[14\]=' "$rootHost/fence-argv.log"; then exit 1; fi
 
     jq -e --arg broker broker.example.test --arg home "$HOME" '
       .allowPty == true and

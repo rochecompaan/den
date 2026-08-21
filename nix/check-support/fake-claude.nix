@@ -46,6 +46,9 @@ pkgs.writeShellScriptBin "claude" ''
   if test -n "''${DEN_FAKE_EXPECT_SIMPLE_SCRUB-}"; then
     test -z "''${CLAUDE_CODE_SIMPLE-}"
   fi
+  if test -n "''${DEN_FAKE_EXPECT_NO_PLUGIN_SEED-}"; then
+    test -z "''${CLAUDE_CODE_PLUGIN_SEED_DIR-}"
+  fi
 
   case "''${DEN_FAKE_STATE_MODE-}" in
     default)

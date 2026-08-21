@@ -59,6 +59,7 @@ pkgs.runCommand "claude-startup"
       REPOWOLF_TOKEN="$token" \
       REPOWOLF_CA_FILE="$root/ca.pem" \
       DEN_FAKE_STATE_MODE=default \
+      DEN_FAKE_EXPECT_NO_PLUGIN_SEED=1 \
       DEN_FAKE_POLICY_COPY="$root/default-policy.json" \
       ${pkgs.util-linux}/bin/unshare -Ur -m ${pkgs.bash}/bin/bash -c '
         ${pkgs.util-linux}/bin/mount --bind "$1" /tmp

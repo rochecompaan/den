@@ -68,6 +68,14 @@ pkgs.runCommand "pure-launcher"
     grep -Fqx 'argv[7]=<--settings>' "$root/fence-argv.log"
     grep -Fqx 'argv[8]=<${fakes.darwinSettings}>' "$root/fence-argv.log"
     grep -Fqx 'argv[9]=<argument with spaces>' "$root/fence-argv.log"
+    grep -Fqx 'argv[10]=<>' "$root/fence-argv.log"
+    grep -Fqx 'argv[11]=<--plugin-dir>' "$root/fence-argv.log"
+    grep -Fqx 'argv[12]=<user-plugin>' "$root/fence-argv.log"
+    grep -Fqx 'argv[13]=<--mcp-config>' "$root/fence-argv.log"
+    grep -Fqx 'argv[14]=<user-mcp.json>' "$root/fence-argv.log"
+    grep -Fqx 'argv[15]=<--strict-mcp-config>' "$root/fence-argv.log"
+    test "$(grep -c '^argv\[' "$root/fence-argv.log")" = 16
+    if grep -q '^argv\[16\]=' "$root/fence-argv.log"; then exit 1; fi
     test "$(grep -Fxc 'repowolf-git-ssh <upload> <github.com>' "$root/repowolf.log")" = 2
     test "$(grep -Fxc 'repowolf-git-ssh <receive> <github.com>' "$root/repowolf.log")" = 1
     git --git-dir="$root/git-remote.git" show-ref --verify --quiet refs/heads/pushed

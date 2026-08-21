@@ -34,7 +34,7 @@ assert !(productionAdapter.adapter.agent ? codeGraph);
 assert !(productionAdapter.adapter.agent ? seedDirectory);
 pkgs.runCommand "package-closure"
   {
-    nativeBuildInputs = [ pkgs.jq pkgs.coreutils pkgs.gnugrep ];
+    nativeBuildInputs = [ pkgs.jq pkgs.coreutils pkgs.findutils pkgs.gnugrep ];
     manifest = claude.denManifest;
     inherit fenceCapabilityCheck packageClosure;
   }
@@ -42,7 +42,7 @@ pkgs.runCommand "package-closure"
     set -eu
     test -x ${claude}/bin/claude
     test ! -e ${claude}/bin/den
-    test "$(find ${claude}/bin -mindepth 1 -maxdepth 1 -printf '%f\n')" = claude
+    test "$(${pkgs.findutils}/bin/find ${claude}/bin -mindepth 1 -maxdepth 1 -printf '%f\n')" = claude
 
     jq -e \
       --arg fence "${fence.package}/bin/fence" \
@@ -93,27 +93,68 @@ pkgs.runCommand "package-closure"
       echo 'forbidden production closure content detected' >&2
       exit 1
     }
-    while IFS= read -r store_path; do
-      base=''${store_path##*/}
-      case "$base" in
+    store_class_forbidden() {
+      case "$1" in
         *github-cli*|*repowolf-server*|*repowolf-daemon*|*den-credentials*|*private-key*|\
         *user-skill*|*user-plugin*|*offline-fixture*|*context-mode*|*codegraph*|\
-        *claude-resource*|*resource-bundle*|*marketplace-data*|*mcp-server*)
-          fail_forbidden ;;
+        *claude-resource*|*resource-bundle*|*marketplace-data*|*mcp-server*) return 0 ;;
+        *) return 1 ;;
       esac
-      while IFS= read -r item; do
-        case "$item" in
-          ${repowolfClient}/bin/gh) ;;
-          */bin/gh|*/gh-*|*/bin/den|*/bin/repowolf|*/bin/repowolf-server) fail_forbidden ;;
-          */.git-credentials|*/credentials|*/credentials.json|*/id_rsa|*/id_ed25519|\
-          */private-key|*/private_key|*/user-skill|*/user-plugin|*/mcp-server|\
-          */context-mode|*/codegraph|*/marketplace-data|*/resource-bundle) fail_forbidden ;;
-        esac
-      done < <(${pkgs.coreutils}/bin/find "$store_path" \( -type f -o -type l \) -print 2>/dev/null)
-      if ${pkgs.gnugrep}/bin/grep -R -I -Fq CLAUDE_CODE_PLUGIN_SEED_DIR "$store_path" 2>/dev/null; then
-        fail_forbidden
+    }
+    artifact_forbidden() {
+      case "$1" in
+        ${repowolfClient}/bin/gh) return 1 ;;
+        */bin/gh|*/gh-*|*/bin/den|*/bin/repowolf|*/bin/repowolf-server) return 0 ;;
+        */.git-credentials|*/credentials|*/credentials.json|*/id_rsa|*/id_ed25519|\
+        */private-key|*/private_key|*/user-skill|*/user-plugin|*/mcp-server|\
+        */context-mode|*/codegraph|*/marketplace-data|*/resource-bundle) return 0 ;;
+        *) return 1 ;;
+      esac
+    }
+    contains_seed_variable() {
+      test -f "$1" && test -r "$1" && \
+        ${pkgs.gnugrep}/bin/grep -a -Fq CLAUDE_CODE_PLUGIN_SEED_DIR "$1" 2>/dev/null
+    }
+
+    negative="$TMPDIR/closure-negative-fixture"
+    mkdir -p "$negative/bin"
+    : > "$negative/bin/den"
+    artifact_forbidden "$negative/bin/den" || fail_forbidden
+    if artifact_forbidden ${repowolfClient}/bin/gh; then fail_forbidden; fi
+    printf '\000CLAUDE_CODE_PLUGIN_SEED_DIR\000' > "$negative/binary-seed"
+    contains_seed_variable "$negative/binary-seed" || fail_forbidden
+
+    artifacts="$TMPDIR/package-closure-artifacts"
+    : > "$artifacts"
+    store_count=0
+    while IFS= read -r store_path; do
+      test -n "$store_path" || continue
+      store_count=$((store_count + 1))
+      base=''${store_path##*/}
+      if store_class_forbidden "$base"; then fail_forbidden; fi
+      if ! ${pkgs.findutils}/bin/find "$store_path" \( -type f -o -type l \) -print >> "$artifacts"; then
+        echo 'production closure traversal failed' >&2
+        exit 1
       fi
     done < ${packageClosure}/store-paths
+    test "$store_count" -gt 0
+    test -s "$artifacts"
+
+    for generated in ${claude}/bin/claude "$manifest" ${darwinSettings}; do
+      if contains_seed_variable "$generated"; then fail_forbidden; fi
+    done
+
+    artifact_count=0
+    while IFS= read -r item; do
+      test -n "$item" || continue
+      artifact_count=$((artifact_count + 1))
+      if artifact_forbidden "$item"; then fail_forbidden; fi
+      case "$item" in
+        ${pkgs.claude-code}/*) ;;
+        *) if contains_seed_variable "$item"; then fail_forbidden; fi ;;
+      esac
+    done < "$artifacts"
+    test "$artifact_count" -gt 0
 
     touch "$out"
   ''
