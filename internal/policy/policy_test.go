@@ -194,7 +194,7 @@ func TestGenerateRejectsInvalidInputsAndUnknownFields(t *testing.T) {
 	}
 }
 
-func TestDeniedDomainPrecedenceAndNoGitWildcard(t *testing.T) {
+func TestAllowedDomainsDoNotMatchDeniedGitHosts(t *testing.T) {
 	for _, denied := range deniedDomains[:8] {
 		for _, allowed := range allowedDomains {
 			if domainMatches(allowed, strings.TrimPrefix(denied, "*.")) {

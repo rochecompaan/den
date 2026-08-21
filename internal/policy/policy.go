@@ -143,9 +143,11 @@ func Generate(base Base, dynamic Dynamic) ([]byte, error) {
 			policy.Filesystem.DenyWrite = appendUnique(policy.Filesystem.DenyWrite, resolved)
 		}
 	}
-	for _, path := range []string{filepath.Join(worktree, ".git/config"), filepath.Join(worktree, ".git/config.worktree")} {
-		policy.Filesystem.DenyWrite = appendUnique(policy.Filesystem.DenyWrite, filepath.Clean(path))
+	gitConfigPaths, err := gitConfigDenyPaths(worktree)
+	if err != nil {
+		return nil, err
 	}
+	policy.Filesystem.DenyWrite = appendUnique(policy.Filesystem.DenyWrite, gitConfigPaths...)
 
 	policyFile, err := canonicalPath("policy file", dynamic.PolicyFile)
 	if err != nil {
