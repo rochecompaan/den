@@ -7,12 +7,14 @@ let
   };
   adapter = (mkClaude false) { };
   darwinAdapter = (mkClaude true) { };
+  claudeAdapter = adapter.adapter;
+  darwinClaudeAdapter = darwinAdapter.adapter;
 in
 pkgs.runCommand "claude-adapter"
   {
     nativeBuildInputs = [ pkgs.jq ];
-    adapter = builtins.toJSON adapter;
-    darwinSettings = darwinAdapter.agent.darwinSettings;
+    adapter = builtins.toJSON claudeAdapter;
+    darwinSettings = darwinClaudeAdapter.agent.darwinSettings;
   }
   ''
     set -eu
@@ -30,7 +32,11 @@ pkgs.runCommand "claude-adapter"
       (.agent | has("codeGraph") | not) and
       (.agent | has("seedDirectory") | not) and
       (.agent | has("resourcePackage") | not) and
-      (.agent | has("hooks") | not)
+      (.agent | has("hooks") | not) and
+      (has("resourceBundles") | not) and
+      (has("claudeResources") | not) and
+      (.agent | has("resourceBundles") | not) and
+      (.agent | has("claudeResources") | not)
     ' adapter.json
     test -n "$darwinSettings"
     test -e "$darwinSettings"

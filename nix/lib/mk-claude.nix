@@ -1,6 +1,6 @@
 { pkgs, fence, mkAgentSandbox, isDarwin ? pkgs.stdenv.isDarwin }:
 
-{ configDir ? null, extraPkgs ? [ ], ... }:
+{ configDir ? null, extraPkgs ? [ ], docker ? { }, podman ? { } }:
 
 let
   lib = pkgs.lib;
@@ -24,13 +24,16 @@ in
 assert lib.assertMsg (claude.version == "2.1.158")
   "Den requires Claude Code 2.1.158; refusing unknown version ${claude.version}";
 mkAgentSandbox {
-  inherit configDir extraPkgs;
-  agent = {
-    name = "claude";
-    executable = "${claude}/bin/claude";
-    inherit mandatoryArgs;
-    reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" ];
-    configEnvironment = "CLAUDE_CONFIG_DIR";
-    darwinSettings = lib.optionalString isDarwin settings;
+  inherit configDir extraPkgs docker podman;
+  adapter = {
+    runtimePackages = [ claude ];
+    agent = {
+      name = "claude";
+      executable = "${claude}/bin/claude";
+      inherit mandatoryArgs;
+      reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" ];
+      configEnvironment = "CLAUDE_CONFIG_DIR";
+      darwinSettings = lib.optionalString isDarwin settings;
+    };
   };
 }

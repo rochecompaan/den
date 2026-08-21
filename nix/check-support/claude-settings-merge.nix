@@ -16,7 +16,7 @@ let
     inherit pkgs;
     mkAgentSandbox = value: value;
   };
-  adapter = mkClaude { };
+  adapter = (mkClaude { }).adapter;
   mandatoryArgs = pkgs.lib.escapeShellArgs adapter.agent.mandatoryArgs;
 in
 pkgs.runCommand "claude-settings-merge"

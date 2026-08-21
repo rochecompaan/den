@@ -1,0 +1,91 @@
+{ inputs, pkgs }:
+
+{ adapter, configDir, extraPkgs, docker, podman, dependencies ? null }:
+let
+  lib = pkgs.lib;
+  options = import ./options.nix { inherit pkgs; } {
+    inherit configDir extraPkgs docker podman;
+  };
+  productionDependencies = let
+    fence = import ./fence.nix { inherit pkgs; };
+  in {
+    fence = fence.package;
+    repoWolfClient = import ../packages/repowolf-client.nix { inherit inputs pkgs; };
+    launcher = import ../packages/den-launcher.nix { inherit pkgs; };
+    git = pkgs.gitMinimal;
+    bash = pkgs.bash;
+    coreutils = pkgs.coreutils;
+    acl = pkgs.acl;
+  };
+  deps = if dependencies == null then productionDependencies else dependencies;
+  requiredDependencies = [ "fence" "repoWolfClient" "launcher" "git" "bash" "coreutils" "acl" ];
+  adapterRuntimePackages = adapter.runtimePackages or [ ];
+  dockerPackages = lib.optionals options.docker.enable [
+    options.docker.package
+    options.docker.composePackage
+  ];
+  podmanPackages = lib.optionals options.podman.enable [
+    options.podman.package
+    options.podman.composePackage
+  ];
+  clientPrograms = config: packages: names:
+    if config.enable then lib.zipListsWith (package: name: "${package}/bin/${name}") packages names else [ ];
+  closure = pkgs.closureInfo {
+    rootPaths = (map (name: deps.${name}) requiredDependencies)
+      ++ adapterRuntimePackages ++ dockerPackages ++ podmanPackages ++ options.extraPkgs;
+  };
+  pathEntries = map (package: "${package}/bin") [
+    deps.repoWolfClient
+    deps.fence
+    deps.git
+    deps.bash
+    deps.coreutils
+    deps.launcher
+  ] ++ map (package: "${package}/bin") adapterRuntimePackages
+    ++ map (package: "${package}/bin") dockerPackages
+    ++ map (package: "${package}/bin") podmanPackages
+    ++ map (package: "${package}/bin") options.extraPkgs;
+  manifest = pkgs.writeText "claude-manifest.json" (builtins.toJSON {
+    version = 1;
+    platform = if pkgs.stdenv.isDarwin then "darwin" else "linux";
+    fenceExecutable = "${deps.fence}/bin/fence";
+    repoWolfClientDir = "${deps.repoWolfClient}";
+    basePolicy = "${../../policy/fence.json}";
+    closurePathsFile = "${closure}/store-paths";
+    scratchRoot = if pkgs.stdenv.isDarwin then "/private/tmp" else "/tmp";
+    aclProbe = if pkgs.stdenv.isDarwin then [ "/bin/ls" "-lde" ] else [ "${deps.acl}/bin/getfacl" ];
+    protectedPathPatterns = import ./protected-paths.nix;
+    inherit pathEntries;
+    explicitConfigDir = options.configDir;
+    agent = adapter.agent;
+    docker = {
+      inherit (options.docker) enable socketPath hostPorts;
+      clientPrograms = clientPrograms options.docker dockerPackages [ "docker" "docker-compose" ];
+    };
+    podman = {
+      inherit (options.podman) enable socketPath hostPorts;
+      clientPrograms = clientPrograms options.podman podmanPackages [ "podman" "podman-compose" ];
+    };
+  });
+in
+assert lib.assertMsg (builtins.isAttrs adapter && adapter ? agent) "adapter must provide an agent";
+assert lib.assertMsg (builtins.isList adapterRuntimePackages && lib.all lib.isDerivation adapterRuntimePackages)
+  "adapter.runtimePackages must be a list of packages";
+assert lib.assertMsg (lib.all (name: builtins.hasAttr name deps && lib.isDerivation deps.${name}) requiredDependencies)
+  "mkAgentSandbox dependencies are incomplete";
+pkgs.runCommand "claude"
+  {
+    meta.mainProgram = "claude";
+    passthru = {
+      denManifest = manifest;
+      denOptions = options;
+    };
+  }
+  ''
+    mkdir -p "$out/bin"
+    cat > "$out/bin/claude" <<'EOF'
+    #!${deps.bash}/bin/bash
+    exec ${deps.launcher}/bin/den-launcher --manifest ${manifest} -- "$@"
+    EOF
+    chmod 0555 "$out/bin/claude"
+  ''
