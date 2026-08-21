@@ -106,7 +106,7 @@ The Claude adapter supplies:
 - the immutable macOS `den-fence` hook and settings artifact.
 - Claude state paths that Fence can write.
 
-The adapter passes all non-reserved user arguments unchanged and in their original order. It rejects user values for Den-owned flags: `--settings`, `--permission-mode`, and `--dangerously-skip-permissions`. This rule prevents duplicate-option precedence from changing mandatory security behavior.
+The adapter passes all non-reserved user arguments unchanged and in their original order. It rejects user values for Den-owned flags: `--settings`, `--permission-mode`, and `--dangerously-skip-permissions`. This rule prevents duplicate-option precedence from changing mandatory security behavior. Claude Code 2.1.158 `--bare` mode and `CLAUDE_CODE_SIMPLE` both skip hooks. On macOS, Den rejects exact and `--bare=value` user arguments and removes inherited `CLAUDE_CODE_SIMPLE` before Fence starts. On Linux, it preserves both as ordinary user choices because the security hook is Darwin-only.
 
 Den supplies no skills, plugins, MCP servers, or non-security hooks. Its only hook is the `den-fence` security hook. User-managed skills, plugins, hooks, and MCP servers from the selected Claude configuration directory remain available. Den does not validate or package their resource definitions. They run inside Fence and remain subject to its filesystem, command, process, and network policy.
 
@@ -254,7 +254,7 @@ The launcher performs these steps for each invocation:
 9. In default mode, resolve the normal paths for Fence without applying custom-mode overlap, ownership, mode, ACL, or final-symlink rules.
 10. In custom mode, require an absolute path and apply canonical overlap, final-symlink, owner, mode, ACL, and safe-ancestor checks.
 11. Create a missing custom directory with mode `0700`, inspect its effective ACL, and remove it if the privacy checks fail.
-12. On macOS, inspect every Claude settings scope that applies to the launch. Reject a `den-fence` disable or replacement, and preserve unrelated user hooks.
+12. On macOS, reject exact and `--bare=value` user arguments, remove inherited `CLAUDE_CODE_SIMPLE`, and inspect every Claude settings scope that applies to the launch. Reject a `den-fence` disable or replacement, and preserve unrelated user hooks.
 13. Discover and validate enabled container sockets.
 14. Create separate policy and scratch directories with mode `0700`. Remove inherited `TMPDIR` and `DEN_FENCE_TMPDIR`, then set both variables to the validated scratch directory.
 15. On Linux, run the pinned `${fence}/bin/fence --linux-features` and require the exact `Network namespace` table row to report `ok`. Missing, unavailable, duplicate, malformed, or unknown feature output fails before policy generation.
@@ -265,7 +265,7 @@ The launcher performs these steps for each invocation:
 20. Build a controlled sandbox environment and `PATH`. Set `CLAUDE_CONFIG_DIR` when a custom directory is selected.
 21. Add process-local Git configuration that rewrites GitHub HTTPS URLs to RepoWolf SSH URLs and clears credential helpers.
 22. Set `GIT_SSH_COMMAND` to the immutable `repowolf-git-ssh` path.
-23. Revalidate the custom directory's canonical path, device, inode, owner, mode, ACL, and ancestors immediately before Fence starts.
+23. Revalidate the custom directory's canonical path, device, inode, owner, mode, ACL, and ancestors immediately before Fence starts. On macOS, re-read and revalidate each inspected Claude settings scope and reject a changed fingerprint.
 24. Start `${fence}/bin/fence --settings "$DEN_FENCE_POLICY_FILE" --` with the Claude command.
 25. Start Claude with mandatory Den arguments and each unchanged non-reserved user argument.
 26. Preserve standard input, standard output, standard error, foreground process-group state, and terminal resize behavior.
@@ -458,6 +458,7 @@ The launcher fails before Claude starts for these conditions:
 - the endpoint is not an HTTPS origin.
 - the broker hostname is noncanonical, is an IP literal, or matches a denied Git host.
 - a user argument conflicts with a Den-owned security flag.
+- on macOS, a user argument selects exact or `--bare=value` mode, or inherited `CLAUDE_CODE_SIMPLE` would skip the mandatory hook.
 - a user hook configuration disables or replaces `den-fence`.
 - an explicit or inherited Claude configuration directory is relative.
 - a custom configuration path overlaps a default Claude path or denied credential path.
@@ -513,7 +514,7 @@ A platform output must not silently omit Claude, Fence, RepoWolf, or the macOS `
 - normal `claude` usage, non-reserved argument forwarding, and reserved Den flags.
 - inherited environment scrubbing and protected configuration precedence.
 - signal, terminal, exit-status, cleanup, and `SIGKILL` behavior.
-- the protected macOS `den-fence` hook and its coverage limits.
+- the protected macOS `den-fence` hook, its coverage limits, and macOS rejection of `--bare` and inherited `CLAUDE_CODE_SIMPLE` because they skip the hook.
 - `configDir` precedence, absolute-path validation, and writable Claude state.
 - troubleshooting for RepoWolf variables, CA files, custom-directory privacy checks, sockets, and Fence errors.
 - limitations, including blocked direct Git hosts and unsupported remote container endpoints.
@@ -563,6 +564,7 @@ Automated tests must cover:
 - acceptance of ordinary user `--plugin-dir`, `--mcp-config`, and `--strict-mcp-config` arguments.
 - acceptance of ordinary user-managed skills, plugins, hooks, and MCP configuration from the selected Claude configuration directory.
 - rejection of the three Den-owned security flags and attempts to disable or replace `den-fence`.
+- on macOS, rejection of exact and `--bare=value` arguments and removal of inherited `CLAUDE_CODE_SIMPLE` before Fence; on Linux, preservation of both as ordinary user choices.
 - standard input, standard output, standard error, PTY, and resize forwarding.
 - normal, nonzero, and signaled child exits.
 - `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT`, `SIGWINCH`, `SIGTSTP`, and `SIGCONT` behavior.
@@ -585,6 +587,7 @@ Host-level integration jobs must use the packaged Fence executable. They must ve
 - a replaceable custom-directory ancestor and a validation-time path swap both fail closed.
 - the policy file cannot be truncated, replaced, renamed, or made writable from inside Fence.
 - a later macOS Bash hook still denies a command after each policy mutation attempt.
+- the macOS hook cannot be suppressed with exact or `--bare=value` mode or inherited `CLAUDE_CODE_SIMPLE`.
 - Linux argv command rules deny descendant commands with multiple tokens.
 - the macOS Claude hook reroutes allowed Bash commands and denies blocked commands.
 - a user-managed plugin or MCP server remains subject to Fence filesystem and network denials.
