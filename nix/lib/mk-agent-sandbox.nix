@@ -15,11 +15,14 @@ let
     git = pkgs.gitMinimal;
     bash = pkgs.bash;
     coreutils = pkgs.coreutils;
+  } // lib.optionalAttrs pkgs.stdenv.isLinux {
     acl = pkgs.acl;
   };
   deps = if dependencies == null then productionDependencies else dependencies;
-  requiredDependencies = [ "fence" "repoWolfClient" "launcher" "git" "bash" "coreutils" "acl" ];
+  requiredDependencies = [ "fence" "repoWolfClient" "launcher" "git" "bash" "coreutils" ]
+    ++ lib.optional pkgs.stdenv.isLinux "acl";
   adapterRuntimePackages = adapter.runtimePackages or [ ];
+  adapterClosureOnlyPackages = adapter.closureOnlyPackages or [ ];
   dockerPackages = lib.optionals options.docker.enable [
     options.docker.package
     options.docker.composePackage
@@ -30,9 +33,11 @@ let
   ];
   clientPrograms = config: packages: names:
     if config.enable then lib.zipListsWith (package: name: "${package}/bin/${name}") packages names else [ ];
+  closureRoots = (map (name: deps.${name}) requiredDependencies)
+    ++ adapterRuntimePackages ++ adapterClosureOnlyPackages
+    ++ dockerPackages ++ podmanPackages ++ options.extraPkgs;
   closure = pkgs.closureInfo {
-    rootPaths = (map (name: deps.${name}) requiredDependencies)
-      ++ adapterRuntimePackages ++ dockerPackages ++ podmanPackages ++ options.extraPkgs;
+    rootPaths = closureRoots;
   };
   pathEntries = map (package: "${package}/bin") [
     deps.repoWolfClient
@@ -71,6 +76,8 @@ in
 assert lib.assertMsg (builtins.isAttrs adapter && adapter ? agent) "adapter must provide an agent";
 assert lib.assertMsg (builtins.isList adapterRuntimePackages && lib.all lib.isDerivation adapterRuntimePackages)
   "adapter.runtimePackages must be a list of packages";
+assert lib.assertMsg (builtins.isList adapterClosureOnlyPackages && lib.all lib.isDerivation adapterClosureOnlyPackages)
+  "adapter.closureOnlyPackages must be a list of packages";
 assert lib.assertMsg (lib.all (name: builtins.hasAttr name deps && lib.isDerivation deps.${name}) requiredDependencies)
   "mkAgentSandbox dependencies are incomplete";
 pkgs.runCommand "claude"

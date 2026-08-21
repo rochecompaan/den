@@ -1,9 +1,10 @@
 { pkgs, fence, mkAgentSandbox, isDarwin ? pkgs.stdenv.isDarwin }:
 
-{ configDir ? null, extraPkgs ? [ ], docker ? { }, podman ? { } }:
+args@{ configDir ? null, extraPkgs ? [ ], docker ? { }, podman ? { }, ... }:
 
 let
   lib = pkgs.lib;
+  options = import ./options.nix { inherit pkgs; } args;
   claude = pkgs.claude-code;
   settings = pkgs.writeText "den-claude-settings.json" (builtins.toJSON {
     hooks.PreToolUse = [
@@ -24,9 +25,10 @@ in
 assert lib.assertMsg (claude.version == "2.1.158")
   "Den requires Claude Code 2.1.158; refusing unknown version ${claude.version}";
 mkAgentSandbox {
-  inherit configDir extraPkgs docker podman;
+  inherit (options) configDir extraPkgs docker podman;
   adapter = {
     runtimePackages = [ claude ];
+    closureOnlyPackages = lib.optionals isDarwin [ settings ];
     agent = {
       name = "claude";
       executable = "${claude}/bin/claude";

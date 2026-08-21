@@ -27,8 +27,8 @@ let
   isAbsoluteString = value: builtins.isString value && builtins.match "^/.*" value != null;
   isPackage = value: lib.isDerivation value;
   isPort = value: builtins.isInt value && value >= 1 && value <= 65535;
-  docker = defaults.docker // raw.docker;
-  podman = defaults.podman // raw.podman;
+  docker = defaults.docker // (raw.docker or { });
+  podman = defaults.podman // (raw.podman or { });
   validContainer = name: value:
     assert lib.assertMsg (hasOnly allowedContainerOptions value) "${name} has an unknown option";
     assert lib.assertMsg (builtins.isBool value.enable) "${name}.enable must be a Boolean";
