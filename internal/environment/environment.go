@@ -8,20 +8,32 @@ import (
 
 // Controlled contains values validated by the launcher or fixed by its manifest.
 type Controlled struct {
-	Endpoint    string
-	Token       string
-	CAFile      string
-	ClientDir   string
-	PathEntries []string
+	Endpoint      string
+	Token         string
+	CAFile        string
+	ClientDir     string
+	PathEntries   []string
+	DockerHost    string
+	ContainerHost string
+	XDGRuntimeDir string
 }
 
 // Build replaces inherited Git and RepoWolf state with the controlled child environment.
 func Build(host []string, controlled Controlled) []string {
-	result := make([]string, 0, len(host)+12)
-	seen := make(map[string]struct{}, len(host)+12)
+	result := make([]string, 0, len(host)+15)
+	seen := make(map[string]struct{}, len(host)+15)
+	controlledEntries := controlledEntries(controlled)
+	replacements := make(map[string]struct{}, len(controlledEntries))
+	for _, entry := range controlledEntries {
+		name, _, _ := strings.Cut(entry, "=")
+		replacements[name] = struct{}{}
+	}
 	for _, entry := range host {
 		name, _, ok := strings.Cut(entry, "=")
 		if !ok || scrub(name) {
+			continue
+		}
+		if _, replaced := replacements[name]; replaced {
 			continue
 		}
 		if _, exists := seen[name]; exists {
@@ -30,9 +42,12 @@ func Build(host []string, controlled Controlled) []string {
 		seen[name] = struct{}{}
 		result = append(result, entry)
 	}
+	return append(result, controlledEntries...)
+}
 
+func controlledEntries(controlled Controlled) []string {
 	gitSSH := filepath.Join(controlled.ClientDir, "bin", "repowolf-git-ssh")
-	for _, entry := range []string{
+	result := []string{
 		"PATH=" + strings.Join(controlled.PathEntries, ":"),
 		"REPOWOLF_ENDPOINT=" + controlled.Endpoint,
 		"REPOWOLF_TOKEN=" + controlled.Token,
@@ -46,10 +61,15 @@ func Build(host []string, controlled Controlled) []string {
 		"GIT_CONFIG_VALUE_1=",
 		"GIT_CONFIG_KEY_2=core.sshCommand",
 		"GIT_CONFIG_VALUE_2=" + gitSSH,
-	} {
-		name, _, _ := strings.Cut(entry, "=")
-		delete(seen, name)
-		result = append(result, entry)
+	}
+	if controlled.DockerHost != "" {
+		result = append(result, "DOCKER_HOST="+controlled.DockerHost)
+	}
+	if controlled.ContainerHost != "" {
+		result = append(result, "CONTAINER_HOST="+controlled.ContainerHost)
+	}
+	if controlled.XDGRuntimeDir != "" {
+		result = append(result, "XDG_RUNTIME_DIR="+controlled.XDGRuntimeDir)
 	}
 	return result
 }

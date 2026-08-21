@@ -125,7 +125,7 @@ func Generate(base Base, dynamic Dynamic) ([]byte, error) {
 		}
 	}
 	for _, path := range dynamic.UnixSockets {
-		resolved, err := addWritable(&policy, "Unix socket", path)
+		resolved, err := addUnixSocket(&policy, path)
 		if err != nil {
 			return nil, err
 		}
@@ -208,6 +208,20 @@ func addWritable(policy *document, name, path string) (string, error) {
 	return resolved, nil
 }
 
+func addUnixSocket(policy *document, path string) (string, error) {
+	resolved, err := canonicalPath("Unix socket", path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || info.Mode()&os.ModeSocket == 0 {
+		return "", errors.New("policy: Unix socket must be an existing Unix socket")
+	}
+	policy.Filesystem.AllowRead = appendUnique(policy.Filesystem.AllowRead, resolved)
+	policy.Filesystem.AllowWrite = appendUnique(policy.Filesystem.AllowWrite, resolved)
+	return resolved, nil
+}
+
 func canonicalPath(name, path string) (string, error) {
 	clean := filepath.Clean(path)
 	directoryForm := clean != string(os.PathSeparator) && path == clean+string(os.PathSeparator)
@@ -248,6 +262,9 @@ func linuxOperationalReads() ([]string, error) {
 }
 
 func addHostPorts(policy *document, platform string, ports []uint16) error {
+	value := false
+	policy.Network.AllowLocalOutbound = &value
+	policy.Network.AllowLocalOutboundPorts = nil
 	if len(ports) == 0 {
 		return nil
 	}
@@ -256,15 +273,15 @@ func addHostPorts(policy *document, platform string, ports []uint16) error {
 		if port == 0 {
 			return errors.New("policy: host port must be between 1 and 65535")
 		}
-		if _, exists := seen[port]; exists {
-			return errors.New("policy: host ports must be unique")
-		}
 		seen[port] = struct{}{}
 	}
-	value := true
+	value = true
 	policy.Network.AllowLocalOutbound = &value
 	if platform == "linux" {
-		policy.Network.AllowLocalOutboundPorts = append([]uint16(nil), ports...)
+		policy.Network.AllowLocalOutboundPorts = make([]uint16, 0, len(seen))
+		for port := range seen {
+			policy.Network.AllowLocalOutboundPorts = append(policy.Network.AllowLocalOutboundPorts, port)
+		}
 		sort.Slice(policy.Network.AllowLocalOutboundPorts, func(i, j int) bool {
 			return policy.Network.AllowLocalOutboundPorts[i] < policy.Network.AllowLocalOutboundPorts[j]
 		})

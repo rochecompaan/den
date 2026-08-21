@@ -86,6 +86,30 @@ func TestBuildDoesNotMutateHostAndProducesNoDuplicateNames(t *testing.T) {
 	}
 }
 
+func TestBuildReplacesEnabledContainerEndpointsWithoutMutatingHost(t *testing.T) {
+	host := []string{
+		"KEEP=value",
+		"DOCKER_HOST=tcp://untrusted.example.test",
+		"CONTAINER_HOST=ssh://untrusted.example.test",
+		"XDG_RUNTIME_DIR=/untrusted/runtime",
+	}
+	original := append([]string(nil), host...)
+	got := entries(Build(host, Controlled{
+		Endpoint: "https://broker.example.test", Token: "token", CAFile: "/ca.pem", ClientDir: "/client", PathEntries: []string{"/path"},
+		DockerHost: "unix:///canonical/docker.sock", ContainerHost: "unix:///canonical/podman.sock", XDGRuntimeDir: "/run/user/1000",
+	}))
+	for name, want := range map[string]string{
+		"DOCKER_HOST": "unix:///canonical/docker.sock", "CONTAINER_HOST": "unix:///canonical/podman.sock", "XDG_RUNTIME_DIR": "/run/user/1000",
+	} {
+		if got[name] != want {
+			t.Errorf("%s = %q, want %q", name, got[name], want)
+		}
+	}
+	if !reflect.DeepEqual(host, original) {
+		t.Fatalf("Build() mutated host: got %#v, want %#v", host, original)
+	}
+}
+
 func entries(environment []string) map[string]string {
 	result := make(map[string]string, len(environment))
 	for _, entry := range environment {

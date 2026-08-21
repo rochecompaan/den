@@ -45,3 +45,8 @@ higher-precedence write denials for default state in custom mode, repository
 Git configuration, and the private policy file and directory. Writable entries
 also receive read grants because macOS Fence treats read and write operations
 separately. Denials take precedence over grants.
+
+For requested container host ports, Linux receives the exact sorted,
+deduplicated list. macOS Fence cannot enforce an exact port list: any requested
+port enables all localhost outbound ports, so the generated macOS policy does
+not claim an exact-port restriction.

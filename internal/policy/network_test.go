@@ -32,11 +32,11 @@ func TestGenerateWithEmptyHostPortsDoesNotEnableLocalOutbound(t *testing.T) {
 			if err := json.Unmarshal(encoded, &got); err != nil {
 				t.Fatal(err)
 			}
-			if got.Network.AllowLocalOutbound != nil || len(got.Network.AllowLocalOutboundPorts) != 0 {
+			if got.Network.AllowLocalOutbound == nil || *got.Network.AllowLocalOutbound || len(got.Network.AllowLocalOutboundPorts) != 0 {
 				t.Fatalf("empty ports enabled local outbound: %#v", got.Network)
 			}
-			if strings.Contains(string(encoded), "allowLocalOutbound") {
-				t.Fatalf("empty ports emitted local outbound fields: %s", encoded)
+			if !strings.Contains(string(encoded), `"allowLocalOutbound": false`) || strings.Contains(string(encoded), "allowLocalOutboundPorts") {
+				t.Fatalf("empty ports policy = %s", encoded)
 			}
 		})
 	}

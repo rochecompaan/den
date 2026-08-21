@@ -2,6 +2,7 @@ package policy
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -94,7 +95,7 @@ func TestGenerateDynamicPolicyByPlatform(t *testing.T) {
 				ClosurePaths: []string{paths.closureRead, paths.closureExec},
 				Worktree:     paths.worktree, ScratchDir: paths.scratch, StatePaths: []string{paths.state + string(os.PathSeparator)},
 				DefaultStatePaths: []string{paths.defaultState + string(os.PathSeparator)}, CustomMode: true,
-				UnixSockets: []string{paths.socket}, HostPorts: []uint16{5432, 6379}, PolicyFile: paths.policy,
+				UnixSockets: []string{paths.socket}, HostPorts: []uint16{6379, 5432, 6379}, PolicyFile: paths.policy,
 			}
 			encoded, err := Generate(base, dynamic)
 			if err != nil {
@@ -124,6 +125,9 @@ func TestGenerateDynamicPolicyByPlatform(t *testing.T) {
 				if !contains(got.Filesystem.AllowWrite, path) {
 					t.Errorf("allowWrite missing %q", path)
 				}
+			}
+			if contains(got.Filesystem.AllowRead, filepath.Dir(paths.socket)) || contains(got.Filesystem.AllowWrite, filepath.Dir(paths.socket)) {
+				t.Fatal("socket parent directory was granted")
 			}
 			for _, path := range []string{paths.defaultState, filepath.Join(paths.worktree, ".git/config"), filepath.Join(paths.worktree, ".git/config.worktree"), paths.policy, filepath.Dir(paths.policy)} {
 				if !contains(got.Filesystem.DenyWrite, path) {
@@ -179,6 +183,7 @@ func TestGenerateRejectsInvalidInputsAndUnknownFields(t *testing.T) {
 		"unclean path":     func(d *Dynamic) { d.ScratchDir += "/../scratch" },
 		"bad hostname":     func(d *Dynamic) { d.RepoWolfHostname = "github.com" },
 		"bad port":         func(d *Dynamic) { d.HostPorts = []uint16{0} },
+		"non-socket":       func(d *Dynamic) { d.UnixSockets = []string{d.CAFile} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := valid
@@ -240,9 +245,11 @@ func makePaths(t *testing.T, root string) testPaths {
 	if err := os.WriteFile(p.ca, []byte("ca"), 0o400); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p.socket, []byte{}, 0o600); err != nil {
+	listener, err := net.Listen("unix", p.socket)
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = listener.Close() })
 	return p
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -170,6 +171,53 @@ func TestRunFailsClosedWhenLinuxFenceNetworkNamespaceIsUnavailable(t *testing.T)
 	}
 }
 
+func TestRunRollsBackConfigurationWhenContainerSocketValidationFails(t *testing.T) {
+	root := t.TempDir()
+	probe := filepath.Join(root, "acl-probe")
+	if err := os.WriteFile(probe, []byte("#!/bin/sh\nprintf 'user::rwx\\ngroup::---\\nother::---\\n'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "claude-config")
+	values := map[string]string{
+		"REPOWOLF_ENDPOINT": "https://broker.example.test/", "REPOWOLF_TOKEN": "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"REPOWOLF_CA_FILE": "/canonical/ca.pem", "HOME": root,
+	}
+	called := false
+	got := run(context.Background(), manifest.Manifest{
+		ACLProbe: probeSlice(probe), ExplicitConfigDir: &configPath,
+		Docker: manifest.ContainerConfig{Enable: true, SocketPath: stringPointer(filepath.Join(root, "missing.sock"))},
+	}, nil, lookup(values), func(string) (fs.FileInfo, error) { return launchFileInfo{mode: 0o444}, nil },
+		func() []string { return nil }, func([]string, environment.Controlled) []string { called = true; return nil }, &bytes.Buffer{})
+	if got != 1 || called {
+		t.Fatalf("run() = %d, build called = %t", got, called)
+	}
+	if _, err := os.Lstat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("socket failure retained created config directory: %v", err)
+	}
+}
+
+func TestRunAddsOnlyValidatedContainerEnvironment(t *testing.T) {
+	root := t.TempDir()
+	socketPath := filepath.Join(root, "docker.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	values := map[string]string{
+		"REPOWOLF_ENDPOINT": "https://broker.example.test/", "REPOWOLF_TOKEN": "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"REPOWOLF_CA_FILE": "/canonical/ca.pem", "HOME": root,
+	}
+	var got environment.Controlled
+	result := run(context.Background(), manifest.Manifest{Docker: manifest.ContainerConfig{Enable: true, SocketPath: &socketPath}}, nil,
+		lookup(values), func(string) (fs.FileInfo, error) { return launchFileInfo{mode: 0o444}, nil },
+		func() []string { return []string{"DOCKER_HOST=tcp://untrusted.example.test"} },
+		func(_ []string, controlled environment.Controlled) []string { got = controlled; return nil }, &bytes.Buffer{})
+	if result != 0 || got.DockerHost != "unix://"+socketPath {
+		t.Fatalf("run() = %d, controlled = %#v", result, got)
+	}
+}
+
 func TestFenceTemporaryEnvironmentReplacesInheritedTemporaryState(t *testing.T) {
 	host := []string{
 		"KEEP=value",
@@ -201,6 +249,10 @@ func TestFenceTemporaryEnvironmentReplacesInheritedTemporaryState(t *testing.T) 
 func lookup(values map[string]string) func(string) (string, bool) {
 	return func(name string) (string, bool) { value, ok := values[name]; return value, ok }
 }
+
+func stringPointer(value string) *string { return &value }
+
+func probeSlice(probe string) []string { return []string{probe} }
 
 type launchFileInfo struct{ mode fs.FileMode }
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/rochecompaan/den/internal/configdir"
+	"github.com/rochecompaan/den/internal/container"
 	"github.com/rochecompaan/den/internal/environment"
 	"github.com/rochecompaan/den/internal/fence"
 	"github.com/rochecompaan/den/internal/manifest"
@@ -62,6 +63,17 @@ func run(
 			exitCode = 1
 		}
 	}()
+	containerEnv := containerEnvironment(lookup)
+	dockerSocket, err := resolveDocker(launcherManifest.Docker, containerEnv, home)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	podmanSocket, err := resolvePodman(launcherManifest.Podman, containerEnv, home, launcherManifest.Platform)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 
 	if launcherManifest.Platform == "linux" {
 		if err := fence.Preflight(ctx, launcherManifest.FenceExecutable); err != nil {
@@ -71,13 +83,40 @@ func run(
 	}
 
 	_ = build(environ(), environment.Controlled{
-		Endpoint:    config.Endpoint,
-		Token:       config.Token,
-		CAFile:      config.CAFile,
-		ClientDir:   launcherManifest.RepoWolfClientDir,
-		PathEntries: launcherManifest.PathEntries,
+		Endpoint:      config.Endpoint,
+		Token:         config.Token,
+		CAFile:        config.CAFile,
+		ClientDir:     launcherManifest.RepoWolfClientDir,
+		PathEntries:   launcherManifest.PathEntries,
+		DockerHost:    dockerSocket.Endpoint,
+		ContainerHost: podmanSocket.Endpoint,
+		XDGRuntimeDir: podmanSocket.XDGRuntimeDir,
 	})
 	return 0
+}
+
+func resolveDocker(config manifest.ContainerConfig, env container.Env, home string) (container.Socket, error) {
+	if !config.Enable && len(config.HostPorts) == 0 {
+		return container.Socket{}, nil
+	}
+	return container.ResolveDocker(container.Config{Enable: config.Enable, SocketPath: config.SocketPath, HostPorts: config.HostPorts}, env, container.Home(home))
+}
+
+func resolvePodman(config manifest.ContainerConfig, env container.Env, home, platform string) (container.Socket, error) {
+	if !config.Enable && len(config.HostPorts) == 0 {
+		return container.Socket{}, nil
+	}
+	return container.ResolvePodman(container.Config{Enable: config.Enable, SocketPath: config.SocketPath, HostPorts: config.HostPorts}, env, container.Home(home), container.UID(os.Getuid()), container.Platform(platform))
+}
+
+func containerEnvironment(lookup func(string) (string, bool)) container.Env {
+	values := make(container.Env, 3)
+	for _, name := range []string{"DOCKER_HOST", "CONTAINER_HOST", "XDG_RUNTIME_DIR"} {
+		if value, ok := lookup(name); ok {
+			values[name] = value
+		}
+	}
+	return values
 }
 
 // fenceTemporaryEnvironment replaces inherited temporary-directory state with
