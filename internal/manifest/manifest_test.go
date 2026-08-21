@@ -129,6 +129,9 @@ func TestLoadRedactsRejectedValues(t *testing.T) {
 		{"closure paths file", "closurePathsFile", func(s string) string {
 			return strings.Replace(validManifest, `"/nix/store/closure-paths"`, `"`+s+`"`, 1)
 		}},
+		{"scratch root", "scratchRoot", func(s string) string {
+			return strings.Replace(validManifest, `"/tmp"`, `"`+s+`"`, 1)
+		}},
 		{"platform", "platform", func(s string) string { return strings.Replace(validManifest, `"linux"`, `"`+s+`"`, 1) }},
 		{"ACL probe executable", "aclProbe", func(s string) string { return strings.Replace(validManifest, `"/usr/bin/getfacl"`, `"`+s+`"`, 1) }},
 		{"ACL probe argument", "aclProbe", func(s string) string { return strings.Replace(validManifest, `"-lde"`, `"`+s+`\u0000"`, 1) }},

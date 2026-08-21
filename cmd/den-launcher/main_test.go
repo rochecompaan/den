@@ -61,6 +61,7 @@ func TestRunRejectsInvalidArgumentLayouts(t *testing.T) {
 		{"missing manifest path", []string{"--manifest"}},
 		{"relative manifest path", []string{"--manifest", "manifest.json", "--"}},
 		{"missing separator", []string{"--manifest", "/manifest.json"}},
+		{"invalid separator", []string{"--manifest", "/manifest.json", "not-a-separator"}},
 		{"wrong flag", []string{"--config", "/manifest.json", "--"}},
 	}
 
