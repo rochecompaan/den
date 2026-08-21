@@ -156,25 +156,20 @@ The initial resource set is:
 | Slopbeth | `ehmo/slopkit` 1.4.1, commit `b33718bb9283c11b09567dc714f92d90ffb7bd16` | Load `plugins/slopbeth` as an immutable plugin. |
 | Slopgent | `ehmo/slopkit` 1.4.1, commit `b33718bb9283c11b09567dc714f92d90ffb7bd16` | Load `plugins/slopgent` as an immutable plugin. |
 
-The Den snapshot contains these 17 tracked Roche Pi skills:
+The Den snapshot contains these 12 tracked Roche Pi skills:
 
 1. `bootstrapping-tilt-worktrees`
 2. `capturing-proof-screenshots`
-3. `claude-zellij-prompt`
-4. `commit`
-5. `frontend-design`
-6. `gitea`
-7. `github`
-8. `linear`
-9. `module-size`
-10. `nix-config`
-11. `notion`
-12. `patchmill-cleanup`
-13. `patchmill-label`
-14. `patchmill-plan`
-15. `patchmill-upload`
-16. `show-me`
-17. `thermo-nuclear-code-quality-review`
+3. `commit`
+4. `frontend-design`
+5. `gitea`
+6. `github`
+7. `linear`
+8. `module-size`
+9. `nix-config`
+10. `notion`
+11. `show-me`
+12. `thermo-nuclear-code-quality-review`
 
 The snapshot preserves all tracked files in those directories. Den also stores a snapshot manifest with the Roche Pi source commit, every relative file path, and each SHA-256 digest. Checks compare the vendored files with this fixed manifest, not with a manifest generated from the build input.
 
@@ -597,7 +592,7 @@ A platform output must not silently omit Context Mode, CodeGraph, RepoWolf, a re
 - normal `claude` usage, non-reserved argument forwarding, and reserved Den flags.
 - inherited environment scrubbing and protected configuration precedence.
 - signal, terminal, exit-status, cleanup, and `SIGKILL` behavior.
-- the 17 Den snapshot skills.
+- the 12 Den snapshot skills.
 - the fixed first-release resource set and the absence of custom resource bundles.
 - Superpowers and Simple English.
 - Frontend Design, Slopbeth, and Slopgent.
@@ -679,7 +674,7 @@ These jobs run outside a nested Nix build sandbox when Fence requires host names
 
 Nix checks must verify:
 
-- the exact 17-skill snapshot inventory, Roche Pi source commit, fixed path manifest, and SHA-256 values.
+- the exact 12-skill snapshot inventory, Roche Pi source commit, fixed path manifest, and SHA-256 values.
 - valid plugin manifests for all packaged plugins.
 - separate discovery of both frontend-design resources.
 - Superpowers and Simple English versions.
