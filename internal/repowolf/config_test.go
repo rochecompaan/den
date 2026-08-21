@@ -56,7 +56,9 @@ func TestLoadEnvAcceptsOnlyCanonicalEndpoint(t *testing.T) {
 		"https://user@broker.example.test",
 		"https://broker.example.test/non-root",
 		"https://broker.example.test/?query=yes",
+		"https://broker.example.test/?",
 		"https://broker.example.test/#fragment",
+		"https://broker.example.test/#",
 		"https:broker.example.test",
 		"https://Broker.example.test",
 		"https://broker.example.test.",
@@ -71,6 +73,8 @@ func TestLoadEnvAcceptsOnlyCanonicalEndpoint(t *testing.T) {
 		"https://git.bitbucket.org",
 		"https://broker.example.test:",
 		"https://broker.example.test:0",
+		"https://broker.example.test:01",
+		"https://broker.example.test:0443",
 		"https://broker.example.test:65536",
 	} {
 		t.Run("reject "+endpoint, func(t *testing.T) {

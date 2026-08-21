@@ -69,7 +69,14 @@ func validEndpoint(value string) bool {
 	if port != "" && !validPort(port) {
 		return false
 	}
-	return parsed.Host == hostname || (port != "" && parsed.Host == hostname+":"+port)
+	canonical := "https://" + hostname
+	if port != "" {
+		canonical += ":" + port
+	}
+	if parsed.Path == "/" {
+		canonical += "/"
+	}
+	return value == canonical
 }
 
 func validHostname(hostname string) bool {
@@ -105,6 +112,9 @@ func blockedHostname(hostname string) bool {
 func validPort(port string) bool {
 	if port == "" {
 		return true
+	}
+	if len(port) > 1 && port[0] == '0' {
+		return false
 	}
 	value := 0
 	for _, character := range port {
