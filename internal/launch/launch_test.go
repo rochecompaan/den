@@ -51,6 +51,33 @@ func TestRunRejectsInvalidRepoWolfInputsWithoutLeakingValues(t *testing.T) {
 	}
 }
 
+func TestRunRejectsInvalidRepoWolfBeforeConfigurationOrACLProbe(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config")
+	probeMarker := filepath.Join(root, "probe-ran")
+	probe := filepath.Join(root, "acl-probe")
+	if err := os.WriteFile(probe, []byte("#!/bin/sh\ntouch \""+probeMarker+"\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got := run(context.Background(), manifest.Manifest{ExplicitConfigDir: &configPath, ACLProbe: []string{probe}}, nil,
+		lookup(map[string]string{"REPOWOLF_ENDPOINT": "http://invalid.example.test", "HOME": root}),
+		func(string) (fs.FileInfo, error) {
+			t.Fatal("CA input was inspected after invalid endpoint")
+			return nil, nil
+		},
+		func() []string { t.Fatal("environment was read"); return nil },
+		func([]string, environment.Controlled) []string { t.Fatal("environment was built"); return nil }, &bytes.Buffer{})
+	if got != 1 {
+		t.Fatalf("run() = %d, want 1", got)
+	}
+	if _, err := os.Lstat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("invalid RepoWolf input created configuration directory: %v", err)
+	}
+	if _, err := os.Lstat(probeMarker); !os.IsNotExist(err) {
+		t.Fatalf("invalid RepoWolf input ran ACL probe: %v", err)
+	}
+}
+
 func TestRunBuildsControlledEnvironmentAfterValidation(t *testing.T) {
 	values := map[string]string{
 		"REPOWOLF_ENDPOINT": "https://broker.example.test/",
@@ -307,6 +334,15 @@ func TestFenceTemporaryEnvironmentReplacesInheritedTemporaryState(t *testing.T) 
 	}
 	if !reflect.DeepEqual(values, want) {
 		t.Fatalf("environment = %#v, want %#v", values, want)
+	}
+}
+
+func TestFenceTemporaryEnvironmentPreservesUnrelatedDuplicates(t *testing.T) {
+	host := []string{"DUP=first", "DUP=second", "TMPDIR=/host/tmp", "DEN_FENCE_POLICY_FILE=/host/policy"}
+	got := fenceTemporaryEnvironment(host, "/private/scratch")
+	want := []string{"DUP=first", "DUP=second", "TMPDIR=/private/scratch", "DEN_FENCE_TMPDIR=/private/scratch"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("environment = %#v, want %#v", got, want)
 	}
 }
 

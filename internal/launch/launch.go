@@ -77,6 +77,7 @@ func run(
 			exitCode = 1
 		}
 	}()
+	var revalidateDarwinSettings func() error
 	if launcherManifest.Agent.Name == "claude" && launcherManifest.Platform == "darwin" {
 		workingDirectory, err := os.Getwd()
 		if err != nil {
@@ -87,10 +88,12 @@ func run(
 		if selection.Mode == configdir.Default {
 			configDirectory = filepath.Join(home, ".claude")
 		}
-		if err := claude.ValidateDarwinSettings(claude.DarwinScopes(configDirectory, workingDirectory)); err != nil {
+		scopes := claude.DarwinScopes(configDirectory, workingDirectory)
+		if err := claude.ValidateDarwinSettings(scopes); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
+		revalidateDarwinSettings = func() error { return claude.RevalidateDarwinSettings(scopes) }
 	}
 	containerEnv := containerEnvironment(lookup)
 	dockerSocket, err := resolveDocker(launcherManifest.Docker, containerEnv, home)
@@ -115,7 +118,7 @@ func run(
 	if launcherManifest.Agent.Name == "claude" && launcherManifest.Platform == "darwin" {
 		host = claude.ScrubDarwinEnvironment(host)
 	}
-	_ = build(host, environment.Controlled{
+	childEnvironment := build(host, environment.Controlled{
 		Endpoint:      config.Endpoint,
 		Token:         config.Token,
 		CAFile:        config.CAFile,
@@ -125,7 +128,10 @@ func run(
 		ContainerHost: podmanSocket.Endpoint,
 		XDGRuntimeDir: podmanSocket.XDGRuntimeDir,
 	})
-	return 0
+	if selection.Mode == configdir.Custom {
+		childEnvironment = setEnvironment(childEnvironment, launcherManifest.Agent.ConfigEnvironment, selection.CanonicalPath)
+	}
+	return runFence(ctx, launcherManifest, arguments, config, selection, revalidateDarwinSettings, childEnvironment, dockerSocket, podmanSocket, stderr)
 }
 
 func resolveDocker(config manifest.ContainerConfig, env container.Env, home string) (container.Socket, error) {
@@ -156,17 +162,27 @@ func containerEnvironment(lookup func(string) (string, bool)) container.Env {
 // the owner-validated per-launch scratch directory.
 func fenceTemporaryEnvironment(host []string, scratch string) []string {
 	result := make([]string, 0, len(host)+2)
-	seen := make(map[string]struct{}, len(host)+2)
 	for _, entry := range host {
 		name, _, ok := strings.Cut(entry, "=")
-		if !ok || name == "TMPDIR" || name == "DEN_FENCE_TMPDIR" {
+		if !ok || name == "TMPDIR" || name == "DEN_FENCE_TMPDIR" || name == "DEN_FENCE_POLICY_FILE" {
 			continue
 		}
-		if _, exists := seen[name]; exists {
-			continue
-		}
-		seen[name] = struct{}{}
 		result = append(result, entry)
 	}
 	return append(result, "TMPDIR="+scratch, "DEN_FENCE_TMPDIR="+scratch)
+}
+
+func setEnvironment(values []string, name, value string) []string {
+	if name == "" {
+		return values
+	}
+	result := make([]string, 0, len(values)+1)
+	for _, entry := range values {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && key == name {
+			continue
+		}
+		result = append(result, entry)
+	}
+	return append(result, name+"="+value)
 }
