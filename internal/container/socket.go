@@ -40,6 +40,10 @@ type Socket struct {
 
 // ResolveDocker selects and validates the configured local Docker socket.
 func ResolveDocker(config Config, env Env, home Home) (Socket, error) {
+	return resolveDocker(config, env, home, []string{"/run/docker.sock", "/var/run/docker.sock"})
+}
+
+func resolveDocker(config Config, env Env, home Home, defaults []string) (Socket, error) {
 	if err := validateConfig("Docker", config); err != nil {
 		return Socket{}, err
 	}
@@ -57,19 +61,23 @@ func ResolveDocker(config Config, env Env, home Home) (Socket, error) {
 		return resolveSocket("Docker", path, nil)
 	}
 
-	candidates := make([]string, 0, 4)
+	candidates := make([]string, 0, len(defaults)+2)
 	if runtime, ok := env["XDG_RUNTIME_DIR"]; ok && runtime != "" {
 		candidates = append(candidates, filepath.Join(runtime, "docker.sock"))
 	}
 	if home != "" {
 		candidates = append(candidates, filepath.Join(string(home), ".docker", "run", "docker.sock"))
 	}
-	candidates = append(candidates, "/run/docker.sock", "/var/run/docker.sock")
+	candidates = append(candidates, defaults...)
 	return resolveDiscovered("Docker", candidates, nil)
 }
 
 // ResolvePodman selects and validates the configured local Podman socket.
 func ResolvePodman(config Config, env Env, home Home, uid UID, platform Platform) (Socket, error) {
+	return resolvePodman(config, env, home, uid, platform, "/run/user")
+}
+
+func resolvePodman(config Config, env Env, home Home, uid UID, platform Platform, runtimeRoot string) (Socket, error) {
 	if err := validateConfig("Podman", config); err != nil {
 		return Socket{}, err
 	}
@@ -80,7 +88,7 @@ func ResolvePodman(config Config, env Env, home Home, uid UID, platform Platform
 		return Socket{}, errors.New("container: platform must be linux or darwin")
 	}
 
-	defaultRuntime := filepath.Join("/run/user", strconv.Itoa(int(uid)))
+	defaultRuntime := filepath.Join(runtimeRoot, strconv.Itoa(int(uid)))
 	runtime, runtimeSet := env["XDG_RUNTIME_DIR"]
 	exportedRuntime := ""
 	if platform == "linux" && !runtimeSet {

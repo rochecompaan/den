@@ -43,6 +43,30 @@ func TestResolveDockerPrecedenceAndCanonicalEndpoint(t *testing.T) {
 	}
 }
 
+func TestResolveDockerDefaultSocketOrdering(t *testing.T) {
+	root := t.TempDir()
+	first := listenSocket(t, filepath.Join(root, "run", "docker.sock"))
+	second := listenSocket(t, filepath.Join(root, "var-run", "docker.sock"))
+	for _, test := range []struct {
+		name     string
+		defaults []string
+		want     string
+	}{
+		{"first default wins", []string{first, second}, first},
+		{"second default follows missing first", []string{filepath.Join(root, "missing.sock"), second}, second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := resolveDocker(Config{Enable: true}, Env{}, Home(""), test.defaults)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Path != test.want {
+				t.Fatalf("socket path = %q, want %q", got.Path, test.want)
+			}
+		})
+	}
+}
+
 func TestResolveDockerRejectsInvalidEndpointsAndTargets(t *testing.T) {
 	root := t.TempDir()
 	valid := listenSocket(t, filepath.Join(root, "valid.sock"))
@@ -134,6 +158,21 @@ func TestResolvePodmanDiscoveryOwnershipAndPorts(t *testing.T) {
 
 	if _, err := ResolvePodman(Config{Enable: true, SocketPath: pointer(explicit)}, Env{}, Home(root), uid+1, "linux"); err == nil {
 		t.Fatal("accepted Podman socket not owned by invoking user")
+	}
+}
+
+func TestResolvePodmanUsesRuntimeFallback(t *testing.T) {
+	root := t.TempDir()
+	uid := UID(os.Getuid())
+	runtimeRoot := filepath.Join(root, "run", "user")
+	want := listenSocket(t, filepath.Join(runtimeRoot, strconv.Itoa(int(uid)), "podman", "podman.sock"))
+
+	got, err := resolvePodman(Config{Enable: true}, Env{}, Home(root), uid, "linux", runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != want || got.XDGRuntimeDir != filepath.Join(runtimeRoot, strconv.Itoa(int(uid))) {
+		t.Fatalf("socket = %#v, want fallback %q", got, want)
 	}
 }
 

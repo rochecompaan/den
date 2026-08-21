@@ -110,6 +110,34 @@ func TestBuildReplacesEnabledContainerEndpointsWithoutMutatingHost(t *testing.T)
 	}
 }
 
+func TestBuildScrubsUnvalidatedContainerEndpoints(t *testing.T) {
+	host := []string{
+		"KEEP=value",
+		"DOCKER_HOST=tcp://untrusted.example.test",
+		"CONTAINER_HOST=ssh://untrusted.example.test",
+	}
+	for _, test := range []struct {
+		name          string
+		controlled    Controlled
+		wantDocker    string
+		wantContainer string
+	}{
+		{"disabled", Controlled{}, "", ""},
+		{"Docker only", Controlled{DockerHost: "unix:///canonical/docker.sock"}, "unix:///canonical/docker.sock", ""},
+		{"Podman only", Controlled{ContainerHost: "unix:///canonical/podman.sock"}, "", "unix:///canonical/podman.sock"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			original := append([]string(nil), host...)
+			got := entries(Build(host, test.controlled))
+			assertContainerEndpoint(t, got, "DOCKER_HOST", test.wantDocker)
+			assertContainerEndpoint(t, got, "CONTAINER_HOST", test.wantContainer)
+			if !reflect.DeepEqual(host, original) {
+				t.Fatalf("Build() mutated host: got %#v, want %#v", host, original)
+			}
+		})
+	}
+}
+
 func entries(environment []string) map[string]string {
 	result := make(map[string]string, len(environment))
 	for _, entry := range environment {
@@ -121,4 +149,15 @@ func entries(environment []string) map[string]string {
 		}
 	}
 	return result
+}
+
+func assertContainerEndpoint(t *testing.T, values map[string]string, name, want string) {
+	t.Helper()
+	got, exists := values[name]
+	if want == "" && exists {
+		t.Fatalf("%s = %q, want scrubbed", name, got)
+	}
+	if want != "" && (!exists || got != want) {
+		t.Fatalf("%s = %q, want %q", name, got, want)
+	}
 }

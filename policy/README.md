@@ -50,3 +50,10 @@ For requested container host ports, Linux receives the exact sorted,
 deduplicated list. macOS Fence cannot enforce an exact port list: any requested
 port enables all localhost outbound ports, so the generated macOS policy does
 not claim an exact-port restriction.
+
+## Container daemon warning
+
+**Warning:** Granting a Docker or Podman daemon socket is a sandbox escape, not
+safe isolation. A client with either socket can ask the daemon to create
+containers, mount host paths, and access resources beyond Fence's boundary.
+Enable either capability only for trusted work.
