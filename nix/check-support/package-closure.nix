@@ -123,6 +123,21 @@ pkgs.runCommand "package-closure"
     if artifact_forbidden ${repowolfClient}/bin/gh; then fail_forbidden; fi
     printf '\000CLAUDE_CODE_PLUGIN_SEED_DIR\000' > "$negative/binary-seed"
     contains_seed_variable "$negative/binary-seed" || fail_forbidden
+    newline_root="$negative/newline-root"
+    mkdir -p "$newline_root"
+    newline_file="$newline_root/seed
+fixture"
+    printf '\000CLAUDE_CODE_PLUGIN_SEED_DIR\000' > "$newline_file"
+    newline_artifacts="$negative/newline-artifacts"
+    if ! ${pkgs.findutils}/bin/find "$newline_root" -type f -print0 > "$newline_artifacts"; then
+      echo 'closure fixture traversal failed' >&2
+      exit 1
+    fi
+    newline_detected=0
+    while IFS= read -r -d "" item; do
+      if contains_seed_variable "$item"; then newline_detected=1; fi
+    done < "$newline_artifacts"
+    test "$newline_detected" = 1 || fail_forbidden
 
     artifacts="$TMPDIR/package-closure-artifacts"
     : > "$artifacts"
@@ -132,7 +147,7 @@ pkgs.runCommand "package-closure"
       store_count=$((store_count + 1))
       base=''${store_path##*/}
       if store_class_forbidden "$base"; then fail_forbidden; fi
-      if ! ${pkgs.findutils}/bin/find "$store_path" \( -type f -o -type l \) -print >> "$artifacts"; then
+      if ! ${pkgs.findutils}/bin/find "$store_path" \( -type f -o -type l \) -print0 >> "$artifacts"; then
         echo 'production closure traversal failed' >&2
         exit 1
       fi
@@ -145,8 +160,7 @@ pkgs.runCommand "package-closure"
     done
 
     artifact_count=0
-    while IFS= read -r item; do
-      test -n "$item" || continue
+    while IFS= read -r -d "" item; do
       artifact_count=$((artifact_count + 1))
       if artifact_forbidden "$item"; then fail_forbidden; fi
       case "$item" in
