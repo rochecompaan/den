@@ -102,6 +102,7 @@ func Generate(base Base, dynamic Dynamic) ([]byte, error) {
 		return nil, errors.New("policy: CA file must be an existing regular file")
 	}
 	policy.Filesystem.AllowRead = appendUnique(policy.Filesystem.AllowRead, ca)
+	policy.Filesystem.DenyWrite = appendUnique(policy.Filesystem.DenyWrite, ca)
 
 	for _, path := range dynamic.ClosurePaths {
 		resolved, err := canonicalPath("closure path", path)

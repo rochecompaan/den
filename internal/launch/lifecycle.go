@@ -21,6 +21,9 @@ import (
 
 const staleTemporaryDirectoryAge = 24 * time.Hour
 
+type staleRemover func(string, int, time.Duration) error
+type temporaryPair func(string) (string, string, func() error, error)
+
 func runFence(
 	ctx context.Context,
 	launcherManifest manifest.Manifest,
@@ -32,14 +35,27 @@ func runFence(
 	docker, podman container.Socket,
 	stderr io.Writer,
 ) int {
-	if launcherManifest.FenceExecutable == "" || launcherManifest.BasePolicy == "" || launcherManifest.ClosurePathsFile == "" || launcherManifest.ScratchRoot == "" || launcherManifest.Agent.Executable == "" {
-		return 0 // Unit tests that exercise only earlier validation stages have no command.
-	}
-	if err := tempdir.RemoveStale(launcherManifest.ScratchRoot, os.Getuid(), staleTemporaryDirectoryAge); err != nil {
+	return runFenceWithTemporary(ctx, launcherManifest, arguments, config, selection, darwinRevalidate, environment, docker, podman, stderr, tempdir.RemoveStale, tempdir.NewPair)
+}
+
+func runFenceWithTemporary(
+	ctx context.Context,
+	launcherManifest manifest.Manifest,
+	arguments []string,
+	config repowolf.Config,
+	selection configdir.Selection,
+	darwinRevalidate func() error,
+	environment []string,
+	docker, podman container.Socket,
+	stderr io.Writer,
+	removeStale staleRemover,
+	newPair temporaryPair,
+) int {
+	if err := removeStale(launcherManifest.ScratchRoot, os.Getuid(), staleTemporaryDirectoryAge); err != nil {
 		fmt.Fprintln(stderr, "temporary directory validation failed")
 		return 1
 	}
-	policyDir, scratchDir, cleanup, err := tempdir.NewPair(launcherManifest.ScratchRoot)
+	policyDir, scratchDir, cleanup, err := newPair(launcherManifest.ScratchRoot)
 	if err != nil {
 		fmt.Fprintln(stderr, "temporary directory creation failed")
 		return 1

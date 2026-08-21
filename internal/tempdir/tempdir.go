@@ -7,17 +7,21 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
-	"time"
 )
 
 const directoryMode = 0o700
 
+type rootValidator func(string) error
+
 // NewPair creates separate private policy and scratch directories below the
 // invoking user's validated Den parent directory.
 func NewPair(root string) (policyDir, scratchDir string, cleanup func() error, err error) {
-	parent, err := parent(root, os.Getuid())
+	return newPair(root, os.Getuid(), validateRoot)
+}
+
+func newPair(root string, uid int, validate rootValidator) (policyDir, scratchDir string, cleanup func() error, err error) {
+	parent, err := parent(root, uid, validate)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -25,21 +29,27 @@ func NewPair(root string) (policyDir, scratchDir string, cleanup func() error, e
 	if err != nil {
 		return "", "", nil, err
 	}
-	if err := os.Chmod(policyDir, directoryMode); err != nil {
+	policyLease, err := acquireLease(policyDir)
+	if err != nil {
 		_ = os.RemoveAll(policyDir)
 		return "", "", nil, err
 	}
 	scratchDir, err = os.MkdirTemp(parent, "scratch-")
 	if err != nil {
+		_ = policyLease.Close()
 		_ = os.RemoveAll(policyDir)
 		return "", "", nil, err
 	}
-	if err := os.Chmod(scratchDir, directoryMode); err != nil {
+	scratchLease, err := acquireLease(scratchDir)
+	if err != nil {
+		_ = policyLease.Close()
 		_ = os.RemoveAll(policyDir)
 		_ = os.RemoveAll(scratchDir)
 		return "", "", nil, err
 	}
 	return policyDir, scratchDir, func() error {
+		_ = policyLease.Close()
+		_ = scratchLease.Close()
 		var result error
 		if err := os.RemoveAll(policyDir); err != nil {
 			result = err
@@ -51,42 +61,8 @@ func NewPair(root string) (policyDir, scratchDir string, cleanup func() error, e
 	}, nil
 }
 
-// RemoveStale removes old policy and scratch children belonging to uid. It
-// only scans the validated per-user parent, never the sticky scratch root.
-func RemoveStale(root string, uid int, olderThan time.Duration) error {
-	parent, err := parent(root, uid)
-	if err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(parent)
-	if err != nil {
-		return err
-	}
-	cutoff := time.Now().Add(-olderThan)
-	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), "policy-") && !strings.HasPrefix(entry.Name(), "scratch-") {
-			continue
-		}
-		path := filepath.Join(parent, entry.Name())
-		info, err := os.Lstat(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return err
-		}
-		if !privateOwnedDirectory(info, uid) || !info.ModTime().Before(cutoff) {
-			continue
-		}
-		if err := os.RemoveAll(path); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func parent(root string, uid int) (string, error) {
-	if err := validateRoot(root); err != nil {
+func parent(root string, uid int, validate rootValidator) (string, error) {
+	if err := validate(root); err != nil {
 		return "", err
 	}
 	path := filepath.Join(root, "den-"+strconv.Itoa(uid))

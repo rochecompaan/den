@@ -21,12 +21,22 @@ import (
 
 type environmentBuilder func([]string, environment.Controlled) []string
 
+type lifecycleRunner func(context.Context, manifest.Manifest, []string, repowolf.Config, configdir.Selection, func() error, []string, container.Socket, container.Socket, io.Writer) int
+
 // Run executes one validated launcher manifest.
 func Run(ctx context.Context, launcherManifest manifest.Manifest, arguments []string) int {
-	return run(ctx, launcherManifest, arguments, os.LookupEnv, os.Lstat, os.Environ, environment.Build, os.Stderr)
+	return runWithLifecycle(ctx, launcherManifest, arguments, os.LookupEnv, os.Lstat, os.Environ, environment.Build, os.Stderr, runFence)
 }
 
-func run(
+// run keeps validation tests isolated from process execution. Production uses
+// Run, which injects the mandatory Fence lifecycle above.
+func run(ctx context.Context, launcherManifest manifest.Manifest, arguments []string, lookup func(string) (string, bool), lstat func(string) (fs.FileInfo, error), environ func() []string, build environmentBuilder, stderr io.Writer) int {
+	return runWithLifecycle(ctx, launcherManifest, arguments, lookup, lstat, environ, build, stderr, func(context.Context, manifest.Manifest, []string, repowolf.Config, configdir.Selection, func() error, []string, container.Socket, container.Socket, io.Writer) int {
+		return 0
+	})
+}
+
+func runWithLifecycle(
 	ctx context.Context,
 	launcherManifest manifest.Manifest,
 	arguments []string,
@@ -35,6 +45,7 @@ func run(
 	environ func() []string,
 	build environmentBuilder,
 	stderr io.Writer,
+	lifecycle lifecycleRunner,
 ) (exitCode int) {
 	config, err := repowolf.LoadEnv(lookup, lstat)
 	if err != nil {
@@ -131,7 +142,7 @@ func run(
 	if selection.Mode == configdir.Custom {
 		childEnvironment = setEnvironment(childEnvironment, launcherManifest.Agent.ConfigEnvironment, selection.CanonicalPath)
 	}
-	return runFence(ctx, launcherManifest, arguments, config, selection, revalidateDarwinSettings, childEnvironment, dockerSocket, podmanSocket, stderr)
+	return lifecycle(ctx, launcherManifest, arguments, config, selection, revalidateDarwinSettings, childEnvironment, dockerSocket, podmanSocket, stderr)
 }
 
 func resolveDocker(config manifest.ContainerConfig, env container.Env, home string) (container.Socket, error) {

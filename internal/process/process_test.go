@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
+	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -28,6 +31,48 @@ func TestRunPreservesStreamsArgumentsAndExitStatus(t *testing.T) {
 	}
 	if stdout.String() != "stdout:input" || stderr.String() != "stderr:ok" {
 		t.Fatalf("streams = %q, %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunPreservesEmptyArguments(t *testing.T) {
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := Run(Command{Path: truePath, Env: os.Environ()}, IO{}, Signals{}); code != 0 {
+		t.Fatalf("Run() = %d, want 0", code)
+	}
+}
+
+func TestRunPreservesForegroundPTYProcessGroup(t *testing.T) {
+	script, err := exec.LookPath("script")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	command := "test -t 0; pgrp=$(ps -o pgrp= -p $$ | tr -d ' '); tpgid=$(ps -o tpgid= -p $$ | tr -d ' '); test \"$pgrp\" = \"$tpgid\"; printf pty-ok"
+	code := Run(Command{Path: script, Args: []string{"-qfec", command, "/dev/null"}, Env: os.Environ()}, IO{Stdout: &stdout, Stderr: &stdout}, Signals{})
+	if code != 0 || !strings.Contains(stdout.String(), "pty-ok") {
+		t.Fatalf("Run() = %d, PTY output = %q", code, stdout.String())
+	}
+}
+
+func TestRunLeavesResizeAndJobControlSignalsUnregistered(t *testing.T) {
+	var registered []os.Signal
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := Run(Command{Path: truePath, Env: os.Environ()}, IO{}, Signals{
+		Notify: func(_ chan<- os.Signal, signals ...os.Signal) { registered = append(registered, signals...) },
+		Stop:   func(chan<- os.Signal) {},
+	})
+	if code != 0 {
+		t.Fatalf("Run() = %d", code)
+	}
+	want := []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT}
+	if !reflect.DeepEqual(registered, want) {
+		t.Fatalf("registered signals = %#v, want %#v; SIGWINCH/SIGTSTP/SIGCONT must remain terminal-managed", registered, want)
 	}
 }
 

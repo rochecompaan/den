@@ -10,8 +10,8 @@ import (
 )
 
 func TestNewPairCreatesPrivateSeparateDirectoriesAndCleansThem(t *testing.T) {
-	requireTrustedScratchRoot(t)
-	policyDir, scratchDir, cleanup, err := NewPair("/tmp")
+	root := t.TempDir()
+	policyDir, scratchDir, cleanup, err := newPair(root, os.Getuid(), func(string) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,21 +38,24 @@ func TestNewPairCreatesPrivateSeparateDirectoriesAndCleansThem(t *testing.T) {
 }
 
 func TestRemoveStaleRemovesOnlyOldOwnedTemporaryDirectories(t *testing.T) {
-	requireTrustedScratchRoot(t)
-	root := filepath.Join("/tmp", "den-"+itoa(os.Getuid()))
-	if err := os.MkdirAll(root, 0o700); err != nil {
+	root := t.TempDir()
+	parent := filepath.Join(root, "den-"+itoa(os.Getuid()))
+	if err := os.Mkdir(parent, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(root, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
 
-	old, err := os.MkdirTemp(root, "scratch-")
+	old, err := os.MkdirTemp(parent, "scratch-")
 	if err != nil {
 		t.Fatal(err)
 	}
-	recent, err := os.MkdirTemp(root, "policy-")
+	lease, err := acquireLease(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	recent, err := os.MkdirTemp(parent, "policy-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +63,7 @@ func TestRemoveStaleRemovesOnlyOldOwnedTemporaryDirectories(t *testing.T) {
 	if err := os.Chtimes(old, then, then); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveStale("/tmp", os.Getuid(), 24*time.Hour); err != nil {
+	if err := removeStale(root, os.Getuid(), 24*time.Hour, time.Now, func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(old); !os.IsNotExist(err) {
@@ -71,17 +74,82 @@ func TestRemoveStaleRemovesOnlyOldOwnedTemporaryDirectories(t *testing.T) {
 	}
 }
 
+func TestRemoveStalePreservesLockedLeaseThenRemovesReleasedLease(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "den-"+itoa(os.Getuid()))
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(parent, "scratch-old")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := acquireLease(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	then := time.Now().Add(-25 * time.Hour)
+	if err := os.Chtimes(directory, then, then); err != nil {
+		t.Fatal(err)
+	}
+	trusted := func(string) error { return nil }
+	if err := removeStale(root, os.Getuid(), 24*time.Hour, time.Now, trusted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(directory); err != nil {
+		t.Fatalf("locked directory removed: %v", err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeStale(root, os.Getuid(), 24*time.Hour, time.Now, trusted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(directory); !os.IsNotExist(err) {
+		t.Fatalf("released stale directory remains: %v", err)
+	}
+}
+
+func TestRemoveStaleReclaimsSimulatedSIGKILLOnlyAfterThreshold(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "den-"+itoa(os.Getuid()))
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(parent, "policy-killed")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := acquireLease(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	} // SIGKILL releases flock but leaves the lease file.
+	started := time.Now()
+	if err := os.Chtimes(directory, started, started); err != nil {
+		t.Fatal(err)
+	}
+	trusted := func(string) error { return nil }
+	if err := removeStale(root, os.Getuid(), 24*time.Hour, func() time.Time { return started.Add(23 * time.Hour) }, trusted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(directory); err != nil {
+		t.Fatalf("recent SIGKILL residue removed: %v", err)
+	}
+	if err := removeStale(root, os.Getuid(), 24*time.Hour, func() time.Time { return started.Add(25 * time.Hour) }, trusted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(directory); !os.IsNotExist(err) {
+		t.Fatalf("old SIGKILL residue remains: %v", err)
+	}
+}
+
 func TestPrivateOwnedDirectoryRejectsForeignOwner(t *testing.T) {
 	info := temporaryFileInfo{mode: os.ModeDir | 0o700, stat: &syscall.Stat_t{Uid: uint32(os.Getuid() + 1)}}
 	if privateOwnedDirectory(info, os.Getuid()) {
 		t.Fatal("foreign-owned directory was accepted")
-	}
-}
-
-func requireTrustedScratchRoot(t *testing.T) {
-	t.Helper()
-	if err := validateRoot("/tmp"); err != nil {
-		t.Skipf("sandbox does not provide a trusted /tmp: %v", err)
 	}
 }
 

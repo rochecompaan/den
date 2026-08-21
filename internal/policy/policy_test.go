@@ -173,6 +173,32 @@ func TestGenerateDynamicPolicyByPlatform(t *testing.T) {
 	}
 }
 
+func TestGenerateDeniesWriteToCAInsideWritableWorktree(t *testing.T) {
+	root := t.TempDir()
+	paths := makePaths(t, root)
+	ca := filepath.Join(paths.worktree, "broker.crt")
+	if err := os.WriteFile(ca, []byte("ca"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := Generate(Base(readBase(t)), Dynamic{
+		Platform: "darwin", RepoWolfHostname: "broker.example.test", CAFile: ca,
+		Worktree: paths.worktree, ScratchDir: paths.scratch, PolicyFile: paths.policy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got document
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(got.Filesystem.AllowWrite, paths.worktree) {
+		t.Fatal("worktree write grant missing")
+	}
+	if !contains(got.Filesystem.DenyWrite, ca) {
+		t.Fatalf("denyWrite = %#v, want CA %q", got.Filesystem.DenyWrite, ca)
+	}
+}
+
 func TestGenerateRejectsInvalidInputsAndUnknownFields(t *testing.T) {
 	root := t.TempDir()
 	paths := makePaths(t, root)

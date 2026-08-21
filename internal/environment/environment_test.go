@@ -86,6 +86,17 @@ func TestBuildDoesNotMutateHostAndProducesNoDuplicateNames(t *testing.T) {
 	}
 }
 
+func TestBuildDefinesUniqueEnvironmentContractForProcessExecution(t *testing.T) {
+	host := []string{"KEEP=first", "KEEP=second", "OTHER=value", "TMPDIR=/host/tmp"}
+	got := Build(host, Controlled{Endpoint: "https://broker.example.test", Token: "token", CAFile: "/ca.pem", ClientDir: "/client", PathEntries: []string{"/path"}})
+	if len(entries(got)) != len(got) {
+		t.Fatalf("Build() must produce one entry per name for os/exec: %#v", got)
+	}
+	if values := entries(got); values["KEEP"] != "first" {
+		t.Fatalf("Build() retained KEEP = %q, want first", values["KEEP"])
+	}
+}
+
 func TestBuildReplacesEnabledContainerEndpointsWithoutMutatingHost(t *testing.T) {
 	host := []string{
 		"KEEP=value",

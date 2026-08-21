@@ -19,6 +19,7 @@ type Controlled struct {
 }
 
 // Build replaces inherited Git and RepoWolf state with the controlled child environment.
+// Its result contains exactly one entry per name, as required by os/exec.
 func Build(host []string, controlled Controlled) []string {
 	result := make([]string, 0, len(host)+15)
 	seen := make(map[string]struct{}, len(host)+15)
