@@ -136,6 +136,68 @@ func TestRunSelectsCustomConfigurationAfterRepoWolfAndRollsItBack(t *testing.T) 
 	}
 }
 
+func TestRunFailsClosedWhenLinuxFenceNetworkNamespaceIsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	probe := filepath.Join(root, "fence")
+	output := "Linux Sandbox Features:\n\n  Capability         Required For              Status       Details\n  -----------------  ------------------------  -----------  -------\n  Network namespace  direct network isolation  unavailable  denied-secret-detail\n"
+	if err := os.WriteFile(probe, []byte("#!/bin/sh\nprintf '%s' '"+output+"'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{
+		"REPOWOLF_ENDPOINT": "https://broker.example.test/",
+		"REPOWOLF_TOKEN":    "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"REPOWOLF_CA_FILE":  "/canonical/ca.pem",
+		"HOME":              root,
+	}
+	var stderr bytes.Buffer
+	got := run(context.Background(), manifest.Manifest{Platform: "linux", FenceExecutable: probe}, nil,
+		lookup(values), func(string) (fs.FileInfo, error) { return launchFileInfo{mode: 0o444}, nil },
+		func() []string { return nil },
+		func([]string, environment.Controlled) []string {
+			t.Fatal("environment builder called after failed preflight")
+			return nil
+		},
+		&stderr,
+	)
+	if got != 1 {
+		t.Fatalf("run() = %d, want 1", got)
+	}
+	if !strings.Contains(stderr.String(), "network namespace") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "denied-secret-detail") {
+		t.Fatalf("probe details leaked: %q", stderr.String())
+	}
+}
+
+func TestFenceTemporaryEnvironmentReplacesInheritedTemporaryState(t *testing.T) {
+	host := []string{
+		"KEEP=value",
+		"TMPDIR=/host/tmp",
+		"DEN_FENCE_TMPDIR=/attacker/tmp",
+	}
+	got := fenceTemporaryEnvironment(host, "/private/scratch")
+	want := map[string]string{
+		"KEEP":             "value",
+		"TMPDIR":           "/private/scratch",
+		"DEN_FENCE_TMPDIR": "/private/scratch",
+	}
+	values := make(map[string]string)
+	for _, entry := range got {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			t.Fatalf("malformed environment entry %q", entry)
+		}
+		if _, duplicate := values[name]; duplicate {
+			t.Fatalf("duplicate environment variable %q", name)
+		}
+		values[name] = value
+	}
+	if !reflect.DeepEqual(values, want) {
+		t.Fatalf("environment = %#v, want %#v", values, want)
+	}
+}
+
 func lookup(values map[string]string) func(string) (string, bool) {
 	return func(name string) (string, bool) { value, ok := values[name]; return value, ok }
 }

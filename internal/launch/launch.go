@@ -7,9 +7,11 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"strings"
 
 	"github.com/rochecompaan/den/internal/configdir"
 	"github.com/rochecompaan/den/internal/environment"
+	"github.com/rochecompaan/den/internal/fence"
 	"github.com/rochecompaan/den/internal/manifest"
 	"github.com/rochecompaan/den/internal/repowolf"
 )
@@ -22,7 +24,7 @@ func Run(ctx context.Context, launcherManifest manifest.Manifest, arguments []st
 }
 
 func run(
-	_ context.Context,
+	ctx context.Context,
 	launcherManifest manifest.Manifest,
 	_ []string,
 	lookup func(string) (string, bool),
@@ -61,6 +63,13 @@ func run(
 		}
 	}()
 
+	if launcherManifest.Platform == "linux" {
+		if err := fence.Preflight(ctx, launcherManifest.FenceExecutable); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+
 	_ = build(environ(), environment.Controlled{
 		Endpoint:    config.Endpoint,
 		Token:       config.Token,
@@ -69,4 +78,23 @@ func run(
 		PathEntries: launcherManifest.PathEntries,
 	})
 	return 0
+}
+
+// fenceTemporaryEnvironment replaces inherited temporary-directory state with
+// the owner-validated per-launch scratch directory.
+func fenceTemporaryEnvironment(host []string, scratch string) []string {
+	result := make([]string, 0, len(host)+2)
+	seen := make(map[string]struct{}, len(host)+2)
+	for _, entry := range host {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok || name == "TMPDIR" || name == "DEN_FENCE_TMPDIR" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		result = append(result, entry)
+	}
+	return append(result, "TMPDIR="+scratch, "DEN_FENCE_TMPDIR="+scratch)
 }
