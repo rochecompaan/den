@@ -241,7 +241,6 @@ pkgs.runCommand "claude-settings-merge"
 
     if ! timeout 30 ${pkgs.claude-code}/bin/claude \
       -p "run the fixture command" \
-      --settings "$settings" \
       ${mandatoryArgs} \
       > "$root/claude.out" 2> "$root/claude.err"; then
       cat "$root/claude.out" >&2
