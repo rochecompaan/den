@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-func captureAncestors(start string, ownerUID uint32, ownerName, ownerID string, deps Dependencies) ([]pathSnapshot, error) {
+func captureAncestors(start string, ownerUID uint32, ownerName, ownerID string, probe aclProbe) ([]pathSnapshot, error) {
 	paths := ancestorPaths(start)
 	snapshots := make([]pathSnapshot, 0, len(paths))
 	for _, path := range paths {
@@ -18,7 +18,7 @@ func captureAncestors(start string, ownerUID uint32, ownerName, ownerID string, 
 		if !ok {
 			return nil, errInvalid
 		}
-		acl, access, err := inspectACL(path, ownerName, ownerID, deps)
+		acl, access, err := inspectACL(path, ownerName, ownerID, probe)
 		if err != nil {
 			return nil, err
 		}

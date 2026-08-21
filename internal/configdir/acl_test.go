@@ -10,6 +10,32 @@ import (
 	"testing"
 )
 
+func TestDarwinOwnerWriteDenyOrdering(t *testing.T) {
+	owner := currentUserName(t)
+	tests := []struct {
+		name   string
+		acl    string
+		denied bool
+	}{
+		{"owner deny", fmt.Sprintf("0: user:%s deny write\n", owner), true},
+		{"owner allow before deny", fmt.Sprintf("0: user:%s allow write\n1: user:%s deny write\n", owner, owner), false},
+		{"owner deny before allow", fmt.Sprintf("0: user:%s deny write\n1: user:%s allow write\n", owner, owner), true},
+		{"owner read deny", fmt.Sprintf("0: user:%s deny read\n", owner), false},
+		{"other owner deny", "0: user:other deny write\n", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			access, _, err := parseDarwinACL([]byte(test.acl), owner, "unused-id")
+			if err != nil {
+				t.Fatalf("parseDarwinACL() error = %v", err)
+			}
+			if access.ownerWriteDenied != test.denied {
+				t.Fatalf("ownerWriteDenied = %t, want %t", access.ownerWriteDenied, test.denied)
+			}
+		})
+	}
+}
+
 func TestDarwinWritePermissionClassification(t *testing.T) {
 	for _, permission := range []string{
 		"write", "append", "writeattr", "writeextattr", "writesecurity",
@@ -104,6 +130,44 @@ func TestSelectRejectsWritableAncestorACLExceptSafeStickyAncestor(t *testing.T) 
 				t.Fatalf("Select() error = %v, want success %t", err, test.ok)
 			}
 		})
+	}
+}
+
+func TestSnapshotACLProbeRejectsInvalidArguments(t *testing.T) {
+	tests := []struct {
+		name string
+		argv []string
+	}{
+		{"missing", nil},
+		{"relative executable", []string{"getfacl"}},
+		{"NUL executable", []string{"/probe\x00bad"}},
+		{"empty argument", []string{"/probe", ""}},
+		{"NUL argument", []string{"/probe", "bad\x00arg"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := snapshotACLProbe(test.argv); err == nil {
+				t.Fatal("snapshotACLProbe() error = nil")
+			}
+		})
+	}
+}
+
+func TestSelectionSnapshotsACLProbeArguments(t *testing.T) {
+	root := t.TempDir()
+	home := privateDir(t, root, "home")
+	path := privateDir(t, root, "config")
+	safeProbe := writeProbe(t, "cat <<'ACL_EOF'\n"+safeACL(t)+"ACL_EOF")
+	unsafeProbe := writeProbe(t, "cat <<'ACL_EOF'\n"+unsafeNonOwnerACL(t)+"ACL_EOF")
+	deps := Dependencies{ACLProbe: []string{safeProbe}}
+	selection, err := Select(&path, nil, home, nil, deps)
+	if err != nil {
+		t.Fatalf("Select() error = %v", err)
+	}
+
+	deps.ACLProbe[0] = unsafeProbe
+	if err := selection.Revalidate(); err != nil {
+		t.Fatalf("Revalidate() used mutated ACL probe arguments: %v", err)
 	}
 }
 

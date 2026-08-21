@@ -44,7 +44,7 @@ type selectionState struct {
 	identity   fileIdentity
 	acl        [sha256.Size]byte
 	ancestors  []pathSnapshot
-	deps       Dependencies
+	probe      aclProbe
 	ownerName  string
 	ownerID    string
 	created    bool
@@ -93,6 +93,10 @@ func Select(explicit *string, inherited *string, home string, denied []string, d
 }
 
 func selectCustom(value, home string, denied []string, deps Dependencies) (selection Selection, resultErr error) {
+	probe, err := snapshotACLProbe(deps.ACLProbe)
+	if err != nil {
+		return Selection{}, err
+	}
 	canonical, exists, err := canonicalFinal(value)
 	if err != nil {
 		return Selection{}, errInvalid
@@ -102,10 +106,10 @@ func selectCustom(value, home string, denied []string, deps Dependencies) (selec
 	}
 	ownerUID := uint32(os.Getuid())
 	ownerName, ownerID, err := invokingOwner(ownerUID)
-	if err != nil || len(deps.ACLProbe) == 0 {
+	if err != nil {
 		return Selection{}, errACL
 	}
-	ancestors, err := captureAncestors(filepath.Dir(canonical), ownerUID, ownerName, ownerID, deps)
+	ancestors, err := captureAncestors(filepath.Dir(canonical), ownerUID, ownerName, ownerID, probe)
 	if err != nil {
 		return Selection{}, err
 	}
@@ -118,7 +122,7 @@ func selectCustom(value, home string, denied []string, deps Dependencies) (selec
 		created = true
 	}
 	state := &selectionState{
-		path: canonical, ancestors: ancestors, deps: deps,
+		path: canonical, ancestors: ancestors, probe: probe,
 		ownerName: ownerName, ownerID: ownerID, created: created,
 	}
 	if created {
@@ -134,7 +138,7 @@ func selectCustom(value, home string, denied []string, deps Dependencies) (selec
 		return Selection{}, err
 	}
 	state.identity = identity
-	acl, err := captureFinalACL(canonical, ownerName, ownerID, deps)
+	acl, err := captureFinalACL(canonical, ownerName, ownerID, probe)
 	if err != nil {
 		return Selection{}, err
 	}
@@ -166,18 +170,18 @@ func captureFinalIdentity(path string, ownerUID uint32) (fileIdentity, error) {
 		return fileIdentity{}, errInvalid
 	}
 	identity, ok := identityFromFileInfo(info)
-	if !ok || identity.uid != ownerUID || !privateDirectoryMode(identity.mode) {
+	if !ok || identity.uid != ownerUID || !privateDirectoryMode(identity.mode) || !directoryWritable(path) {
 		return fileIdentity{}, errPrivate
 	}
 	return identity, nil
 }
 
-func captureFinalACL(path, ownerName, ownerID string, deps Dependencies) ([sha256.Size]byte, error) {
-	acl, access, err := inspectACL(path, ownerName, ownerID, deps)
+func captureFinalACL(path, ownerName, ownerID string, probe aclProbe) ([sha256.Size]byte, error) {
+	acl, access, err := inspectACL(path, ownerName, ownerID, probe)
 	if err != nil {
 		return [sha256.Size]byte{}, err
 	}
-	if access.nonOwnerAny {
+	if access.nonOwnerAny || access.ownerWriteDenied {
 		return [sha256.Size]byte{}, errPrivate
 	}
 	return acl, nil
@@ -198,11 +202,11 @@ func (s Selection) Revalidate() error {
 	if err != nil || identity != state.identity {
 		return errChanged
 	}
-	acl, err := captureFinalACL(state.path, state.ownerName, state.ownerID, state.deps)
+	acl, err := captureFinalACL(state.path, state.ownerName, state.ownerID, state.probe)
 	if err != nil || acl != state.acl {
 		return errChanged
 	}
-	ancestors, err := captureAncestors(filepath.Dir(state.path), state.identity.uid, state.ownerName, state.ownerID, state.deps)
+	ancestors, err := captureAncestors(filepath.Dir(state.path), state.identity.uid, state.ownerName, state.ownerID, state.probe)
 	if err != nil || !sameSnapshots(ancestors, state.ancestors) {
 		return errChanged
 	}
@@ -235,8 +239,11 @@ func rollbackCreated(state *selectionState) error {
 		}
 		return errRollback
 	}
+	if state.identity == (fileIdentity{}) {
+		return errRollback
+	}
 	identity, ok := identityFromFileInfo(info)
-	if !ok || state.identity != (fileIdentity{}) && identity != state.identity {
+	if !ok || identity != state.identity {
 		return errRollback
 	}
 	if err := os.Remove(state.path); err != nil {

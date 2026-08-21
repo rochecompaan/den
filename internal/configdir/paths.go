@@ -73,19 +73,31 @@ func validateProtectedOverlap(candidate, home string, patterns []string) error {
 }
 
 func protectedRoot(pattern, home string) (string, error) {
-	expanded := pattern
 	switch {
 	case pattern == "~":
-		expanded = home
+		return filepath.Clean(home), nil
 	case strings.HasPrefix(pattern, "~/"):
-		expanded = filepath.Join(home, strings.TrimPrefix(pattern, "~/"))
+		complete := completePatternComponents(strings.TrimPrefix(pattern, "~/"))
+		if len(complete) == 0 {
+			return filepath.Clean(home), nil
+		}
+		return filepath.Clean(filepath.Join(append([]string{home}, complete...)...)), nil
 	case !filepath.IsAbs(pattern):
 		return "", errors.New("relative protected pattern")
 	}
 
-	volume := filepath.VolumeName(expanded)
-	remainder := strings.TrimPrefix(expanded[len(volume):], string(os.PathSeparator))
-	components := strings.Split(remainder, string(os.PathSeparator))
+	volume := filepath.VolumeName(pattern)
+	remainder := strings.TrimPrefix(pattern[len(volume):], string(os.PathSeparator))
+	complete := completePatternComponents(remainder)
+	if len(complete) == 0 {
+		return "", errors.New("protected glob has no complete root")
+	}
+	root := volume + string(os.PathSeparator) + filepath.Join(complete...)
+	return filepath.Clean(root), nil
+}
+
+func completePatternComponents(pattern string) []string {
+	components := strings.Split(pattern, string(os.PathSeparator))
 	complete := make([]string, 0, len(components))
 	for _, component := range components {
 		if strings.ContainsAny(component, "*?[") {
@@ -93,11 +105,7 @@ func protectedRoot(pattern, home string) (string, error) {
 		}
 		complete = append(complete, component)
 	}
-	if len(complete) == 0 {
-		return "", errors.New("protected glob has no complete root")
-	}
-	root := volume + string(os.PathSeparator) + filepath.Join(complete...)
-	return filepath.Clean(root), nil
+	return complete
 }
 
 func canonicalProspective(path string) (string, error) {
@@ -126,16 +134,4 @@ func canonicalProspective(path string) (string, error) {
 		missing = append(missing, filepath.Base(current))
 		current = parent
 	}
-}
-
-func pathsOverlap(left, right string) bool {
-	return pathContains(left, right) || pathContains(right, left)
-}
-
-func pathContains(parent, child string) bool {
-	relative, err := filepath.Rel(parent, child)
-	if err != nil {
-		return false
-	}
-	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
 }

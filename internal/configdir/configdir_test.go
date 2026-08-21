@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -168,6 +169,40 @@ func TestSelectRejectsEveryGroupOrOtherPermissionWithoutChmod(t *testing.T) {
 				t.Fatalf("existing mode changed: info=%v err=%v", info, statErr)
 			}
 		})
+	}
+}
+
+func TestDirectoryWritableRejectsReadOnlyFilesystem(t *testing.T) {
+	create := func(string, string) (*os.File, error) { return nil, syscall.EROFS }
+	if directoryWritableWith("/read-only", create) {
+		t.Fatal("directoryWritableWith() = true after a read-only filesystem error")
+	}
+}
+
+func TestDirectoryWritableChecksEffectiveAccessWithoutArtifacts(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses ordinary owner write checks")
+	}
+	path := privateDir(t, t.TempDir(), "config")
+	before, err := os.ReadDir(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !directoryWritable(path) {
+		t.Fatal("directoryWritable() = false for writable owner directory")
+	}
+	if err := os.Chmod(path, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if directoryWritable(path) {
+		t.Fatal("directoryWritable() = true for effectively read-only directory")
+	}
+	after, err := os.ReadDir(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("writability check left artifacts: before=%d after=%d", len(before), len(after))
 	}
 }
 
@@ -481,6 +516,18 @@ func TestSelectionRollbackLifecycle(t *testing.T) {
 			t.Fatalf("replacement was removed: %v", err)
 		}
 	})
+}
+
+func TestRollbackWithoutCapturedIdentityNeverDeletesCurrentPath(t *testing.T) {
+	path := privateDir(t, t.TempDir(), "replacement")
+	state := &selectionState{path: path, created: true}
+
+	if err := rollbackCreated(state); err == nil {
+		t.Fatal("rollbackCreated() error = nil without a captured identity")
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("rollback removed a path without proving its identity: %v", err)
+	}
 }
 
 func TestSelectPostCreationFailureDoesNotRemoveReplacement(t *testing.T) {
