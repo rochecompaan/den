@@ -8,31 +8,6 @@ import (
 	"testing"
 )
 
-func TestStatsigDenyTakesPrecedenceOverAnthropicWildcard(t *testing.T) {
-	network := baseNetwork(t)
-	const host = "statsig.anthropic.com"
-	if !matchesAnyDomain(network.AllowedDomains, host) {
-		t.Fatal("test setup: Statsig must overlap the allowed Anthropic wildcard")
-	}
-	if !matchesAnyDomain(network.DeniedDomains, host) {
-		t.Fatal("test setup: Statsig deny rule missing")
-	}
-	if policyAllowsDomain(network, host) {
-		t.Fatal("Statsig was allowed despite matching deniedDomains")
-	}
-}
-
-func TestUnmatchedOutboundIsDeniedByDefault(t *testing.T) {
-	network := baseNetwork(t)
-	const host = "unlisted.example.test"
-	if matchesAnyDomain(network.AllowedDomains, host) || matchesAnyDomain(network.DeniedDomains, host) {
-		t.Fatal("test setup: unmatched host unexpectedly matches a static rule")
-	}
-	if policyAllowsDomain(network, host) {
-		t.Fatal("unmatched outbound host was allowed")
-	}
-}
-
 func TestGenerateWithEmptyHostPortsDoesNotEnableLocalOutbound(t *testing.T) {
 	root := t.TempDir()
 	paths := makePaths(t, root)
@@ -65,29 +40,4 @@ func TestGenerateWithEmptyHostPortsDoesNotEnableLocalOutbound(t *testing.T) {
 			}
 		})
 	}
-}
-
-func baseNetwork(t *testing.T) network {
-	t.Helper()
-	var policy document
-	if err := json.Unmarshal(readBase(t), &policy); err != nil {
-		t.Fatal(err)
-	}
-	return policy.Network
-}
-
-func policyAllowsDomain(network network, host string) bool {
-	if matchesAnyDomain(network.DeniedDomains, host) {
-		return false
-	}
-	return matchesAnyDomain(network.AllowedDomains, host)
-}
-
-func matchesAnyDomain(patterns []string, host string) bool {
-	for _, pattern := range patterns {
-		if domainMatches(pattern, host) {
-			return true
-		}
-	}
-	return false
 }

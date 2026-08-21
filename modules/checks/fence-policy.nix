@@ -40,6 +40,16 @@
             exit 1
           fi
           go test ./internal/policy -count=1
+
+          denSource=$PWD
+          cp -R ${fence.package.src} fence-source
+          chmod -R u+w fence-source
+          ln -s ${fence.package.goModules} fence-source/vendor
+          cp nix/check-support/fence-domain-policy_test.go.fixture \
+            fence-source/internal/proxy/den_policy_test.go
+          cd fence-source
+          DEN_POLICY_PATH="$denSource/policy/fence.json" \
+            go test -mod=vendor ./internal/proxy -run '^TestDenPolicyDomainDecisions$' -count=1 -v
           touch "$out"
         '';
     };

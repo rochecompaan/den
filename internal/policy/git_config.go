@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 const maxGitPathFileSize = 4096
@@ -115,13 +116,17 @@ func readPrefixedGitPathFile(path, prefix string) (string, error) {
 }
 
 func readGitPathFile(path string) (string, error) {
-	file, err := os.Open(path)
+	beforeOpen, err := os.Lstat(path)
+	if err != nil || !beforeOpen.Mode().IsRegular() || beforeOpen.Size() > maxGitPathFileSize {
+		return "", errGitMetadata
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return "", errGitMetadata
 	}
 	defer file.Close()
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxGitPathFileSize {
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxGitPathFileSize || !os.SameFile(beforeOpen, info) {
 		return "", errGitMetadata
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxGitPathFileSize+1))

@@ -1,11 +1,16 @@
 package policy
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestGenerateCanonicalizesGitConfigDenialsThroughSymlinkedGitDirectory(t *testing.T) {
@@ -87,6 +92,70 @@ func TestGenerateFailsClosedForMalformedGitfile(t *testing.T) {
 	if _, err := Generate(Base(readBase(t)), testDynamic(paths)); err == nil || !strings.Contains(err.Error(), "Git metadata") {
 		t.Fatalf("Generate error = %v, want redacted Git metadata failure", err)
 	}
+}
+
+func TestGitConfigDenyPathsRejectsNonRegularCommonDirPromptly(t *testing.T) {
+	for _, symlink := range []bool{false, true} {
+		name := "fifo"
+		if symlink {
+			name = "symlink-to-fifo"
+		}
+		t.Run(name, func(t *testing.T) {
+			worktree := linkedWorktreeWithCommonDirFIFO(t, symlink)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGitConfigDenyPathsCommonDirChild$")
+			cmd.Env = append(os.Environ(), "DEN_TEST_GIT_WORKTREE="+worktree)
+			output, err := cmd.CombinedOutput()
+			if ctx.Err() == context.DeadlineExceeded {
+				t.Fatalf("Git metadata resolution blocked on %s", name)
+			}
+			if err != nil {
+				t.Fatalf("Git metadata child failed: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
+func TestGitConfigDenyPathsCommonDirChild(t *testing.T) {
+	worktree := os.Getenv("DEN_TEST_GIT_WORKTREE")
+	if worktree == "" {
+		t.Skip("subprocess helper")
+	}
+	_, err := gitConfigDenyPaths(worktree)
+	if !errors.Is(err, errGitMetadata) || err.Error() != "policy: resolve Git metadata" {
+		t.Fatalf("gitConfigDenyPaths error = %v, want fixed redacted error", err)
+	}
+}
+
+func linkedWorktreeWithCommonDirFIFO(t *testing.T, symlink bool) string {
+	t.Helper()
+	root := t.TempDir()
+	worktree := filepath.Join(root, "worktree")
+	gitDirectory := filepath.Join(root, "git-directory")
+	if err := os.MkdirAll(worktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(gitDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+gitDirectory+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fifo := filepath.Join(gitDirectory, "commondir")
+	if symlink {
+		fifo = filepath.Join(root, "commondir-fifo")
+	}
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if symlink {
+		if err := os.Symlink(fifo, filepath.Join(gitDirectory, "commondir")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return worktree
 }
 
 func generateTestPolicy(t *testing.T, paths testPaths) document {
