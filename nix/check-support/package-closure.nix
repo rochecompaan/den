@@ -4,6 +4,11 @@ let
   fence = import ../lib/fence.nix { inherit pkgs; };
   repowolfClient = import ../packages/repowolf-client.nix { inherit inputs pkgs; };
   launcher = import ../packages/den-launcher.nix { inherit pkgs; };
+  packageClosure = pkgs.closureInfo { rootPaths = [ claude ]; };
+  fenceCapabilityCheck = import ./fence-capabilities.nix {
+    inherit pkgs;
+    fence = fence.package;
+  };
   productionAdapter = (import ../lib/mk-claude.nix {
     inherit pkgs;
     fence = fence.package;
@@ -29,8 +34,9 @@ assert !(productionAdapter.adapter.agent ? codeGraph);
 assert !(productionAdapter.adapter.agent ? seedDirectory);
 pkgs.runCommand "package-closure"
   {
-    nativeBuildInputs = [ pkgs.jq ];
+    nativeBuildInputs = [ pkgs.jq pkgs.coreutils pkgs.gnugrep ];
     manifest = claude.denManifest;
+    inherit fenceCapabilityCheck packageClosure;
   }
   ''
     set -eu
@@ -81,25 +87,33 @@ pkgs.runCommand "package-closure"
     ' ${darwinSettings}
     ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''grep -Fqx "${darwinSettings}" "$closure"''}
 
-    # Inspect only store-path identities, never file contents, for forbidden
-    # production closure classes. This keeps credential/path data out of logs.
+    test -e "$fenceCapabilityCheck"
+
+    fail_forbidden() {
+      echo 'forbidden production closure content detected' >&2
+      exit 1
+    }
     while IFS= read -r store_path; do
       base=''${store_path##*/}
       case "$base" in
         *github-cli*|*repowolf-server*|*repowolf-daemon*|*den-credentials*|*private-key*|\
         *user-skill*|*user-plugin*|*offline-fixture*|*context-mode*|*codegraph*|\
         *claude-resource*|*resource-bundle*|*marketplace-data*|*mcp-server*)
-          echo 'forbidden production closure class detected' >&2
-          exit 1
-          ;;
+          fail_forbidden ;;
       esac
-    done < "$closure"
-
-    # The package and immutable adapter have no resource-seeding environment.
-    if grep -Fq CLAUDE_CODE_PLUGIN_SEED_DIR ${claude}/bin/claude "$manifest" ${darwinSettings}; then
-      echo 'plugin seed environment leaked into generated artifacts' >&2
-      exit 1
-    fi
+      while IFS= read -r item; do
+        case "$item" in
+          ${repowolfClient}/bin/gh) ;;
+          */bin/gh|*/gh-*|*/bin/den|*/bin/repowolf|*/bin/repowolf-server) fail_forbidden ;;
+          */.git-credentials|*/credentials|*/credentials.json|*/id_rsa|*/id_ed25519|\
+          */private-key|*/private_key|*/user-skill|*/user-plugin|*/mcp-server|\
+          */context-mode|*/codegraph|*/marketplace-data|*/resource-bundle) fail_forbidden ;;
+        esac
+      done < <(${pkgs.coreutils}/bin/find "$store_path" \( -type f -o -type l \) -print 2>/dev/null)
+      if ${pkgs.gnugrep}/bin/grep -R -I -Fq CLAUDE_CODE_PLUGIN_SEED_DIR "$store_path" 2>/dev/null; then
+        fail_forbidden
+      fi
+    done < ${packageClosure}/store-paths
 
     touch "$out"
   ''
