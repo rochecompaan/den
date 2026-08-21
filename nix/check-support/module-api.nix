@@ -29,37 +29,59 @@ let
   fakeDockerCompose = pkgs.writeShellScriptBin "module-api-docker-compose" "exit 0";
   fakePodman = pkgs.writeShellScriptBin "module-api-podman" "exit 0";
   fakePodmanCompose = pkgs.writeShellScriptBin "module-api-podman-compose" "exit 0";
-  mkHome = modules: inputs.home-manager.lib.homeManagerConfiguration {
+  defaultModuleOptions = { programs.den.claude.enable = true; };
+  fakeDen = den // {
+    lib = den.lib // {
+      ${pkgs.system} = den.lib.${pkgs.system} // {
+        mkClaude = _: throw "disabled module must not call mkClaude";
+      };
+    };
+  };
+  homeModule = self: (import ../../modules/home/den.nix { inherit self; }).flake.homeModules.den;
+  devenvModule = self: (import ../../modules/devenv/den.nix { inherit self; }).flake.devenvModules.den;
+  mkHome = module: modules: inputs.home-manager.lib.homeManagerConfiguration {
     inherit pkgs;
-    extraSpecialArgs = { self = den; };
-    modules = [ den.homeModules.den {
+    modules = [ module {
       home.username = "den";
       home.homeDirectory = "/home/den";
       home.stateVersion = "24.11";
     } ] ++ modules;
   };
-  mkDevenv = modules: inputs.devenv.lib.mkConfig {
+  mkDevenv = module: modules: inputs.devenv.lib.mkConfig {
     inherit pkgs;
-    inputs = { self = den; };
-    modules = [ den.devenvModules.den ] ++ modules;
+    inputs = { };
+    modules = [ module ] ++ modules;
   };
-  homeDisabled = mkHome [ ];
-  devenvDisabled = mkDevenv [ ];
-  homeEnabled = mkHome [ moduleOptions ];
-  devenvEnabled = mkDevenv [ moduleOptions ];
+  homeDisabled = mkHome den.homeModules.den [ ];
+  devenvDisabled = mkDevenv den.devenvModules.den [ ];
+  homeDisabledLazy = mkHome (homeModule fakeDen) [ ];
+  devenvDisabledLazy = mkDevenv (devenvModule fakeDen) [ ];
+  homeDefaultEnabled = mkHome den.homeModules.den [ defaultModuleOptions ];
+  devenvDefaultEnabled = mkDevenv den.devenvModules.den [ defaultModuleOptions ];
+  homeEnabled = mkHome den.homeModules.den [ moduleOptions ];
+  devenvEnabled = mkDevenv den.devenvModules.den [ moduleOptions ];
+  expectedDefault = mkClaude { };
   expected = mkClaude (builtins.removeAttrs moduleOptions.programs.den.claude [ "enable" ]);
+  homeDefaultPackages = homeDefaultEnabled.config.home.packages;
+  devenvDefaultPackages = devenvDefaultEnabled.packages;
   homePackages = homeEnabled.config.home.packages;
   devenvPackages = devenvEnabled.packages;
+  packageOutPaths = packages: builtins.map (package: package.outPath) packages;
+  succeeds = value: (builtins.tryEval (builtins.deepSeq value value)).success;
   hasOutPath = outPath: packages: lib.any (package: package.outPath == outPath) packages;
   countOutPath = outPath: packages: builtins.length (builtins.filter (package: package.outPath == outPath) packages);
   fails = value: !(builtins.tryEval value).success;
-  invalidHome = value: (mkHome [ { programs.den.claude = value; } ]).config.programs.den.claude;
-  invalidDevenv = value: (mkDevenv [ { programs.den.claude = value; } ]).programs.den.claude;
-  invalidHomeAssertions = value: (mkHome [ { programs.den.claude = value; } ]).config.assertions;
-  invalidDevenvAssertions = value: (mkDevenv [ { programs.den.claude = value; } ]).shell.drvPath;
+  invalidHome = value: (mkHome den.homeModules.den [ { programs.den.claude = value; } ]).config.programs.den.claude;
+  invalidDevenv = value: (mkDevenv den.devenvModules.den [ { programs.den.claude = value; } ]).programs.den.claude;
+  invalidHomeAssertions = value: (mkHome den.homeModules.den [ { programs.den.claude = value; } ]).config.assertions;
+  invalidDevenvAssertions = value: (mkDevenv den.devenvModules.den [ { programs.den.claude = value; } ]).shell.drvPath;
 in
-assert !hasOutPath (mkClaude { }).outPath homeDisabled.config.home.packages;
-assert !hasOutPath (mkClaude { }).outPath devenvDisabled.packages;
+assert succeeds (packageOutPaths homeDisabledLazy.config.home.packages);
+assert succeeds (packageOutPaths devenvDisabledLazy.packages);
+assert !hasOutPath expectedDefault.outPath homeDisabled.config.home.packages;
+assert !hasOutPath expectedDefault.outPath devenvDisabled.packages;
+assert countOutPath expectedDefault.outPath homeDefaultPackages == 1;
+assert countOutPath expectedDefault.outPath devenvDefaultPackages == 1;
 assert homeDisabled.config.programs.den.claude.configDir == null;
 assert devenvDisabled.programs.den.claude.configDir == null;
 assert homeDisabled.config.programs.den.claude.extraPkgs == [ ];
