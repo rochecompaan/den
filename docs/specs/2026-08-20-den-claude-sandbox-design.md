@@ -256,21 +256,22 @@ The launcher performs these steps for each invocation:
 11. Create a missing custom directory with mode `0700`, inspect its effective ACL, and remove it if the privacy checks fail.
 12. On macOS, inspect every Claude settings scope that applies to the launch. Reject a `den-fence` disable or replacement, and preserve unrelated user hooks.
 13. Discover and validate enabled container sockets.
-14. Create separate policy and scratch directories with mode `0700`.
-15. Generate the Fence policy with mode `0600`, then change it to `0400` before Fence starts.
-16. Add the policy file and its parent directory to Fence's highest-precedence write-deny list.
-17. Export the policy path as the internal `DEN_FENCE_POLICY_FILE` variable for the macOS hook.
-18. On macOS, attach the immutable `den-fence` settings artifact through the mandatory `--settings` value without editing user settings.
-19. Build a controlled sandbox environment and `PATH`. Set `CLAUDE_CONFIG_DIR` when a custom directory is selected.
-20. Add process-local Git configuration that rewrites GitHub HTTPS URLs to RepoWolf SSH URLs and clears credential helpers.
-21. Set `GIT_SSH_COMMAND` to the immutable `repowolf-git-ssh` path.
-22. Revalidate the custom directory's canonical path, device, inode, owner, mode, ACL, and ancestors immediately before Fence starts.
-23. Start `${fence}/bin/fence --settings "$DEN_FENCE_POLICY_FILE" --` with the Claude command.
-24. Start Claude with mandatory Den arguments and each unchanged non-reserved user argument.
-25. Preserve standard input, standard output, standard error, foreground process-group state, and terminal resize behavior.
-26. Forward `SIGINT`, `SIGTERM`, `SIGHUP`, and `SIGQUIT`. Preserve `SIGWINCH`, `SIGTSTP`, and `SIGCONT` job-control behavior.
-27. Return the Claude or Fence exit status, including the `128 + signal` convention for signal termination.
-28. Remove both private directories after Fence exits. Cleanup errors do not replace the child exit status.
+14. Create separate policy and scratch directories with mode `0700`. Remove inherited `TMPDIR` and `DEN_FENCE_TMPDIR`, then set both variables to the validated scratch directory.
+15. On Linux, run the pinned `${fence}/bin/fence --linux-features` and require the exact `Network namespace` table row to report `ok`. Missing, unavailable, duplicate, malformed, or unknown feature output fails before policy generation.
+16. Generate the Fence policy with mode `0600`, then change it to `0400` before Fence starts.
+17. Add the policy file and its parent directory to Fence's highest-precedence write-deny list.
+18. Export the policy path as the internal `DEN_FENCE_POLICY_FILE` variable only for the outer Fence process and mandatory macOS hook.
+19. On macOS, attach the immutable `den-fence` settings artifact through the mandatory `--settings` value without editing user settings.
+20. Build a controlled sandbox environment and `PATH`. Set `CLAUDE_CONFIG_DIR` when a custom directory is selected.
+21. Add process-local Git configuration that rewrites GitHub HTTPS URLs to RepoWolf SSH URLs and clears credential helpers.
+22. Set `GIT_SSH_COMMAND` to the immutable `repowolf-git-ssh` path.
+23. Revalidate the custom directory's canonical path, device, inode, owner, mode, ACL, and ancestors immediately before Fence starts.
+24. Start `${fence}/bin/fence --settings "$DEN_FENCE_POLICY_FILE" --` with the Claude command.
+25. Start Claude with mandatory Den arguments and each unchanged non-reserved user argument.
+26. Preserve standard input, standard output, standard error, foreground process-group state, and terminal resize behavior.
+27. Forward `SIGINT`, `SIGTERM`, `SIGHUP`, and `SIGQUIT`. Preserve `SIGWINCH`, `SIGTSTP`, and `SIGCONT` job-control behavior.
+28. Return the Claude or Fence exit status, including the `128 + signal` convention for signal termination.
+29. Remove both private directories after Fence exits. Cleanup errors do not replace the child exit status.
 
 The launcher replaces host `PATH` and inherited Git transport configuration. It removes `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `SSH_AUTH_SOCK`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`, and inherited `GIT_CONFIG_KEY_*` and `GIT_CONFIG_VALUE_*` entries. It then installs only Den's controlled Git environment and sets `GIT_TERMINAL_PROMPT=0`.
 
@@ -320,7 +321,9 @@ Den vendors its static base policy in the repository. Its provenance is `sixfeet
 
 The Den policy starts from that snapshot. It removes unrelated AI providers and direct Git hosts. It adds the exact service, deny, and precedence rules in this specification. It does not import `jail.nix` permissions.
 
-The initial Fence package is nixpkgs `fence` 0.1.58 from Den's locked nixpkgs input. The package must provide `--settings`, `--claude-pre-tool-use`, `fence -c`, Linux `command.runtimeExecPolicy = "argv"`, macOS `network.allowUnixSockets`, and Linux `network.allowLocalOutboundPorts`. Evaluation fails when the selected Fence package lacks a required capability.
+The initial Fence package remains nixpkgs `fence` 0.1.58 from Den's locked nixpkgs input and source revision. Den applies only `patches/fence-0.1.58-den-tmpdir.patch` to upstream `internal/sandbox/utils.go`, with minimal upstream-level tests carried by that patch. The patch makes `GenerateProxyEnvVars` honor Den's validated `DEN_FENCE_TMPDIR` scratch path for both outer Fence and nested `fence -c`. An absent variable preserves upstream behavior. A present value must name an absolute, clean, existing, non-symbolic directory; invalid values resolve to a fixed nonexistent fail-closed path and never to `/tmp`.
+
+The package must provide `--settings`, `--claude-pre-tool-use`, `fence -c`, `--linux-features`, `--expose-host-path`, Linux `command.runtimeExecPolicy = "argv"`, strict read fields, macOS `network.allowUnixSockets`, Linux `network.allowLocalOutboundPorts`, and the Den TMPDIR patch. Evaluation fails for an unknown version, capability, patch count, or patch hash.
 
 Each launch adds only runtime values that cannot exist in the Nix store policy:
 
@@ -372,7 +375,7 @@ Nix store closures are read-only. `extraPkgs` closures are executable.
 
 ### Command policy and macOS hook
 
-Linux uses Fence's argv-aware descendant command policy when the host supports it. Fence fails closed when it cannot apply that configured policy.
+Linux uses Fence's argv-aware descendant command policy when the host supports it. Before policy generation, Den runs the pinned Fence feature probe and requires the `Network namespace` status to be exactly `ok`; unknown, malformed, missing, duplicate, unavailable, and unsupported results fail closed rather than accepting Fence's direct-network fallback. Fence also fails closed when it cannot apply the configured argv policy.
 
 macOS uses Fence's whole-process `sandbox-exec` boundary for filesystem and network enforcement. macOS cannot apply argv-aware multi-token command rules to every descendant process.
 
@@ -483,8 +486,8 @@ Fence or Claude runtime errors retain their original standard error and exit sta
 
 | Platform | Fence behavior | Additional requirements |
 |---|---|---|
-| `x86_64-linux` | Whole-agent Linux sandbox with argv-aware command policy. | Package Claude, Fence, and RepoWolf clients. |
-| `aarch64-linux` | Whole-agent Linux sandbox with argv-aware command policy. | Package Claude, Fence, and RepoWolf clients. |
+| `x86_64-linux` | Whole-agent Linux sandbox with argv-aware command policy and required network namespace. | Package Claude, patched Fence 0.1.58, and RepoWolf clients; require the live Fence feature probe to report `Network namespace` as `ok`. |
+| `aarch64-linux` | Whole-agent Linux sandbox with argv-aware command policy and required network namespace. | Package Claude, patched Fence 0.1.58, and RepoWolf clients; require the live Fence feature probe to report `Network namespace` as `ok`. |
 | `x86_64-darwin` | Whole-agent macOS sandbox plus Claude Bash hook. | Package Claude, Fence, and RepoWolf clients. Document localhost widening. |
 | `aarch64-darwin` | Whole-agent macOS sandbox plus Claude Bash hook. | Package Claude, Fence, and RepoWolf clients. Document localhost widening. |
 
@@ -540,6 +543,10 @@ Automated tests must cover:
 - token format validation without value disclosure.
 - regular, unreadable, missing, directory, and symbolic CA paths.
 - separate policy and scratch directories, policy mode `0400`, and write-deny precedence for the policy and its parent.
+- inherited `TMPDIR` and `DEN_FENCE_TMPDIR` removal, followed by both variables being set to the validated scratch directory.
+- Fence 0.1.58 patch behavior for absent, valid, relative, missing, non-directory, and symbolic `DEN_FENCE_TMPDIR` values.
+- identical effective TMPDIR behavior for outer Fence and nested `fence -c`.
+- exact Linux `Network namespace` parsing and rejection of missing, unavailable, duplicate, malformed, and unknown feature output before policy generation.
 - generated JSON syntax.
 - exact dynamic broker hostname insertion.
 - absence of the token from policy and diagnostics.
