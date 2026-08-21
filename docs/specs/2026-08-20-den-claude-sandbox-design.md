@@ -46,6 +46,7 @@ The first release does not:
 - provide a `den` dispatcher.
 - support agents other than Claude Code.
 - install plugins or skills into mutable Claude plugin state.
+- accept custom resource bundles or marketplace references.
 - expose direct GitHub credentials, unrestricted `gh`, or normal Git SSH credentials.
 - permit direct GitHub, GitLab, or Bitbucket network access.
 - support remote Docker or Podman TCP endpoints.
@@ -234,6 +235,22 @@ Den consumes the credential-free RepoWolf client from a pinned RepoWolf source. 
 The client closure must not contain the RepoWolf service, normal GitHub CLI, OpenSSH credentials, RepoWolf service configuration, private keys, or provider credentials.
 
 The client must build for all four Den systems. The RepoWolf source and lock file provide the immutable revision.
+
+## Future resource bundles
+
+The first release uses the fixed resource set in this design. It has no `resourceBundles` option and no public resource-bundle constructor.
+
+A later revision will move non-security Claude resources into separate Nix packages. Each bundle will contain plugins, skills, MCP metadata, resource hooks, and required runtime packages. Context Mode and CodeGraph will also belong to the default bundle.
+
+The revision will add `packages.<system>.claudeResources` and `lib.<system>.mkClaudeResourceBundle`. Fence, RepoWolf, mandatory Den settings, and security hooks will remain inside Den. A resource bundle cannot replace them.
+
+The future `mkClaude` API will accept one ordered `resourceBundles` list. Its default list will contain `packages.<system>.claudeResources`. Users will append packages to extend the defaults. Users will omit the default package to replace the resource set.
+
+Bundles will declare plugins with marketplace references such as `context7@claude-plugins-official`. Nix inputs and lock data must pin each marketplace source. The bundle builder will produce an immutable Claude seed directory for `CLAUDE_CODE_PLUGIN_SEED_DIR`.
+
+Den will union resource declarations across all bundles. It will deduplicate identical normalized definitions. Nix evaluation will fail when one identifier has different definitions.
+
+Den will not run `claude plugin install` or update seed-managed resources at runtime. The later design must define the package schema, generated settings, seed precedence, source locks, runtime dependencies, and validation checks.
 
 ## Public configuration API
 
@@ -581,6 +598,7 @@ A platform output must not silently omit Context Mode, CodeGraph, RepoWolf, a re
 - inherited environment scrubbing and protected configuration precedence.
 - signal, terminal, exit-status, cleanup, and `SIGKILL` behavior.
 - the 17 Den snapshot skills.
+- the fixed first-release resource set and the absence of custom resource bundles.
 - Superpowers and Simple English.
 - Frontend Design, Slopbeth, and Slopgent.
 - full Context Mode integration.
@@ -753,7 +771,7 @@ Each native job must build at least:
 - the RepoWolf client.
 - the matching CodeGraph package.
 - Context Mode.
-- the resource bundle.
+- the fixed packaged Claude resources.
 - module evaluation checks.
 - pure behavioral checks.
 - the platform's native Fence and RepoWolf enforcement checks.
