@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +55,7 @@ func TestRunBuildsControlledEnvironmentAfterValidation(t *testing.T) {
 		"REPOWOLF_ENDPOINT": "https://broker.example.test/",
 		"REPOWOLF_TOKEN":    "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		"REPOWOLF_CA_FILE":  "/canonical/ca.pem",
+		"HOME":              "/home/tester",
 	}
 	launcherManifest := manifest.Manifest{
 		RepoWolfClientDir: "/nix/store/repowolf-client",
@@ -88,6 +92,47 @@ func TestRunBuildsControlledEnvironmentAfterValidation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotControlled, want) {
 		t.Fatalf("controlled = %#v, want %#v", gotControlled, want)
+	}
+}
+
+func TestRunSelectsCustomConfigurationAfterRepoWolfAndRollsItBack(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "claude-config")
+	probe := filepath.Join(root, "acl-probe")
+	output := "user::rwx\\ngroup::---\\nother::---\\n"
+	if runtime.GOOS == "darwin" {
+		output = ""
+	}
+	if err := os.WriteFile(probe, []byte("#!/bin/sh\nprintf '"+output+"'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{
+		"REPOWOLF_ENDPOINT": "https://broker.example.test/",
+		"REPOWOLF_TOKEN":    "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"REPOWOLF_CA_FILE":  "/canonical/ca.pem",
+		"HOME":              home,
+	}
+	launcherManifest := manifest.Manifest{
+		RepoWolfClientDir: "/nix/store/repowolf-client",
+		ACLProbe:          []string{probe},
+		ExplicitConfigDir: &configPath,
+	}
+	got := run(
+		context.Background(), launcherManifest, nil, lookup(values),
+		func(string) (fs.FileInfo, error) { return launchFileInfo{mode: 0o444}, nil },
+		func() []string { return nil },
+		func(host []string, controlled environment.Controlled) []string { return nil },
+		&bytes.Buffer{},
+	)
+	if got != 0 {
+		t.Fatalf("run() = %d, want 0", got)
+	}
+	if _, err := os.Lstat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("placeholder launch retained created config directory: %v", err)
 	}
 }
 

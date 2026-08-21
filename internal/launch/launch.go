@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 
+	"github.com/rochecompaan/den/internal/configdir"
 	"github.com/rochecompaan/den/internal/environment"
 	"github.com/rochecompaan/den/internal/manifest"
 	"github.com/rochecompaan/den/internal/repowolf"
@@ -29,12 +30,37 @@ func run(
 	environ func() []string,
 	build environmentBuilder,
 	stderr io.Writer,
-) int {
+) (exitCode int) {
 	config, err := repowolf.LoadEnv(lookup, lstat)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	home, _ := lookup("HOME")
+	var inherited *string
+	if launcherManifest.Agent.ConfigEnvironment != "" {
+		if value, ok := lookup(launcherManifest.Agent.ConfigEnvironment); ok {
+			inherited = &value
+		}
+	}
+	selection, err := configdir.Select(
+		launcherManifest.ExplicitConfigDir,
+		inherited,
+		home,
+		launcherManifest.ProtectedPathPatterns,
+		configdir.Dependencies{ACLProbe: launcherManifest.ACLProbe},
+	)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer func() {
+		if err := selection.Rollback(); err != nil {
+			fmt.Fprintln(stderr, "configuration directory rollback failed")
+			exitCode = 1
+		}
+	}()
+
 	_ = build(environ(), environment.Controlled{
 		Endpoint:    config.Endpoint,
 		Token:       config.Token,
