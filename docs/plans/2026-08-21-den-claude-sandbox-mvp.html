@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Den · Claude Sandbox MVP Plan</title>
+<style>
+:root {
+  --ink: #101923;
+  --ink-2: #182634;
+  --paper: #f2ecdf;
+  --paper-2: #ded5c4;
+  --signal: #ff6746;
+  --signal-2: #ffbe63;
+  --mint: #83d6b2;
+  --blue: #91b6d6;
+  --line: rgba(242, 236, 223, .18);
+  --muted: #a9b1b5;
+  --display: "Bodoni 72", Didot, Georgia, serif;
+  --body: "Avenir Next", "Gill Sans", "Trebuchet MS", sans-serif;
+  --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --step: clamp(1rem, 2.4vw, 1.75rem);
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  color: var(--paper);
+  background:
+    radial-gradient(circle at 12% 8%, rgba(255,103,70,.13), transparent 24rem),
+    linear-gradient(135deg, rgba(255,255,255,.018) 25%, transparent 25%) 0 0 / 9px 9px,
+    var(--ink);
+  font-family: var(--body);
+  line-height: 1.5;
+}
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: .12;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.2'/%3E%3C/svg%3E");
+}
+a { color: inherit; }
+button, input { font: inherit; }
+button { color: inherit; }
+:focus-visible { outline: 3px solid var(--signal-2); outline-offset: 4px; }
+.wrap { width: min(1200px, calc(100% - 2rem)); margin: 0 auto; }
+.eyebrow {
+  margin: 0 0 .6rem;
+  color: var(--signal-2);
+  font-family: var(--mono);
+  font-size: .73rem;
+  font-weight: 800;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+.masthead {
+  min-height: 92vh;
+  display: grid;
+  align-content: space-between;
+  padding: 1.25rem 0 2.5rem;
+  border-bottom: 1px solid var(--line);
+}
+.topline { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
+.wordmark { font: 700 .9rem/1 var(--mono); letter-spacing: .15em; }
+.commit { color: var(--muted); font: .68rem/1.3 var(--mono); text-align: right; }
+.hero { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(260px, .55fr); gap: clamp(2rem, 7vw, 7rem); align-items: end; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.hero-logo { width: min(75%, 495px); }
+.brand-logo {
+  display: block;
+  width: 100%;
+  height: auto;
+  filter: drop-shadow(0 1.4rem 2.4rem rgba(0,0,0,.28));
+}
+.lede { margin: 1.4rem 0 0; max-width: 48rem; color: #cdd2d3; font-size: clamp(1rem, 2vw, 1.25rem); }
+.status-card { border-top: 4px solid var(--signal); padding-top: 1rem; }
+.status-card strong { display: block; color: var(--mint); font: 700 1.5rem var(--display); }
+.status-card p { color: var(--muted); }
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); }
+.metric { padding: 1rem; min-height: 7rem; border-right: 1px solid var(--line); }
+.metric:last-child { border-right: 0; }
+.metric b { display: block; font: 500 clamp(2rem, 5vw, 4rem)/1 var(--display); color: var(--paper); }
+.metric span { color: var(--muted); font: .72rem var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+section { padding: clamp(4rem, 10vw, 8rem) 0; border-bottom: 1px solid var(--line); }
+.section-head { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; align-items: end; margin-bottom: 2.5rem; }
+h2 { margin: 0; font: 400 clamp(2.6rem, 6vw, 5.7rem)/.9 var(--display); letter-spacing: -.045em; }
+.section-note { margin: 0; max-width: 40rem; color: var(--muted); }
+.flow {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(105px, 1fr));
+  gap: 0;
+  overflow-x: auto;
+  padding: 1rem 0 1.5rem;
+}
+.node {
+  min-width: 115px;
+  position: relative;
+  min-height: 160px;
+  padding: 1rem .9rem;
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,.025);
+}
+.node + .node { border-left: 0; }
+.node::after { content: "→"; position: absolute; right: -.48rem; top: 1.1rem; z-index: 2; color: var(--signal); font-size: 1.4rem; }
+.node:last-child::after { display: none; }
+.node small { color: var(--signal-2); font: .66rem var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.node h3 { margin: 1.1rem 0 .45rem; font: 500 1.15rem/1.05 var(--display); }
+.node p { margin: 0; color: var(--muted); font-size: .76rem; }
+.node.bridge { background: rgba(131,214,178,.08); }
+.node.guard { background: rgba(255,103,70,.09); }
+.phase-legend { display: flex; gap: .55rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.filter {
+  cursor: pointer;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: .45rem .8rem;
+  background: transparent;
+  color: var(--muted);
+  font: 700 .7rem var(--mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.filter:hover, .filter[aria-pressed="true"] { color: var(--ink); background: var(--paper); border-color: var(--paper); }
+.roadmap { position: relative; display: grid; gap: .55rem; }
+.task {
+  display: grid;
+  grid-template-columns: 4.2rem minmax(0, 1fr) auto;
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,.022);
+  transition: transform .18s ease, border-color .18s ease, background .18s ease;
+}
+.task:hover { transform: translateX(5px); border-color: rgba(255,190,99,.65); }
+.task[hidden] { display: none; }
+.task-num { display: grid; place-items: center; border-right: 1px solid var(--line); color: var(--signal); font: italic 500 2rem var(--display); }
+.task-main { min-width: 0; padding: .9rem 1rem; }
+.task-phase { color: var(--muted); font: .62rem var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.task h3 { margin: .18rem 0 0; font: 500 clamp(1rem, 2.3vw, 1.38rem)/1.12 var(--display); }
+.task-meta { display: flex; align-items: center; gap: .65rem; padding: .8rem 1rem; color: var(--muted); font: .68rem var(--mono); white-space: nowrap; }
+.task-toggle { cursor: pointer; border: 0; background: transparent; padding: .5rem; color: var(--signal-2); font-size: 1.2rem; }
+.task-detail { grid-column: 2 / 4; display: none; padding: 0 1rem 1.2rem; border-top: 1px dashed var(--line); }
+.task.open .task-detail { display: block; animation: reveal .2s ease-out; }
+.task-detail ol { margin: 1rem 0 0; padding-left: 1.25rem; columns: 2; column-gap: 2rem; }
+.task-detail li { break-inside: avoid; margin: 0 0 .4rem; color: #c6cbcd; font-size: .85rem; }
+@keyframes reveal { from { opacity: 0; transform: translateY(-5px); } }
+.boundary { display: grid; grid-template-columns: 1fr minmax(250px, .7fr) 1fr; gap: 1rem; align-items: stretch; }
+.zone { padding: 1.4rem; border: 1px solid var(--line); min-height: 340px; }
+.zone h3 { margin: 0 0 1rem; font: 500 1.9rem var(--display); }
+.zone ul { list-style: none; padding: 0; margin: 0; }
+.zone li { padding: .55rem 0; border-bottom: 1px solid var(--line); color: #cbd0d1; font-size: .88rem; }
+.zone li::before { margin-right: .55rem; }
+.allow { background: rgba(131,214,178,.06); border-top: 4px solid var(--mint); }
+.allow li::before { content: "+"; color: var(--mint); }
+.control { background: rgba(145,182,214,.07); border-top: 4px solid var(--blue); }
+.control li::before { content: "↔"; color: var(--blue); }
+.deny { background: rgba(255,103,70,.06); border-top: 4px solid var(--signal); }
+.deny li::before { content: "×"; color: var(--signal); }
+.gates { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.gate { position: relative; overflow: hidden; min-height: 310px; padding: 1.5rem; background: var(--signal); color: var(--ink); }
+.gate:nth-child(2) { background: var(--signal-2); }
+.gate::after { content: attr(data-task); position: absolute; right: -.2rem; bottom: -2.8rem; opacity: .12; font: italic 11rem var(--display); }
+.gate .label { font: 800 .68rem var(--mono); letter-spacing: .11em; text-transform: uppercase; }
+.gate h3 { max-width: 30rem; margin: 2rem 0 .8rem; font: 500 clamp(2rem, 4vw, 3.3rem)/.92 var(--display); }
+.gate p { max-width: 35rem; }
+.gate strong { display: inline-block; margin-top: 1rem; border: 1px solid currentColor; padding: .35rem .6rem; font: 800 .67rem var(--mono); text-transform: uppercase; letter-spacing: .07em; }
+.check-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.check { min-height: 220px; padding: 1.3rem; border: 1px solid var(--line); }
+.check b { display: block; color: var(--signal-2); font: 500 2rem var(--display); }
+.check p { color: var(--muted); }
+.platforms { display: grid; grid-template-columns: repeat(4, 1fr); gap: .5rem; margin-top: 1.2rem; }
+.platform { border: 1px solid var(--line); padding: .7rem; font: .66rem var(--mono); text-align: center; color: var(--mint); }
+.scope-strip { margin-top: 1rem; padding: 1.2rem; border-left: 4px solid var(--signal); background: rgba(255,103,70,.07); }
+.scope-strip strong { color: var(--signal-2); }
+footer { padding: 3rem 0 5rem; display: flex; justify-content: space-between; gap: 2rem; color: var(--muted); font: .7rem var(--mono); }
+.back { color: var(--signal-2); text-decoration: none; }
+@media (max-width: 820px) {
+  .masthead { min-height: auto; gap: 5rem; }
+  .hero, .section-head, .boundary, .gates, .check-grid { grid-template-columns: 1fr; }
+  .metrics { grid-template-columns: 1fr 1fr; }
+  .metric:nth-child(2) { border-right: 0; }
+  .metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .flow { grid-template-columns: repeat(7, 145px); }
+  .task { grid-template-columns: 3.2rem minmax(0, 1fr) auto; }
+  .task-meta span:first-child { display: none; }
+  .task-detail { grid-column: 1 / 4; }
+  .task-detail ol { columns: 1; }
+  .platforms { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 500px) {
+  .topline { align-items: flex-start; }
+  .commit { max-width: 13rem; }
+  .metrics { grid-template-columns: 1fr; }
+  .metric { min-height: 5.5rem; border-right: 0; border-bottom: 1px solid var(--line); }
+  .metric:last-child { border-bottom: 0; }
+  .task-meta { padding-inline: .4rem; }
+  .task-meta span { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+@media print {
+  body { background: #fff; color: #111; }
+  body::before, .phase-legend, .task-toggle { display: none; }
+  .masthead { min-height: auto; }
+  section { break-inside: avoid; }
+  .task-detail { display: block; }
+}
+</style>
+</head>
+<body>
+<header class="masthead wrap" id="top">
+  <div class="topline">
+    <div class="wordmark">DEN / FIELD MANUAL 01</div>
+    <div class="commit">bda583bf2813effcdb8571d4a9f191c845ab26cc<br>docs: plan claude sandbox MVP</div>
+  </div>
+  <div class="hero">
+    <div>
+      <p class="eyebrow">Implementation plan · 21 Aug 2026</p>
+      <h1 class="sr-only">Den Claude Sandbox MVP implementation plan</h1>
+      <div class="hero-logo">
+        <img class="brand-logo" src="../assets/den-logo.png" width="1254" height="1254" alt="Den — a sandbox for coding agents">
+      </div>
+      <p class="lede">A resource-free, four-platform MVP that runs Claude Code inside Fence, routes GitHub through RepoWolf, and exposes only explicit host capabilities.</p>
+    </div>
+    <aside class="status-card" aria-label="Plan status">
+      <p class="eyebrow">Current state</p>
+      <strong>Planned, not implemented</strong>
+      <p>Two compatibility corrections require maintainer approval before their implementation tasks begin.</p>
+    </aside>
+  </div>
+  <div class="metrics" aria-label="Plan metrics">
+    <div class="metric"><b>15</b><span>ordered tasks</span></div>
+    <div class="metric"><b>103</b><span>executable steps</span></div>
+    <div class="metric"><b>4</b><span>native systems</span></div>
+    <div class="metric"><b>12/12</b><span>criteria mapped</span></div>
+  </div>
+</header>
+
+<main>
+<section aria-labelledby="shape-title">
+  <div class="wrap">
+    <div class="section-head">
+      <div><p class="eyebrow">01 · Runtime shape</p><h2 id="shape-title">One narrow path.</h2></div>
+      <p class="section-note">The launcher validates every host-facing input before Fence starts. Claude receives no direct GitHub route. On Darwin, Bash tool calls cross the mandatory Fence hook again.</p>
+    </div>
+    <div class="flow" role="list" aria-label="Runtime architecture">
+      <article class="node" role="listitem"><small>Host</small><h3>Inputs</h3><p>Config directory, RepoWolf endpoint, optional sockets and ports.</p></article>
+      <article class="node guard" role="listitem"><small>Validate</small><h3>Den launcher</h3><p>Canonical paths, ownership, permissions, args, environment.</p></article>
+      <article class="node guard" role="listitem"><small>Generate</small><h3>Fence policy</h3><p>Strict reads, explicit writes, network allowlist, private TMPDIR.</p></article>
+      <article class="node guard" role="listitem"><small>Outer jail</small><h3>Fence 0.1.58</h3><p>Patched only to preserve Den’s validated scratch path.</p></article>
+      <article class="node" role="listitem"><small>Agent</small><h3>Claude 2.1.158</h3><p>Transparent terminal, signals, arguments, and exit status.</p></article>
+      <article class="node guard" role="listitem"><small>Darwin hook</small><h3>fence -c</h3><p>Mandatory PreToolUse reroute for Bash commands.</p></article>
+      <article class="node bridge" role="listitem"><small>Only bridge</small><h3>RepoWolf</h3><p>GitHub API, Git HTTPS, and Git SSH through one endpoint.</p></article>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="roadmap-title">
+  <div class="wrap">
+    <div class="section-head">
+      <div><p class="eyebrow">02 · Dependency order</p><h2 id="roadmap-title">The build sequence.</h2></div>
+      <p class="section-note">Tasks are intentionally linear. Filter by phase, then open any task to inspect its exact implementation steps.</p>
+    </div>
+    <div class="phase-legend" role="group" aria-label="Filter roadmap by phase">
+      <button class="filter" type="button" data-filter="all" aria-pressed="true">All tasks</button>
+      <button class="filter" type="button" data-filter="foundation" aria-pressed="false">Foundation · 1–4</button>
+      <button class="filter" type="button" data-filter="hardening" aria-pressed="false">Hardening · 5–9</button>
+      <button class="filter" type="button" data-filter="product" aria-pressed="false">Product API · 10–11</button>
+      <button class="filter" type="button" data-filter="evidence" aria-pressed="false">Evidence · 12–15</button>
+    </div>
+    <div class="roadmap" id="roadmap"></div>
+  </div>
+</section>
+
+<section aria-labelledby="boundary-title">
+  <div class="wrap">
+    <div class="section-head">
+      <div><p class="eyebrow">03 · Security model</p><h2 id="boundary-title">Capabilities, not ambient access.</h2></div>
+      <p class="section-note">Strict denial is the baseline. Reads, writes, sockets, ports, and routes enter only after canonical validation and explicit policy generation.</p>
+    </div>
+    <div class="boundary">
+      <article class="zone allow"><h3>Inside the fence</h3><ul>
+        <li>Canonical worktree</li><li>Selected Claude state</li><li>Per-launch 0700 scratch</li><li>Required Nix closures</li><li>Read-only CA file</li>
+      </ul></article>
+      <article class="zone control"><h3>Controlled bridges</h3><ul>
+        <li>RepoWolf endpoint + token</li><li>RepoWolf Git wrappers</li><li>Validated Docker/Podman socket</li><li>Explicit host ports</li><li>Darwin Bash hook</li>
+      </ul></article>
+      <article class="zone deny"><h3>Outside by default</h3><ul>
+        <li>Direct GitHub traffic</li><li>SSH and cloud credentials</li><li>User/global Git config</li><li>Fence implicit host writes</li><li>Skills, plugins, MCP servers</li>
+      </ul></article>
+    </div>
+    <div class="scope-strip"><strong>Resource-free MVP:</strong> no supplied skills, plugins, MCP servers, Context Mode, CodeGraph, resource bundles, marketplace machinery, or standalone <code>den</code> executable.</div>
+  </div>
+</section>
+
+<section aria-labelledby="gates-title">
+  <div class="wrap">
+    <div class="section-head">
+      <div><p class="eyebrow">04 · Stop points</p><h2 id="gates-title">Two decisions before code.</h2></div>
+      <p class="section-note">Pinned behavior contradicted two design assumptions. The plan fails closed: record an approved design erratum first, or stop.</p>
+    </div>
+    <div class="gates">
+      <article class="gate" data-task="6"><span class="label">Approval gate · Task 6</span><h3>Private Darwin temporary state</h3><p>Fence 0.1.58 overwrites child <code>TMPDIR</code> with shared <code>/tmp/fence</code>. Apply one reviewed local patch to the locked source so outer Fence and nested <code>fence -c</code> preserve Den’s validated scratch path.</p><strong>No approval → no Task 6 code</strong></article>
+      <article class="gate" data-task="8"><span class="label">Approval gate · Task 8</span><h3>Mandatory Claude hook</h3><p>Claude 2.1.158 <code>--bare</code> and inherited <code>CLAUDE_CODE_SIMPLE</code> skip hooks. Darwin must reject the flag and scrub the variable before the mandatory security hook can be trusted.</p><strong>No approval → no Task 8 code</strong></article>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="proof-title">
+  <div class="wrap">
+    <div class="section-head">
+      <div><p class="eyebrow">05 · Evidence path</p><h2 id="proof-title">Prove the boundary.</h2></div>
+      <p class="section-note">Pure checks test deterministic wiring. Native jobs prove the operating-system sandbox on every supported architecture.</p>
+    </div>
+    <div class="check-grid">
+      <article class="check"><b>Pure checks</b><p>Constructor API, modules, startup modes, closure contents, fake Git routing, argument preservation, cleanup, and resource-free package shape.</p></article>
+      <article class="check"><b>Native enforcement</b><p>Real Fence isolation, Linux network namespace preflight, Darwin hooks, read/write denial, CA exposure, sockets, ports, RepoWolf routing, and nested TMPDIR behavior.</p></article>
+      <article class="check"><b>Claude fixture</b><p>A loopback Anthropic Messages fixture emits a real Bash tool request. Both the Den hook and an unrelated user hook must run before the tool.</p></article>
+      <article class="check"><b>Acceptance</b><p>All 12 design criteria map to tasks. Final CI evaluates every package and check, then runs native enforcement separately with host sandbox facilities available.</p></article>
+    </div>
+    <div class="platforms" aria-label="Supported native CI systems">
+      <div class="platform">x86_64-linux</div><div class="platform">aarch64-linux</div><div class="platform">x86_64-darwin</div><div class="platform">aarch64-darwin</div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="wrap">
+  <span>Source: docs/plans/2026-08-21-den-claude-sandbox-mvp.md</span>
+  <a class="back" href="#top">Back to top ↑</a>
+</footer>
+
+<script>
+const tasks = [
+  {n:1, phase:'foundation', title:'Bootstrap and Lock the Four-System Dendritic Flake', files:3, steps:['Write the minimal dendritic flake','Declare the supported systems','Generate and inspect the lock','Verify required upstream artifacts before building on them','Record the pinned dependency security contract','Directly verify the static flake setup','Commit the bootstrap']},
+  {n:2, phase:'foundation', title:'Add the Versioned Launcher Manifest and Unit-Test Check', files:7, steps:['Write failing manifest tests','Run the focused test and confirm RED','Implement strict manifest loading','Package the standard-library launcher','Verify GREEN and package shape','Commit the launcher foundation']},
+  {n:3, phase:'foundation', title:'Package the Credential-Free RepoWolf Client Only', files:3, steps:['Write the failing package/closure check','Build the client from the pinned source','Expose the build as a check, not a public package','Verify the native client and cross-evaluation','Commit the client package']},
+  {n:4, phase:'foundation', title:'Enforce RepoWolf Inputs, Git Routing, and Environment Scrubbing', files:7, steps:['Write failing endpoint, token, and CA tests','Run focused tests and confirm RED','Implement canonical RepoWolf validation','Implement a replacement environment','Add fake Git transport tests','Verify GREEN and secret-safe diagnostics','Commit RepoWolf routing']},
+  {n:5, phase:'hardening', title:'Implement Secure Claude Configuration-Directory Selection', files:10, steps:['Write failing precedence and default-mode tests','Write failing custom-path matrix tests','Run tests and confirm RED','Implement canonical identity and privacy checks','Implement canonical protected-path overlap','Re-run cross-platform unit and native ACL probes','Commit configuration-directory isolation']},
+  {n:6, phase:'hardening', title:'Vendor and Generate the Private Fence Policy', files:12, steps:['Approve and record the pinned Fence TMPDIR erratum','Add the minimal pinned Fence patch','Vendor the exact reference snapshot','Write failing policy tests','Run focused tests and confirm RED','Implement typed dynamic policy generation','Check Fence 0.1.58 capabilities','Verify policy checks','Commit the Fence policy']},
+  {n:7, phase:'hardening', title:'Add Optional Docker, Podman, and Host-Port Capabilities', files:5, steps:['Write failing Docker selection tests','Write failing Podman and port tests','Run focused tests and confirm RED','Implement exact socket capability wiring','Implement host-port policy semantics','Verify container behavior','Commit container capability support']},
+  {n:8, phase:'hardening', title:'Add the Claude Adapter and Mandatory macOS den-fence Hook', files:10, steps:['Record the approved Claude 2.1.158 compatibility erratum','Write failing reserved/ordinary argument tests','Write failing settings-scope protection tests','Run tests and confirm RED','Implement the adapter’s immutable settings artifact','Keep user resources outside the adapter','Verify the adapter','Commit the Claude adapter']},
+  {n:9, phase:'hardening', title:'Preserve Process, Terminal, Exit, and Cleanup Behavior', files:7, steps:['Write failing lifecycle and permission tests','Write failing process behavior tests','Run focused tests and confirm RED','Implement process supervision','Implement private directory cleanup','Verify unit and PTY behavior','Commit transparent lifecycle handling']},
+  {n:10, phase:'product', title:'Build mkAgentSandbox, mkClaude, and Public Package Outputs', files:7, steps:['Write failing option and output evaluation checks','Run the package API check and confirm RED','Normalize constructor options','Implement the internal factory','Export the stable constructor and packages','Verify package API and PATH precedence','Commit constructors and outputs']},
+  {n:11, phase:'product', title:'Add Shared Home Manager and devenv Modules', files:5, steps:['Write failing module evaluation tests','Run the module check and confirm RED','Define one shared option tree','Implement both thin integrations','Verify both integrations','Commit module integrations']},
+  {n:12, phase:'evidence', title:'Add Pure End-to-End, Startup, and Closure Checks', files:7, steps:['Create deterministic fake packages','Write the comprehensive pure launcher check','Write default/custom startup checks','Write production closure checks','Run the three checks','Commit pure integration checks']},
+  {n:13, phase:'evidence', title:'Add Native Fence and RepoWolf Enforcement Checks', files:7, steps:['Write host-level tests before the driver','Confirm the native test target fails before wiring','Package the native driver','Implement the native check script','Run on the current native host','Commit native enforcement checks']},
+  {n:14, phase:'evidence', title:'Document Operation, Security, and Troubleshooting', files:1, steps:['Write the architecture and prerequisites','Add all four integration examples','Document configuration-directory modes','Document packages, containers, and process behavior','Document user resources and the resource-free boundary','Add troubleshooting and limits','Directly verify documentation','Commit documentation']},
+  {n:15, phase:'evidence', title:'Enforce Four Native CI Jobs and Run Final Acceptance', files:2, steps:['Add an explicit native runner matrix','Run evaluation, pure checks, and native enforcement in every job','Directly validate workflow syntax','Run the complete current-host check suite','Verify all four systems evaluate and have mandatory checks','Run acceptance smoke checks','Commit CI only after local checks pass']}
+];
+const phaseLabels = {foundation:'Foundation', hardening:'Hardening', product:'Product API', evidence:'Evidence'};
+const roadmap = document.querySelector('#roadmap');
+roadmap.innerHTML = tasks.map(t => `
+  <article class="task" data-phase="${t.phase}" id="task-${t.n}">
+    <div class="task-num" aria-hidden="true">${String(t.n).padStart(2,'0')}</div>
+    <div class="task-main"><div class="task-phase">${phaseLabels[t.phase]}</div><h3>${t.title}</h3></div>
+    <div class="task-meta"><span>${t.files} file${t.files===1?'':'s'}</span><span>${t.steps.length} steps</span><button class="task-toggle" type="button" aria-expanded="false" aria-controls="detail-${t.n}" aria-label="Show Task ${t.n} steps">＋</button></div>
+    <div class="task-detail" id="detail-${t.n}"><ol>${t.steps.map(s=>`<li>${s}</li>`).join('')}</ol></div>
+  </article>`).join('');
+roadmap.addEventListener('click', event => {
+  const button = event.target.closest('.task-toggle'); if (!button) return;
+  const task = button.closest('.task'); const open = task.classList.toggle('open');
+  button.setAttribute('aria-expanded', String(open)); button.textContent = open ? '−' : '＋';
+  button.setAttribute('aria-label', `${open ? 'Hide' : 'Show'} Task ${task.id.split('-')[1]} steps`);
+});
+document.querySelectorAll('.filter').forEach(button => button.addEventListener('click', () => {
+  const selected = button.dataset.filter;
+  document.querySelectorAll('.filter').forEach(b => b.setAttribute('aria-pressed', String(b===button)));
+  document.querySelectorAll('.task').forEach(task => { task.hidden = selected !== 'all' && task.dataset.phase !== selected; });
+}));
+</script>
+</body>
+</html>
