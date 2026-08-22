@@ -124,5 +124,6 @@ mkdir -m 1777 "$namespace_tmp"
   "$DEN_NATIVE_MOUNT" --bind "$1" /etc/resolv.conf
   "$DEN_NATIVE_MOUNT" --bind "$2" /etc/nsswitch.conf
   "$DEN_NATIVE_MOUNT" --bind "$3" /tmp
+  export TMPDIR=/tmp
   exec "$DEN_NATIVE_TEST_BINARY" -test.count=1 -test.timeout=2m
 ' den-native "$resolver" "$nsswitch" "$namespace_tmp"
