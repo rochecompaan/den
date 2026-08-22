@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -29,7 +28,7 @@ func removeStale(root string, uid int, olderThan time.Duration, now func() time.
 	}
 	cutoff := now().Add(-olderThan)
 	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), "policy-") && !strings.HasPrefix(entry.Name(), "scratch-") {
+		if !temporaryName(entry.Name()) {
 			continue
 		}
 		path := filepath.Join(parentPath, entry.Name())

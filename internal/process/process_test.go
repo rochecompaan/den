@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -37,6 +39,24 @@ func TestRunPreservesStreamsArgumentsAndExitStatus(t *testing.T) {
 	}
 	if stdout.String() != "stdout:input" || stderr.String() != "stderr:ok" {
 		t.Fatalf("streams = %q, %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunReportsOneFixedRedactedStartFailure(t *testing.T) {
+	sentinel := "sentinel-secret-fence-path"
+	var stderr bytes.Buffer
+	code := Run(Command{
+		Path: filepath.Join(t.TempDir(), sentinel),
+		Args: []string{"--secret-argument"},
+		Env:  []string{"SECRET=secret-environment"},
+	}, IO{Stderr: &stderr}, Signals{})
+	if code != 1 || stderr.String() != "Fence failed to start\n" {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	for _, secret := range []string{sentinel, "secret-argument", "secret-environment"} {
+		if strings.Contains(stderr.String(), secret) {
+			t.Fatalf("stderr disclosed %q: %q", secret, stderr.String())
+		}
 	}
 }
 

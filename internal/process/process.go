@@ -2,6 +2,7 @@
 package process
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -53,6 +54,9 @@ func Run(command Command, streams IO, signals Signals) int {
 	cmd.Stderr = streams.Stderr
 	if err := cmd.Start(); err != nil {
 		stop(forwarded)
+		if streams.Stderr != nil {
+			fmt.Fprintln(streams.Stderr, "Fence failed to start")
+		}
 		return 1
 	}
 	if command.Started != nil {

@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -57,7 +56,7 @@ func readDirectory(fd int) ([]os.DirEntry, error) {
 func removeIfStale(parentFD int, name string, uid int, cutoff time.Time) error {
 	childFD, err := syscall.Openat(parentFD, name, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ELOOP) {
+		if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.ENOTDIR) {
 			return nil
 		}
 		return err
@@ -119,16 +118,12 @@ func descriptorInfo(fd int) (os.FileInfo, error) {
 	return file.Stat()
 }
 
-func temporaryName(name string) bool {
-	return strings.HasPrefix(name, "policy-") || strings.HasPrefix(name, "scratch-")
-}
-
 func removalName() (string, error) {
 	bytes := make([]byte, 12)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
-	return ".den-removing-" + hex.EncodeToString(bytes), nil
+	return removalPrefix + hex.EncodeToString(bytes), nil
 }
 
 func sameIdentity(left, right os.FileInfo) bool {

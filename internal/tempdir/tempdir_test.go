@@ -146,6 +146,57 @@ func TestRemoveStaleReclaimsSimulatedSIGKILLOnlyAfterThreshold(t *testing.T) {
 	}
 }
 
+func TestRemoveStaleReclaimsOnlyValidOldTombstoneDirectories(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "den-"+itoa(os.Getuid()))
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oldName := ".den-removing-0123456789abcdef01234567"
+	freshName := ".den-removing-89abcdef0123456789abcdef"
+	malformedName := ".den-removing-not-hex"
+	old := filepath.Join(parent, oldName)
+	fresh := filepath.Join(parent, freshName)
+	malformed := filepath.Join(parent, malformedName)
+	for _, path := range []string{old, fresh, malformed} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		lease, err := acquireLease(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := lease.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	foreignFile := filepath.Join(parent, ".den-removing-fedcba9876543210fedcba98")
+	if err := os.WriteFile(foreignFile, []byte("preserve"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(parent, ".den-removing-aaaaaaaaaaaaaaaaaaaaaaaa")
+	if err := os.Symlink(old, symlink); err != nil {
+		t.Fatal(err)
+	}
+	then := time.Now().Add(-25 * time.Hour)
+	for _, path := range []string{old, malformed, foreignFile, symlink} {
+		if err := os.Chtimes(path, then, then); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := removeStale(root, os.Getuid(), 24*time.Hour, time.Now, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(old); !os.IsNotExist(err) {
+		t.Fatalf("old valid tombstone remains: %v", err)
+	}
+	for _, path := range []string{fresh, malformed, foreignFile, symlink} {
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("unsafe or fresh entry was removed: %s: %v", filepath.Base(path), err)
+		}
+	}
+}
+
 func TestPrivateOwnedDirectoryRejectsForeignOwner(t *testing.T) {
 	info := temporaryFileInfo{mode: os.ModeDir | 0o700, stat: &syscall.Stat_t{Uid: uint32(os.Getuid() + 1)}}
 	if privateOwnedDirectory(info, os.Getuid()) {
