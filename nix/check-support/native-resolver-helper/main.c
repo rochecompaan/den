@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "resolver_acl.h"
 #include "resolver_transaction.h"
 
 #include <errno.h>
@@ -60,7 +61,8 @@ int main(int argument_count, char **arguments) {
 
   struct resolver_transaction transaction;
   resolver_transaction_init(&transaction);
-  if (resolver_transaction_begin(&transaction, "/", 0, contents) != 0) {
+  if (resolver_transaction_begin(&transaction, DEN_RESOLVER_LIVE_ROOT, 0, contents,
+                                 resolver_directory_acl_safe, NULL) != 0) {
     perror("resolver helper setup");
     return 1;
   }

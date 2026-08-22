@@ -14,6 +14,29 @@
 static const char *target_name = "registry.npmjs.org";
 static const char *fixture_contents = "nameserver 127.0.0.1\nport 38415\n";
 
+struct acl_fixture {
+  int calls;
+  int reject_call;
+  int error_call;
+};
+
+static int fixture_acl_probe(int descriptor, void *context_pointer) {
+  (void)descriptor;
+  struct acl_fixture *context = context_pointer;
+  context->calls++;
+  if (context->calls == context->error_call) {
+    errno = EIO;
+    return -1;
+  }
+  return context->calls == context->reject_call ? 0 : 1;
+}
+
+static int begin_safe(struct resolver_transaction *transaction, const char *root) {
+  struct acl_fixture context = {0};
+  return resolver_transaction_begin(transaction, root, geteuid(), fixture_contents,
+                                    fixture_acl_probe, &context);
+}
+
 static void fail(const char *message) {
   perror(message);
   exit(1);
@@ -86,7 +109,7 @@ static void test_owned_cleanup(void) {
   char *root = make_root(false, 0);
   struct resolver_transaction transaction;
   resolver_transaction_init(&transaction);
-  require(resolver_transaction_begin(&transaction, root, geteuid(), fixture_contents) == 0,
+  require(begin_safe(&transaction, root) == 0,
           "owned transaction setup failed");
   require(resolver_transaction_cleanup(&transaction) == 0, "owned transaction cleanup failed");
   char resolver[512];
@@ -100,7 +123,7 @@ static void test_existing_directory_remains(void) {
   char *root = make_root(true, 0755);
   struct resolver_transaction transaction;
   resolver_transaction_init(&transaction);
-  require(resolver_transaction_begin(&transaction, root, geteuid(), fixture_contents) == 0,
+  require(begin_safe(&transaction, root) == 0,
           "existing-directory setup failed");
   require(resolver_transaction_cleanup(&transaction) == 0, "existing-directory cleanup failed");
   char resolver[512];
@@ -117,7 +140,7 @@ static void test_preexisting_target_refused(void) {
   write_file(target, "foreign\n");
   struct resolver_transaction transaction;
   resolver_transaction_init(&transaction);
-  require(resolver_transaction_begin(&transaction, root, geteuid(), fixture_contents) != 0,
+  require(begin_safe(&transaction, root) != 0,
           "pre-existing resolver target was accepted");
   require_contents(target, "foreign\n");
   require(resolver_transaction_cleanup(&transaction) == 0, "failed setup cleanup failed");
@@ -129,7 +152,7 @@ static void test_replacement_refused(void) {
   char *root = make_root(true, 0755);
   struct resolver_transaction transaction;
   resolver_transaction_init(&transaction);
-  require(resolver_transaction_begin(&transaction, root, geteuid(), fixture_contents) == 0,
+  require(begin_safe(&transaction, root) == 0,
           "replacement setup failed");
   require(unlinkat(transaction.resolver_fd, target_name, 0) == 0, "unlink owned target failed");
   int replacement = openat(transaction.resolver_fd, target_name,
@@ -148,7 +171,7 @@ static void test_directory_replacement_refused(void) {
   char *root = make_root(false, 0);
   struct resolver_transaction transaction;
   resolver_transaction_init(&transaction);
-  require(resolver_transaction_begin(&transaction, root, geteuid(), fixture_contents) == 0,
+  require(begin_safe(&transaction, root) == 0,
           "directory replacement setup failed");
   require(unlinkat(transaction.resolver_fd, target_name, 0) == 0, "unlink target before directory replacement failed");
   require(unlinkat(transaction.etc_fd, "resolver", AT_REMOVEDIR) == 0, "unlink owned resolver directory failed");
@@ -161,11 +184,47 @@ static void test_directory_replacement_refused(void) {
   remove_root(root);
 }
 
+static void test_extended_directory_acl_refused(void) {
+  for (int rejected_directory = 1; rejected_directory <= 2; ++rejected_directory) {
+    char *root = make_root(true, 0755);
+    struct resolver_transaction transaction;
+    resolver_transaction_init(&transaction);
+    struct acl_fixture context = {.reject_call = rejected_directory};
+    require(resolver_transaction_begin(&transaction, root, geteuid(), fixture_contents,
+                                       fixture_acl_probe, &context) != 0,
+            "named unprivileged write/delete ACL was accepted");
+    require(resolver_transaction_cleanup(&transaction) == 0, "ACL rejection cleanup failed");
+    char target[512];
+    snprintf(target, sizeof(target), "%s/etc/resolver/%s", root, target_name);
+    errno = 0;
+    require(access(target, F_OK) != 0 && errno == ENOENT,
+            "target was installed before extended ACL rejection");
+    remove_root(root);
+  }
+}
+
+static void test_acl_probe_error_refused(void) {
+  char *root = make_root(true, 0755);
+  struct resolver_transaction transaction;
+  resolver_transaction_init(&transaction);
+  struct acl_fixture context = {.error_call = 1};
+  require(resolver_transaction_begin(&transaction, root, geteuid(), fixture_contents,
+                                     fixture_acl_probe, &context) != 0,
+          "directory ACL probe error was accepted");
+  require(resolver_transaction_cleanup(&transaction) == 0, "ACL probe error cleanup failed");
+  remove_root(root);
+}
+
+static void test_live_root_is_private(void) {
+  require(strcmp(DEN_RESOLVER_LIVE_ROOT, "/private") == 0,
+          "live Darwin resolver root must bypass the /etc symlink");
+}
+
 static void test_unsafe_directory_refused(void) {
   char *root = make_root(true, 0777);
   struct resolver_transaction transaction;
   resolver_transaction_init(&transaction);
-  require(resolver_transaction_begin(&transaction, root, geteuid(), fixture_contents) != 0,
+  require(begin_safe(&transaction, root) != 0,
           "writable resolver directory was accepted");
   require(resolver_transaction_cleanup(&transaction) == 0, "unsafe-directory failed setup cleanup failed");
   remove_root(root);
@@ -177,6 +236,9 @@ int main(void) {
   test_preexisting_target_refused();
   test_replacement_refused();
   test_directory_replacement_refused();
+  test_extended_directory_acl_refused();
+  test_acl_probe_error_refused();
+  test_live_root_is_private();
   test_unsafe_directory_refused();
   puts("resolver transaction tests passed");
   return 0;

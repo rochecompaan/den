@@ -38,9 +38,10 @@ cleanup() {
   helper_status=0
   fixture_status=0
   final_status=0
-  trap - EXIT HUP INT TERM
+  resolver_defer_signals
+  trap - EXIT
 
-  if stop_resolver_helper; then
+  if resolver_stop_helper_deferred; then
     helper_status=0
   else
     helper_status=$?
@@ -49,6 +50,14 @@ cleanup() {
     fixture_status=0
   else
     fixture_status=$?
+  fi
+  resolver_restore_signals
+  # Defined by the packaged resolver lifecycle prelude.
+  # shellcheck disable=SC2154
+  deferred_status=$resolver_deferred_signal
+  trap - HUP INT TERM
+  if (( primary_status == 0 && deferred_status != 0 )); then
+    primary_status=$deferred_status
   fi
   if resolver_lifecycle_status "$primary_status" "$helper_status"; then
     final_status=0

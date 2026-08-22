@@ -131,6 +131,7 @@ let
     };
   };
   unrelatedStoreFile = pkgs.writeText "den-native-unrelated" "must remain unreadable\n";
+  resolverACLSource = if pkgs.stdenv.isDarwin then "resolver_acl_darwin.c" else "resolver_acl_other.c";
   resolverHelper = pkgs.stdenv.mkDerivation {
     pname = "den-native-resolver-helper";
     version = "0.1.0";
@@ -139,15 +140,22 @@ let
     buildPhase = ''
       runHook preBuild
       $CC -std=c11 -Wall -Wextra -Werror -o den-native-resolver-helper \
-        main.c resolver_transaction.c
+        main.c resolver_transaction.c ${resolverACLSource}
       $CC -std=c11 -Wall -Wextra -Werror -o resolver-transaction-test \
         resolver_transaction.c resolver_transaction_test.c
+      ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+        $CC -std=c11 -Wall -Wextra -Werror -o resolver-acl-darwin-test \
+          resolver_acl_darwin.c resolver_acl_darwin_test.c
+      ''}
       runHook postBuild
     '';
     doCheck = true;
     checkPhase = ''
       runHook preCheck
       ./resolver-transaction-test
+      ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+        ./resolver-acl-darwin-test
+      ''}
       runHook postCheck
     '';
     installPhase = ''

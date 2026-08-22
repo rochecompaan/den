@@ -26,6 +26,23 @@ static bool safe_directory(const struct stat *status, uid_t required_owner) {
          (status->st_mode & (S_IWGRP | S_IWOTH)) == 0;
 }
 
+static int validate_directory(int descriptor, const struct stat *status,
+                              uid_t required_owner, resolver_acl_probe acl_probe,
+                              void *acl_context) {
+  if (!safe_directory(status, required_owner) || acl_probe == NULL) {
+    errno = EPERM;
+    return -1;
+  }
+  int acl_status = acl_probe(descriptor, acl_context);
+  if (acl_status != 1) {
+    if (acl_status == 0) {
+      errno = EPERM;
+    }
+    return -1;
+  }
+  return 0;
+}
+
 static int write_all(int descriptor, const char *contents, size_t length) {
   size_t offset = 0;
   while (offset < length) {
@@ -102,7 +119,8 @@ static int fail_begin(struct resolver_transaction *transaction, int original_err
 
 int resolver_transaction_begin(struct resolver_transaction *transaction,
                                const char *root, uid_t required_owner,
-                               const char *contents) {
+                               const char *contents, resolver_acl_probe acl_probe,
+                               void *acl_context) {
   resolver_transaction_init(transaction);
   int directory_flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW;
   transaction->root_fd = open(root, directory_flags);
@@ -117,8 +135,9 @@ int resolver_transaction_begin(struct resolver_transaction *transaction,
   if (fstat(transaction->etc_fd, &status) != 0) {
     return fail_begin(transaction, errno);
   }
-  if (!safe_directory(&status, required_owner)) {
-    return fail_begin(transaction, EPERM);
+  if (validate_directory(transaction->etc_fd, &status, required_owner, acl_probe,
+                         acl_context) != 0) {
+    return fail_begin(transaction, errno);
   }
 
   if (mkdirat(transaction->etc_fd, resolver_name, 0755) == 0) {
@@ -133,8 +152,9 @@ int resolver_transaction_begin(struct resolver_transaction *transaction,
   if (fstat(transaction->resolver_fd, &status) != 0) {
     return fail_begin(transaction, errno);
   }
-  if (!safe_directory(&status, required_owner)) {
-    return fail_begin(transaction, EPERM);
+  if (validate_directory(transaction->resolver_fd, &status, required_owner, acl_probe,
+                         acl_context) != 0) {
+    return fail_begin(transaction, errno);
   }
   transaction->resolver_identity = identity_of(&status);
 
