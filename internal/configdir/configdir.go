@@ -133,18 +133,10 @@ func selectCustom(value, home string, denied []string, deps Dependencies) (selec
 		}()
 	}
 
-	identity, err := captureFinalIdentity(canonical, ownerUID)
-	if err != nil {
-		return Selection{}, err
-	}
+	identity, acl, err := captureFinalState(canonical, ownerUID, ownerName, ownerID, probe)
 	state.identity = identity
-	acl, err := captureFinalACL(canonical, ownerName, ownerID, probe)
 	if err != nil {
 		return Selection{}, err
-	}
-	confirmed, err := captureFinalIdentity(canonical, ownerUID)
-	if err != nil || confirmed != identity {
-		return Selection{}, errChanged
 	}
 	state.acl = acl
 	return Selection{
@@ -168,27 +160,37 @@ func invokingOwner(uid uint32) (string, string, error) {
 	return account.Username, id, nil
 }
 
-func captureFinalIdentity(path string, ownerUID uint32) (fileIdentity, error) {
-	info, err := os.Lstat(path)
-	if err != nil || info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return fileIdentity{}, errInvalid
+func captureFinalState(path string, ownerUID uint32, ownerName, ownerID string, probe aclProbe) (fileIdentity, [sha256.Size]byte, error) {
+	file, err := openDirectoryHandle(path)
+	if err != nil {
+		return fileIdentity{}, [sha256.Size]byte{}, errInvalid
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil || info == nil || !info.IsDir() {
+		return fileIdentity{}, [sha256.Size]byte{}, errInvalid
 	}
 	identity, ok := identityFromFileInfo(info)
-	if !ok || identity.uid != ownerUID || !privateDirectoryMode(identity.mode) || !directoryWritable(path) {
-		return fileIdentity{}, errPrivate
+	if !ok || identity.uid != ownerUID || !privateDirectoryMode(identity.mode) || !directoryWritable(localDirectoryHandlePath(file)) {
+		return fileIdentity{}, [sha256.Size]byte{}, errPrivate
 	}
-	return identity, nil
-}
-
-func captureFinalACL(path, ownerName, ownerID string, probe aclProbe) ([sha256.Size]byte, error) {
-	acl, access, err := inspectACL(path, ownerName, ownerID, probe)
+	acl, access, err := inspectACLHandle(file, path, ownerName, ownerID, probe)
 	if err != nil {
-		return [sha256.Size]byte{}, err
+		return identity, [sha256.Size]byte{}, err
 	}
 	if access.nonOwnerAny || access.ownerWriteDenied {
-		return [sha256.Size]byte{}, errPrivate
+		return identity, [sha256.Size]byte{}, errPrivate
 	}
-	return acl, nil
+	current, err := os.Lstat(path)
+	if err != nil || current == nil || !current.IsDir() || current.Mode()&os.ModeSymlink != 0 {
+		return identity, [sha256.Size]byte{}, errChanged
+	}
+	currentIdentity, ok := identityFromFileInfo(current)
+	if !ok || currentIdentity != identity {
+		return identity, [sha256.Size]byte{}, errChanged
+	}
+	return identity, acl, nil
 }
 
 func privateDirectoryMode(mode fs.FileMode) bool {
@@ -202,16 +204,8 @@ func (s Selection) Revalidate() error {
 	state := s.state
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	identity, err := captureFinalIdentity(state.path, state.identity.uid)
-	if err != nil || identity != state.identity {
-		return errChanged
-	}
-	acl, err := captureFinalACL(state.path, state.ownerName, state.ownerID, state.probe)
-	if err != nil || acl != state.acl {
-		return errChanged
-	}
-	confirmed, err := captureFinalIdentity(state.path, state.identity.uid)
-	if err != nil || confirmed != state.identity {
+	identity, acl, err := captureFinalState(state.path, state.identity.uid, state.ownerName, state.ownerID, state.probe)
+	if err != nil || identity != state.identity || acl != state.acl {
 		return errChanged
 	}
 	ancestors, err := captureAncestors(filepath.Dir(state.path), state.identity.uid, state.ownerName, state.ownerID, state.probe)

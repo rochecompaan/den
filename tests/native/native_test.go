@@ -92,7 +92,7 @@ func TestNetworkEnforcement(t *testing.T) {
 	}
 	if fixture.dns != nil {
 		for _, name := range fixture.dns.names() {
-			if name != "broker.den.invalid" && name != "registry.npmjs.org" {
+			if name != brokerHostname() && name != "registry.npmjs.org" {
 				t.Fatalf("fixture attempted non-local DNS path %q", name)
 			}
 		}
@@ -149,8 +149,9 @@ func TestFilesystemEnforcement(t *testing.T) {
 	})
 
 	t.Run("effective_policy_denies_unrelated_paths", func(t *testing.T) {
-		requireSuccess(t, fixture.launch("effective-deny", os.Getenv("DEN_NATIVE_UNRELATED_STORE_FILE"), "/tmp/fence"))
-		requireSuccess(t, fixture.launch("effective-deny", secret, "/tmp/fence"))
+		requireSuccess(t, fixture.launch("effective-deny", os.Getenv("DEN_NATIVE_UNRELATED_STORE_FILE")))
+		requireSuccess(t, fixture.launch("effective-deny", secret))
+		testImplicitHostWrites(t, fixture)
 	})
 
 	t.Run("user_plugin_and_mcp", func(t *testing.T) {
@@ -225,10 +226,10 @@ func TestConfigDirectoryRacesFailClosed(t *testing.T) {
 	})
 }
 
-func validationTimePathSwap(t *testing.T, fixture *nativeFixture, probe ...string) {
+func validationTimePathSwap(t *testing.T, fixture *nativeFixture, probe, mutation []string) {
 	t.Helper()
-	if len(probe) == 0 {
-		t.Fatal("ACL probe is required")
+	if len(probe) == 0 || len(mutation) == 0 {
+		t.Fatal("ACL probe and mutation commands are required")
 	}
 	state := filepath.Join(fixture.root, "swap-state")
 	other := filepath.Join(fixture.root, "swap-other")
@@ -244,31 +245,51 @@ func validationTimePathSwap(t *testing.T, fixture *nativeFixture, probe ...strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	arguments := make([]string, 0, len(probe))
-	for _, argument := range probe {
-		arguments = append(arguments, strconv.Quote(argument))
+	quoted := func(command []string) string {
+		arguments := make([]string, 0, len(command))
+		for _, argument := range command {
+			arguments = append(arguments, strconv.Quote(argument))
+		}
+		return strings.Join(arguments, " ")
 	}
 	script := fmt.Sprintf(`#!/bin/sh
 set -eu
-last=""
-for argument do last=$argument; done
-if test "$last" = %s; then
-  count=0
-  if test -f %s; then read -r count < %s; fi
-  count=$((count + 1))
-  printf '%%s\n' "$count" > %s
-  if test "$count" -eq 2; then
-    %s %s %s
-    %s %s %s
-    %s %s %s
-  fi
-fi
+case "${DEN_CONFIGDIR_ACL_ORIGINAL_PATH-}" in
+  %s)
+    count=0
+    if test -f %s; then read -r count < %s; fi
+    count=$((count + 1))
+    printf '%%s\n' "$count" > %s
+    if test "$count" -eq 1; then
+      status=0
+      %s "$@" || status=$?
+      %s %s
+      exit "$status"
+    fi
+    if test "$count" -eq 2; then
+      %s %s %s
+      %s %s %s
+      %s %s %s
+      status=0
+      %s "$@" || status=$?
+      %s %s %s
+      %s %s %s
+      %s %s %s
+      exit "$status"
+    fi
+    ;;
+esac
 exec %s "$@"
 `, strconv.Quote(state), strconv.Quote(counter), strconv.Quote(counter), strconv.Quote(counter),
+		quoted(probe), quoted(mutation), strconv.Quote(state),
 		strconv.Quote(mv), strconv.Quote(state), strconv.Quote(state+".hold"),
 		strconv.Quote(mv), strconv.Quote(other), strconv.Quote(state),
 		strconv.Quote(mv), strconv.Quote(state+".hold"), strconv.Quote(other),
-		strings.Join(arguments, " "))
+		quoted(probe),
+		strconv.Quote(mv), strconv.Quote(state), strconv.Quote(state+".hold"),
+		strconv.Quote(mv), strconv.Quote(other), strconv.Quote(state),
+		strconv.Quote(mv), strconv.Quote(state+".hold"), strconv.Quote(other),
+		quoted(probe))
 	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -276,8 +297,8 @@ exec %s "$@"
 		document["explicitConfigDir"] = state
 		document["aclProbe"] = []any{wrapper}
 	}, "marker", marker)
-	if result.err == nil || fileExists(marker) {
-		t.Fatalf("validation-time path swap did not fail closed: %v / %s", result.err, result.stderr)
+	if result.err == nil || fileExists(marker) || !strings.Contains(result.stderr, "custom configuration directory changed before launch") {
+		t.Fatalf("validation-time path swap did not fail closed at revalidation: %v / %s", result.err, result.stderr)
 	}
 }
 
@@ -328,6 +349,41 @@ func launchWithManifest(t *testing.T, fixture *nativeFixture, mutate func(map[st
 	command.Stdout, command.Stderr = &stdout, &stderr
 	err = command.Run()
 	return commandResult{stdout: stdout.String(), stderr: stderr.String(), err: err}
+}
+
+func outsideFenceWritableFile(t *testing.T, parent string) string {
+	t.Helper()
+	_, statErr := os.Stat(parent)
+	createdParent := os.IsNotExist(statErr)
+	if statErr != nil && !createdParent {
+		t.Fatal("outside-Fence control parent is unavailable")
+	}
+	if createdParent {
+		if err := os.Mkdir(parent, 0o700); err != nil {
+			t.Fatal("outside-Fence control parent is not writable")
+		}
+	}
+	file, err := os.CreateTemp(parent, "den-native-control-*")
+	if err != nil {
+		t.Fatal("outside-Fence positive control is not writable")
+	}
+	path := file.Name()
+	if _, err := file.Write([]byte("outside\n")); err != nil {
+		_ = file.Close()
+		t.Fatal("outside-Fence positive control write failed")
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal("outside-Fence positive control close failed")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal("outside-Fence positive control cleanup failed")
+	}
+	if createdParent {
+		if err := os.Remove(parent); err != nil {
+			t.Fatal("outside-Fence control parent cleanup failed")
+		}
+	}
+	return path
 }
 
 func fileExists(path string) bool {

@@ -3,6 +3,7 @@
 package native
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,12 +17,78 @@ func testValidationTimePathSwap(t *testing.T, fixture *nativeFixture) {
 	if probe == "" {
 		t.Fatal("DEN_NATIVE_GETFACL is required")
 	}
-	validationTimePathSwap(t, fixture, probe)
+	mutation := os.Getenv("DEN_NATIVE_ACL")
+	if mutation == "" {
+		t.Fatal("DEN_NATIVE_ACL is required")
+	}
+	validationTimePathSwap(t, fixture, []string{probe}, []string{mutation, "-m", "d:g::r-x"})
 }
 
 func launchRegistryFixture(t *testing.T, fixture *nativeFixture, port string) commandResult {
 	t.Helper()
 	return fixture.launch("network-allow", fixtureURL(port, "registry.npmjs.org"))
+}
+
+func testImplicitHostWrites(t *testing.T, fixture *nativeFixture) {
+	t.Helper()
+	parent := "/tmp/fence"
+	if err := os.Mkdir(parent, 0o700); err != nil && !os.IsExist(err) {
+		t.Fatal("outside-Fence host temporary control is unavailable")
+	}
+	sentinel := filepath.Join(parent, "den-native-host-sentinel")
+	child := filepath.Join(parent, "den-native-host-child")
+	baseline := []byte("host-sentinel\n")
+	if err := os.WriteFile(sentinel, baseline, 0o600); err != nil {
+		t.Fatal("outside-Fence host sentinel is not writable")
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(child)
+		_ = os.Remove(sentinel)
+		_ = os.Remove(parent)
+	})
+	result := launchWithManifest(t, fixture, func(document map[string]any) {
+		document["basePolicy"] = linuxTmpfsControlPolicy(t, fixture, document["basePolicy"].(string))
+	}, "implicit-host-linux", sentinel, child)
+	requireSuccess(t, result)
+	contents, err := os.ReadFile(sentinel)
+	if err != nil || string(contents) != string(baseline) {
+		t.Fatal("Fence inner tmpfs mutated the host temporary sentinel")
+	}
+	if fileExists(child) {
+		t.Fatal("Fence inner tmpfs created a host temporary child")
+	}
+}
+
+func linuxTmpfsControlPolicy(t *testing.T, fixture *nativeFixture, base string) string {
+	t.Helper()
+	contents, err := os.ReadFile(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(contents, &document); err != nil {
+		t.Fatal(err)
+	}
+	filesystem := document["filesystem"].(map[string]any)
+	entries := filesystem["denyWrite"].([]any)
+	filtered := entries[:0]
+	for _, entry := range entries {
+		path, _ := entry.(string)
+		if !strings.HasPrefix(path, "/tmp/fence") {
+			filtered = append(filtered, entry)
+		}
+	}
+	filesystem["denyWrite"] = filtered
+	delete(document["command"].(map[string]any), "runtimeExecPolicy")
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(fixture.root, "linux-tmpfs-control-policy.json")
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestLinuxACLGrantRejected(t *testing.T) {

@@ -65,7 +65,7 @@ pkgs.runCommand "fence-capabilities"
           allowExecute: $closure,
           allowWrite: [$worktree, $state, $scratch],
           denyRead: [$home + "/secret"],
-          denyWrite: ["~/.npm/_logs", "~/.fence/debug", "/tmp/fence", "/private/tmp/fence", $policy, $policyDir]
+          denyWrite: ["~/.npm/_logs", "~/.fence/debug", "/tmp/fence", "/tmp/fence/**", "/private/tmp/fence", "/private/tmp/fence/**", $policy, $policyDir]
         },
         command: { deny: [], useDefaults: true, acceptSharedBinaryCannotRuntimeDeny: ["chroot"], runtimeExecPolicy: "argv" }
       }' > "$policy"
@@ -113,12 +113,13 @@ pkgs.runCommand "fence-capabilities"
 
     mkdir -p /tmp/fence
     printf unchanged > "$tmpFenceProbe"
-    if "$fence" --settings "$policy" --expose-host-path "$ca" -c 'printf changed > /tmp/fence/den-capability-'$$ >tmp-fence.out 2>tmp-fence.err; then
-      echo 'Fence unexpectedly allowed its implicit host /tmp/fence path' >&2
-      exit 27
-    fi
-    grep -F '/tmp/fence/bin: Read-only file system' tmp-fence.err
+    tmpFenceChild=/tmp/fence/den-capability-child-$$
+    jq '.filesystem.denyWrite |= map(select(startswith("/tmp/fence") | not))' "$policy" > "$policy.tmpfs"
+    chmod 0400 "$policy.tmpfs"
+    "$fence" --settings "$policy.tmpfs" --expose-host-path "$ca" -c \
+      "printf inner > /tmp/fence/den-capability-$$; printf inner > /tmp/fence/den-capability-child-$$"
     test "$(cat "$tmpFenceProbe")" = unchanged
+    test ! -e "$tmpFenceChild"
     touch "$out"
   '' else ''
     set -eu
@@ -170,7 +171,7 @@ pkgs.runCommand "fence-capabilities"
           allowExecute: $closure,
           allowWrite: [$worktree, $state, $scratch],
           denyRead: [$home + "/secret"],
-          denyWrite: ["~/.npm/_logs", "~/.fence/debug", "/tmp/fence", "/private/tmp/fence", $policy, $policyDir]
+          denyWrite: ["~/.npm/_logs", "~/.fence/debug", "/tmp/fence", "/tmp/fence/**", "/private/tmp/fence", "/private/tmp/fence/**", $policy, $policyDir]
         },
         command: { deny: [], useDefaults: true, acceptSharedBinaryCannotRuntimeDeny: ["chroot"], runtimeExecPolicy: "argv" }
       }' > "$policy"

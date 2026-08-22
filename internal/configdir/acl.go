@@ -3,6 +3,7 @@ package configdir
 import (
 	"crypto/sha256"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -121,9 +122,22 @@ func snapshotACLProbe(arguments []string) (aclProbe, error) {
 }
 
 func inspectACL(path, ownerName, ownerID string, probe aclProbe) ([sha256.Size]byte, aclAccess, error) {
+	return runACLProbe(path, path, ownerName, ownerID, probe, nil)
+}
+
+func inspectACLHandle(file *os.File, path, ownerName, ownerID string, probe aclProbe) ([sha256.Size]byte, aclAccess, error) {
+	// Keep the handle above descriptors commonly consumed by script interpreters.
+	files := []*os.File{file, file, file, file, file, file, file}
+	return runACLProbe(childDirectoryHandlePath(), path, ownerName, ownerID, probe, files)
+}
+
+func runACLProbe(probePath, originalPath, ownerName, ownerID string, probe aclProbe, files []*os.File) ([sha256.Size]byte, aclAccess, error) {
 	arguments := append([]string{}, probe.arguments...)
-	arguments = append(arguments, path)
-	output, err := exec.Command(probe.executable, arguments...).Output()
+	arguments = append(arguments, probePath)
+	command := exec.Command(probe.executable, arguments...)
+	command.ExtraFiles = files
+	command.Env = aclProbeEnvironment(originalPath)
+	output, err := command.Output()
 	if err != nil {
 		return [sha256.Size]byte{}, aclAccess{}, errACL
 	}
@@ -132,4 +146,17 @@ func inspectACL(path, ownerName, ownerID string, probe aclProbe) ([sha256.Size]b
 		return [sha256.Size]byte{}, aclAccess{}, errACL
 	}
 	return aclDigest(canonicalACL), access, nil
+}
+
+func aclProbeEnvironment(originalPath string) []string {
+	const name = "DEN_CONFIGDIR_ACL_ORIGINAL_PATH"
+	environment := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		entryName, _, ok := strings.Cut(entry, "=")
+		if ok && entryName == name {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	return append(environment, name+"="+originalPath)
 }

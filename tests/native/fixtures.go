@@ -45,6 +45,7 @@ type nativeFixture struct {
 	tlsListener                              net.Listener
 	containerListener                        net.Listener
 	dns                                      *dnsFixture
+	provider                                 *claudeProvider
 	requestsMu                               sync.Mutex
 	requests                                 []string
 }
@@ -70,6 +71,7 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 	fixture := &nativeFixture{
 		root: root, worktree: filepath.Join(root, "worktree"), home: filepath.Join(root, "home"),
 		remote: filepath.Join(root, "remote.git"), operations: filepath.Join(root, "repowolf.operations"),
+		provider: newClaudeProvider(),
 	}
 	t.Cleanup(func() {
 		fixture.close()
@@ -139,9 +141,7 @@ func (fixture *nativeFixture) hostGit(t *testing.T, directory string, arguments 
 
 func (fixture *nativeFixture) startDNS(t *testing.T) {
 	t.Helper()
-	if runtime.GOOS == "linux" {
-		fixture.dns = startDNSFixture(t)
-	}
+	fixture.dns = startDNSFixture(t)
 }
 
 func (fixture *nativeFixture) startContainerSocket(t *testing.T) {
@@ -182,6 +182,10 @@ func (fixture *nativeFixture) startTLSRecorder(t *testing.T) {
 	}
 	fixture.tlsListener = listener
 	fixture.tlsServer = &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/v1/messages") {
+			fixture.provider.serveHTTP(writer, request)
+			return
+		}
 		fixture.requestsMu.Lock()
 		fixture.requests = append(fixture.requests, request.Host)
 		fixture.requestsMu.Unlock()

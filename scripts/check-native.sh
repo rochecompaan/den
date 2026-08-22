@@ -16,17 +16,19 @@ fi
 nix flake check --no-build
 nix build ".#packages.$system.claude" --no-link --print-build-logs
 
+normal_checks=$(nix eval --raw ".#checks.$system" --apply '
+  checks:
+    builtins.concatStringsSep "\n"
+      (builtins.attrNames (builtins.removeAttrs checks [ "native-enforcement" ]))
+')
+if [[ -z $normal_checks ]]; then
+  printf 'normal check enumeration returned no checks\n' >&2
+  exit 1
+fi
 while IFS= read -r check; do
   [[ -n $check ]] || continue
   nix build ".#checks.$system.$check" --no-link --print-build-logs
-done < <(
-  nix eval --raw ".#checks.$system" --apply '
-    checks:
-      builtins.concatStringsSep "\n"
-        (builtins.attrNames (builtins.removeAttrs checks [ "native-enforcement" ]))
-      + "\n"
-  '
-)
+done <<< "$normal_checks"
 
 runner=$(nix build ".#checks.$system.native-enforcement" \
   --no-link --print-build-logs --print-out-paths)

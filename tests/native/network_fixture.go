@@ -5,6 +5,7 @@ package native
 import (
 	"encoding/binary"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -19,7 +20,11 @@ type dnsFixture struct {
 
 func startDNSFixture(t *testing.T) *dnsFixture {
 	t.Helper()
-	address, err := net.ResolveUDPAddr("udp4", "127.0.0.1:53")
+	port := os.Getenv("DEN_NATIVE_DNS_PORT")
+	if port == "" {
+		port = "53"
+	}
+	address, err := net.ResolveUDPAddr("udp4", net.JoinHostPort("127.0.0.1", port))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +78,7 @@ func (fixture *dnsFixture) response(request []byte) []byte {
 	fixture.queries = append(fixture.queries, name)
 	fixture.mu.Unlock()
 
-	allowed := name == "broker.den.invalid" || name == "registry.npmjs.org"
+	allowed := name == brokerHostname() || name == "registry.npmjs.org"
 	response := append([]byte(nil), request[:questionEnd]...)
 	binary.BigEndian.PutUint16(response[2:4], 0x8180)
 	binary.BigEndian.PutUint16(response[6:8], 0)

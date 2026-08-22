@@ -265,13 +265,16 @@ func targetedDependencies(t *testing.T, target, targetOutput, otherOutput string
 	t.Helper()
 	body := fmt.Sprintf(`last=""
 for argument in "$@"; do last="$argument"; done
-if [ "$last" = %s ]; then
+case "$DEN_CONFIGDIR_ACL_ORIGINAL_PATH" in
+%s)
 cat <<'TARGET_EOF'
 %sTARGET_EOF
-else
+;;
+*)
 cat <<'OTHER_EOF'
 %sOTHER_EOF
-fi`, shellQuote(target), targetOutput, otherOutput)
+;;
+esac`, shellQuote(target), targetOutput, otherOutput)
 	return Dependencies{ACLProbe: []string{writeProbe(t, body)}}
 }
 

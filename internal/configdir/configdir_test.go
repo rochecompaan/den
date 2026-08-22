@@ -534,12 +534,11 @@ func TestSelectPostCreationFailureDoesNotRemoveReplacement(t *testing.T) {
 	root := t.TempDir()
 	home := privateDir(t, root, "home")
 	path := filepath.Join(root, "created")
-	body := "last=\"\"\nfor argument in \"$@\"; do last=\"$argument\"; done\n" +
-		"if [ \"$last\" = " + shellQuote(path) + " ]; then\n" +
+	body := "case \"$DEN_CONFIGDIR_ACL_ORIGINAL_PATH\" in\n" + shellQuote(path) + ")\n" +
 		"mv " + shellQuote(path) + " " + shellQuote(path+"-old") + "\n" +
 		"mkdir -m 700 " + shellQuote(path) + "\n" +
-		"cat <<'ACL_EOF'\n" + unsafeNonOwnerACL(t) + "ACL_EOF\n" +
-		"else\ncat <<'ACL_EOF'\n" + safeACL(t) + "ACL_EOF\nfi"
+		"cat <<'ACL_EOF'\n" + unsafeNonOwnerACL(t) + "ACL_EOF\n;;\n" +
+		"*)\ncat <<'ACL_EOF'\n" + safeACL(t) + "ACL_EOF\n;;\nesac"
 	deps := Dependencies{ACLProbe: []string{writeProbe(t, body)}}
 	if _, err := Select(&path, nil, home, nil, deps); err == nil {
 		t.Fatal("Select() error = nil")

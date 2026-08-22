@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 set -euo pipefail
 
 if [[ $# -ne 0 ]]; then
@@ -15,6 +16,7 @@ case "$DEN_NATIVE_HOST_SYSTEM" in
     : "${DEN_NATIVE_UNSHARE:?packaged unshare is required}"
     : "${DEN_NATIVE_MOUNT:?packaged mount is required}"
     : "${DEN_NATIVE_IP:?packaged ip is required}"
+    : "${DEN_NATIVE_BASH:?packaged Bash is required}"
     ;;
   *-darwin)
     test -x /usr/bin/sandbox-exec
@@ -30,7 +32,15 @@ host_parent=$host_base/den-native-enforcement
 mkdir -p "$host_parent"
 chmod 700 "$host_parent"
 host_root=$(mktemp -d "$host_parent/run.XXXXXX")
+darwin_resolver=
+darwin_resolver_dir_created=false
 cleanup() {
+  if [[ -n $darwin_resolver ]]; then
+    /usr/bin/sudo -n /bin/rm -f "$darwin_resolver" >/dev/null 2>&1 || true
+  fi
+  if $darwin_resolver_dir_created; then
+    /usr/bin/sudo -n /bin/rmdir /etc/resolver >/dev/null 2>&1 || true
+  fi
   rm -rf "$host_root"
 }
 trap cleanup EXIT HUP INT TERM
@@ -40,7 +50,21 @@ mkdir -m 700 "$DEN_NATIVE_HOST_ROOT"
 
 if [[ $DEN_NATIVE_HOST_SYSTEM == *-darwin ]]; then
   export TMPDIR=${TMPDIR:-/tmp}
-  "$DEN_NATIVE_TEST_BINARY" -test.count=1
+  export DEN_NATIVE_DNS_PORT=38415
+  resolver_target=/etc/resolver/registry.npmjs.org
+  if [[ -e $resolver_target ]]; then
+    printf 'native registry resolver entry already exists\n' >&2
+    exit 1
+  fi
+  darwin_resolver=$resolver_target
+  /usr/bin/sudo -n /usr/bin/true
+  if [[ ! -d /etc/resolver ]]; then
+    /usr/bin/sudo -n /bin/mkdir /etc/resolver
+    darwin_resolver_dir_created=true
+  fi
+  printf 'nameserver 127.0.0.1\nport %s\n' "$DEN_NATIVE_DNS_PORT" > "$host_root/registry-resolver"
+  /usr/bin/sudo -n /usr/bin/install -m 0644 "$host_root/registry-resolver" "$resolver_target"
+  "$DEN_NATIVE_TEST_BINARY" -test.count=1 -test.timeout=2m
   exit
 fi
 
@@ -59,11 +83,11 @@ mkdir -m 1777 "$namespace_tmp"
 
 # Expansion belongs to the namespaced Bash process.
 # shellcheck disable=SC2016
-"$DEN_NATIVE_UNSHARE" -Ur -m -n bash -c '
+"$DEN_NATIVE_UNSHARE" -Ur -m -n "$DEN_NATIVE_BASH" -c '
   set -euo pipefail
   "$DEN_NATIVE_IP" link set lo up
   "$DEN_NATIVE_MOUNT" --bind "$1" /etc/resolv.conf
   "$DEN_NATIVE_MOUNT" --bind "$2" /etc/nsswitch.conf
   "$DEN_NATIVE_MOUNT" --bind "$3" /tmp
-  exec "$DEN_NATIVE_TEST_BINARY" -test.count=1
+  exec "$DEN_NATIVE_TEST_BINARY" -test.count=1 -test.timeout=2m
 ' den-native "$resolver" "$nsswitch" "$namespace_tmp"

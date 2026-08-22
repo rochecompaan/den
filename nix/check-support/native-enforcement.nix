@@ -60,21 +60,22 @@ let
           ;;
         effective-deny)
           ! cat "$1"
-          ! sh -c 'printf denied > "$1"' den "$2"
+          ;;
+        implicit-host-linux)
+          sh -c 'printf mutation > "$1"' den "$1" 2>/dev/null || true
+          sh -c 'printf child > "$1"' den "$2" 2>/dev/null || true
+          ;;
+        implicit-host-darwin)
+          for path in "$@"; do
+            if sh -c 'printf mutation > "$1"' den "$path" 2>/dev/null; then
+              echo "implicit host temporary path was writable" >&2
+              exit 1
+            fi
+          done
           ;;
         ca-read-only)
           grep -q 'BEGIN CERTIFICATE' "$REPOWOLF_CA_FILE"
           ! sh -c 'printf mutation >> "$1"' den "$REPOWOLF_CA_FILE"
-          ;;
-        scratch)
-          test "$TMPDIR" = "$DEN_FENCE_TMPDIR"
-          printf 'outer:%s\n' "$DEN_FENCE_TMPDIR"
-          printf outer > "$DEN_FENCE_TMPDIR/outer"
-          # Expansion belongs to the nested Fence shell, not this outer agent.
-          # shellcheck disable=SC2016
-          fence --settings "$DEN_FENCE_POLICY_FILE" -c 'test "$TMPDIR" = "$DEN_FENCE_TMPDIR"; printf "nested:%s\\n" "$DEN_FENCE_TMPDIR"; printf nested > "$DEN_FENCE_TMPDIR/nested"'
-          ! sh -c 'printf denied > /tmp/fence'
-          ! sh -c 'printf denied > /private/tmp/fence'
           ;;
         argv-deny)
           exec git reset --hard
@@ -151,7 +152,7 @@ let
 in
 pkgs.writeShellApplication {
   name = "native-enforcement";
-  runtimeInputs = [ pkgs.coreutils pkgs.gitMinimal pkgs.gnused ]
+  runtimeInputs = [ pkgs.bash pkgs.coreutils pkgs.gitMinimal pkgs.gnused ]
     ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.acl pkgs.iproute2 pkgs.util-linux ];
   text = ''
     export DEN_NATIVE_HOST_SYSTEM=${pkgs.stdenv.hostPlatform.system}
@@ -170,6 +171,7 @@ pkgs.writeShellApplication {
       export DEN_NATIVE_UNSHARE=${pkgs.util-linux}/bin/unshare
       export DEN_NATIVE_MOUNT=${pkgs.util-linux}/bin/mount
       export DEN_NATIVE_IP=${pkgs.iproute2}/bin/ip
+      export DEN_NATIVE_BASH=${pkgs.bash}/bin/bash
     ''}
     ${builtins.readFile ./native-runner.sh}
   '';
