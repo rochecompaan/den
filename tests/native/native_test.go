@@ -22,6 +22,7 @@ var requiredEnvironment = []string{
 	"DEN_NATIVE_FENCE",
 	"DEN_NATIVE_REPOWOLF_CLIENT_DIR",
 	"DEN_NATIVE_REPOWOLF_FIXTURE",
+	"DEN_NATIVE_SETTINGS_MERGE",
 	"DEN_NATIVE_UNRELATED_STORE_FILE",
 }
 
@@ -51,6 +52,12 @@ func TestPackagedFenceIsReal(t *testing.T) {
 	version := string(output)
 	if !strings.Contains(version, "Version: 0.1.58") || strings.Contains(strings.ToLower(version), "fake") {
 		t.Fatalf("unexpected packaged Fence version: %s", version)
+	}
+}
+
+func TestClaudeSettingsMerge(t *testing.T) {
+	if got := os.Getenv("DEN_NATIVE_SETTINGS_MERGE_COMPLETED"); got != "1" {
+		t.Fatalf("Claude settings merge did not complete as the invoking host user: %q", got)
 	}
 }
 

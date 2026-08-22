@@ -8,6 +8,7 @@ fi
 
 : "${DEN_NATIVE_TEST_BINARY:?packaged native test binary is required}"
 : "${DEN_NATIVE_HOST_SYSTEM:?packaged host system is required}"
+: "${DEN_NATIVE_SETTINGS_MERGE:?packaged Claude settings merge fixture is required}"
 
 case "$DEN_NATIVE_HOST_SYSTEM" in
   *-linux)
@@ -27,6 +28,16 @@ case "$DEN_NATIVE_HOST_SYSTEM" in
     exit 2
     ;;
 esac
+
+printf 'executing Claude settings merge fixture as the invoking host user\n'
+settings_merge_output=$("$DEN_NATIVE_SETTINGS_MERGE")
+if [[ $settings_merge_output != "fixture complete" ]]; then
+  printf 'Claude settings merge fixture returned unexpected output: %q\n' \
+    "$settings_merge_output" >&2
+  exit 1
+fi
+printf '%s\n' "$settings_merge_output"
+export DEN_NATIVE_SETTINGS_MERGE_COMPLETED=1
 
 host_base=${XDG_RUNTIME_DIR:-${HOME:?HOME is required}/.cache}
 host_parent=$host_base/den-native-enforcement

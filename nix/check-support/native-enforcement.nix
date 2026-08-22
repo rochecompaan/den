@@ -2,6 +2,7 @@
 
 let
   fence = (import ../lib/fence.nix { inherit pkgs; }).package;
+  claudeSettingsMerge = import ./claude-settings-merge.nix { inherit pkgs; };
   repoWolfClient = import ../packages/repowolf-client.nix { inherit inputs pkgs; };
   repoWolfFixture = pkgs.buildGoModule {
     pname = "den-native-repowolf-fixture";
@@ -205,6 +206,7 @@ pkgs.writeShellApplication {
     export DEN_NATIVE_MANIFEST=${fixtureSandbox.denManifest}
     export DEN_NATIVE_LAUNCHER=${launcher}/bin/den-launcher
     export DEN_NATIVE_FENCE=${fence}/bin/fence
+    export DEN_NATIVE_SETTINGS_MERGE=${claudeSettingsMerge}/bin/claude-settings-merge
     export DEN_NATIVE_REPOWOLF_CLIENT_DIR=${repoWolfClient}
     export DEN_NATIVE_REPOWOLF_FIXTURE=${repoWolfFixture}/bin/den-native-repowolf-fixture
     export DEN_NATIVE_UNRELATED_STORE_FILE=${unrelatedStoreFile}

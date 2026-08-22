@@ -19,16 +19,29 @@ let
   adapter = (mkClaude { }).adapter;
   mandatoryArgs = pkgs.lib.escapeShellArgs adapter.agent.mandatoryArgs;
 in
-pkgs.runCommand "claude-settings-merge"
-  {
-    nativeBuildInputs = [ pkgs.claude-code pkgs.python3 pkgs.coreutils ];
-    settings = adapter.agent.darwinSettings;
-    __darwinAllowLocalNetworking = pkgs.stdenv.isDarwin;
-  }
-  ''
+pkgs.writeShellApplication {
+  name = "claude-settings-merge";
+  runtimeInputs = [ pkgs.claude-code pkgs.coreutils pkgs.gnugrep pkgs.python3 ];
+  text = ''
     set -eu
-    root="$TMPDIR/claude-settings-merge"
+    root=$(mktemp -d "''${TMPDIR:-/tmp}/claude-settings-merge.XXXXXX")
+    fixturePID=
+    cleanup() {
+      status=$?
+      trap - EXIT
+      if [ -n "$fixturePID" ]; then
+        kill "$fixturePID" 2>/dev/null || true
+        wait "$fixturePID" 2>/dev/null || true
+      fi
+      if ! rm -rf "$root" && [ "$status" -eq 0 ]; then
+        status=1
+      fi
+      exit "$status"
+    }
+    trap cleanup EXIT
+
     config="$root/config"
+    settings=${pkgs.lib.escapeShellArg adapter.agent.darwinSettings}
     mkdir -p "$config" "$root/home"
 
     export HOME="$root/home"
@@ -62,7 +75,7 @@ pkgs.runCommand "claude-settings-merge"
     JSON
     settingsFingerprint=$(sha256sum "$settings" "$config/settings.json")
 
-    cat > fixture.py <<'PYTHON'
+    cat > "$root/fixture.py" <<'PYTHON'
     import json
     import os
     from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -230,9 +243,8 @@ pkgs.runCommand "claude-settings-merge"
     server.serve_forever()
     PYTHON
 
-    python fixture.py > "$root/fixture.log" 2>&1 &
+    python "$root/fixture.py" > "$root/fixture.log" 2>&1 &
     fixturePID=$!
-    trap 'kill "$fixturePID" 2>/dev/null || true' EXIT
     for _ in $(seq 1 100); do
       test -e "$DEN_TEST_READY_MARKER" && break
       sleep 0.05
@@ -259,5 +271,5 @@ pkgs.runCommand "claude-settings-merge"
     test ! -e "$DEN_TEST_PROTOCOL_MARKER"
     grep -Fx "fixture complete" "$root/claude.out"
     test "$(grep -c 'POST /v1/messages' "$root/fixture.log")" -eq 2
-    touch "$out"
-  ''
+  '';
+}
