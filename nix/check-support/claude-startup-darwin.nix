@@ -3,7 +3,7 @@
 let
   fakes = import ./fakes.nix { inherit inputs pkgs; };
   aclDiagnosticProbe = pkgs.writeShellScriptBin "den-acl-diagnostic-probe" ''
-    set -u
+    set -eu
     if test -z "''${DEN_CONFIGDIR_ACL_DIAGNOSTIC_LOG-}"; then
       exec /bin/ls "$@"
     fi
@@ -49,6 +49,15 @@ let
             if path:
                 value = value.replace(path, replacement)
         value = re.sub(
+            r"^([bcdlps-][^\s]*\s+\d+\s+)(\S+)(\s+)(\S+)",
+            lambda match: match.group(1)
+            + ("<invoking-user>" if owner_name and match.group(2) == owner_name else "<other-user>")
+            + match.group(3)
+            + "<group>",
+            value,
+            flags=re.MULTILINE,
+        )
+        value = re.sub(
             r"user:([^\s]+)",
             lambda match: "user:<invoking-user>"
             if owner_name and match.group(1) == owner_name
@@ -71,7 +80,7 @@ let
             "acl-probe id-u exit=%s value=%s; id-un exit=%s value=%s\n"
             % (
                 os.environ["DEN_ACL_PROBE_OWNER_UID_STATUS"],
-                os.environ["DEN_ACL_PROBE_OWNER_UID"] or "<unresolved>",
+                "<resolved>" if os.environ["DEN_ACL_PROBE_OWNER_UID"] else "<unresolved>",
                 os.environ["DEN_ACL_PROBE_OWNER_NAME_STATUS"],
                 "<invoking-user>" if owner_name else "<unresolved>",
             )
@@ -113,7 +122,11 @@ let
     (fakes.mkSandbox { configDir = "/private/tmp/den-task12-startup-outside-link"; });
 in
 pkgs.runCommand "claude-startup"
-  { nativeBuildInputs = [ pkgs.jq pkgs.gitMinimal ]; }
+  {
+    nativeBuildInputs = [ pkgs.jq pkgs.gitMinimal ];
+    # The production Darwin ACL probe is an immutable host executable.
+    __impureHostDeps = [ "/bin/ls" ];
+  }
   ''
     set -eu
     root=/private/tmp/den-task12-startup
