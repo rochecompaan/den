@@ -23,6 +23,7 @@ pkgs.runCommand "claude-settings-merge"
   {
     nativeBuildInputs = [ pkgs.claude-code pkgs.python3 pkgs.coreutils ];
     settings = adapter.agent.darwinSettings;
+    __darwinAllowLocalNetworking = pkgs.stdenv.isDarwin;
   }
   ''
     set -eu
