@@ -113,7 +113,9 @@ pkgs.runCommand "pure-launcher"
     grep -Fqx 'argv[0]=<--settings>' "$rootHost/fence-argv.log"
     grep -Fqx "argv[1]=<$policyPath>" "$rootHost/fence-argv.log"
     grep -Fqx 'argv[2]=<--expose-host-path>' "$rootHost/fence-argv.log"
-    grep -Fqx "argv[3]=<$REPOWOLF_CA_FILE>" "$rootHost/fence-argv.log"
+    preparedCA=$(sed -n 's/^argv\[3\]=<\(.*\)>$/\1/p' "$rootHost/fence-argv.log")
+    test "$preparedCA" != "$REPOWOLF_CA_FILE"
+    test "$(basename "$preparedCA")" = repowolf-ca.pem
     grep -Fqx 'argv[4]=<-->' "$rootHost/fence-argv.log"
     grep -Fqx 'argv[5]=<${fakes.fakeClaude}/bin/claude>' "$rootHost/fence-argv.log"
     grep -Fqx 'argv[6]=<--dangerously-skip-permissions>' "$rootHost/fence-argv.log"
@@ -127,7 +129,13 @@ pkgs.runCommand "pure-launcher"
     test "$(grep -c '^argv\[' "$rootHost/fence-argv.log")" = 14
     if grep -q '^argv\[14\]=' "$rootHost/fence-argv.log"; then exit 1; fi
 
-    jq -e --arg broker broker.example.test --arg home "$HOME" '
+    accountHome=$(jq -r --arg home "$HOME" '
+      .filesystem.denyRead[] | select(endswith("/.ssh/id_*") and (startswith($home) | not)) |
+      sub("/.ssh/id_\\*$"; "")
+    ' "$rootHost/policy.json")
+    test -n "$accountHome"
+    test "$accountHome" != "$HOME"
+    jq -e --arg broker broker.example.test --arg home "$HOME" --arg accountHome "$accountHome" '
       .allowPty == true and
       (.network.allowedDomains | index($broker)) != null and
       (.network.allowedDomains | index("api.anthropic.com")) != null and
@@ -140,7 +148,13 @@ pkgs.runCommand "pure-launcher"
       (.network.allowedDomains | all(. != "*.github.com" and . != "*.gitlab.com" and . != "*.bitbucket.org")) and
       (.filesystem.allowWrite | index($home + "/.claude")) != null and
       (.filesystem.allowWrite | index($home + "/.claude.json")) != null and
-      (.filesystem.allowWrite | index($home + "/.config/claude")) != null
+      (.filesystem.allowWrite | index($home + "/.config/claude")) != null and
+      (.filesystem as $fs | ["/.ssh/id_*", "/.aws/**", "/.gitconfig"] | all(. as $suffix |
+        ($fs.denyRead | index($home + $suffix)) != null and
+        ($fs.denyWrite | index($home + $suffix)) != null and
+        ($fs.denyRead | index($accountHome + $suffix)) != null and
+        ($fs.denyWrite | index($accountHome + $suffix)) != null)) and
+      (.filesystem.denyRead | all(startswith("~/") | not))
     ' "$rootHost/policy.json"
     echo task12-policy-ok >&2
     if grep -Fq "$token" "$rootHost/policy.json" "$rootHost/fence.log" "$rootHost/agent.log"; then

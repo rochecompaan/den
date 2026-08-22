@@ -79,11 +79,22 @@ pkgs.runCommand "claude-startup"
       run_native "$wrapper" --plugin-dir "$selection/plugins/user-plugin" --mcp-config "$selection/mcp.json" --strict-mcp-config
       (cd "$selection" && sha256sum skills/user-skill/SKILL.md plugins/user-plugin/plugin.json settings.json mcp.json) > "$root/resources.after"
       cmp "$root/resources.before" "$root/resources.after"
-      jq -e --arg selected "$selection" --arg home "$HOME" '
+      accountHome=$(jq -r --arg home "$HOME" '
+        .filesystem.denyRead[] | select(endswith("/.ssh/id_*") and (startswith($home) | not)) |
+        sub("/.ssh/id_\\*$"; "")
+      ' "$root/$label-policy.json")
+      test -n "$accountHome"
+      jq -e --arg selected "$selection" --arg home "$HOME" --arg accountHome "$accountHome" '
         (.filesystem.allowWrite | index($selected)) != null and
         (.filesystem.denyWrite | index($home + "/.claude")) != null and
         (.filesystem.denyWrite | index($home + "/.claude.json")) != null and
-        (.filesystem.denyWrite | index($home + "/.config/claude")) != null
+        (.filesystem.denyWrite | index($home + "/.config/claude")) != null and
+        (.filesystem as $fs | ["/.ssh/id_*", "/.aws/**", "/.gitconfig"] | all(. as $suffix |
+          ($fs.denyRead | index($home + $suffix)) != null and
+          ($fs.denyWrite | index($home + $suffix)) != null and
+          ($fs.denyRead | index($accountHome + $suffix)) != null and
+          ($fs.denyWrite | index($accountHome + $suffix)) != null)) and
+        (.filesystem.denyRead | all(startswith("~/") | not))
       ' "$root/$label-policy.json"
     }
 
