@@ -67,7 +67,13 @@ func validateProtectedOverlapForHome(candidate, runtimeHome, protectedHome strin
 	for _, entry := range entries {
 		canonical, err := canonicalProspective(entry)
 		if err != nil {
-			return errInvalid
+			if !os.IsPermission(err) {
+				return errInvalid
+			}
+			// An inaccessible protected root cannot alias an accessible,
+			// already-canonical candidate. Keep its absolute lexical prefix
+			// protected instead of making an otherwise valid launch unusable.
+			canonical = filepath.Clean(entry)
 		}
 		if pathsOverlap(candidate, canonical) {
 			return errOverlap

@@ -51,6 +51,39 @@ func TestExpandProtectedPatternsRejectsInvalidAccountHomeWithoutDisclosure(t *te
 	}
 }
 
+func TestProtectedOverlapKeepsInaccessibleAccountCredentialRoots(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory traversal permissions")
+	}
+	root := t.TempDir()
+	runtimeHome := privateDir(t, root, "runtime-home")
+	accountHome := privateDir(t, root, "account-home")
+	candidate := privateDir(t, root, "state")
+	if err := os.Chmod(accountHome, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(accountHome, 0o700) })
+	selection, err := Select(&candidate, nil, runtimeHome, []string{"~/.ssh/id_*"}, Dependencies{
+		ACLProbe: safeDependencies(t).ACLProbe, ProtectedHomes: []string{accountHome, runtimeHome},
+	})
+	if err != nil {
+		t.Fatalf("Select() rejected an inaccessible disjoint account root: %v", err)
+	}
+	want := filepath.Join(accountHome, ".ssh", "id_*")
+	if !containsPath(selection.ProtectedPaths, want) {
+		t.Fatalf("ProtectedPaths = %#v, missing %q", selection.ProtectedPaths, want)
+	}
+}
+
+func containsPath(paths []string, want string) bool {
+	for _, path := range paths {
+		if path == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPathsOverlapConservativelyFoldsProspectiveCaseAliases(t *testing.T) {
 	protected := filepath.Join(string(os.PathSeparator), "Users", "owner", ".ssh")
 	candidate := filepath.Join(string(os.PathSeparator), "Users", "owner", ".SSH", "state")
