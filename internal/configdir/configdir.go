@@ -142,6 +142,10 @@ func selectCustom(value, home string, denied []string, deps Dependencies) (selec
 	if err != nil {
 		return Selection{}, err
 	}
+	confirmed, err := captureFinalIdentity(canonical, ownerUID)
+	if err != nil || confirmed != identity {
+		return Selection{}, errChanged
+	}
 	state.acl = acl
 	return Selection{
 		Mode:               Custom,
@@ -204,6 +208,10 @@ func (s Selection) Revalidate() error {
 	}
 	acl, err := captureFinalACL(state.path, state.ownerName, state.ownerID, state.probe)
 	if err != nil || acl != state.acl {
+		return errChanged
+	}
+	confirmed, err := captureFinalIdentity(state.path, state.identity.uid)
+	if err != nil || confirmed != state.identity {
 		return errChanged
 	}
 	ancestors, err := captureAncestors(filepath.Dir(state.path), state.identity.uid, state.ownerName, state.ownerID, state.probe)
