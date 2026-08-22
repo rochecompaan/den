@@ -13,6 +13,16 @@ if [[ $system != "$current_system" ]]; then
   exit 2
 fi
 
+if [[ $system == *-darwin ]]; then
+  allowed_impure_host_deps=$(nix config show allowed-impure-host-deps)
+  if [[ $allowed_impure_host_deps != /bin/ls ]]; then
+    printf 'Darwin native checks require allowed-impure-host-deps = /bin/ls exactly; got %q\n' \
+      "$allowed_impure_host_deps" >&2
+    exit 1
+  fi
+  printf 'Darwin impure host dependency policy verified: /bin/ls\n'
+fi
+
 printf 'evaluating flake for %s\n' "$system"
 nix flake check --no-build
 printf 'building Claude for %s\n' "$system"
