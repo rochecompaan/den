@@ -284,23 +284,42 @@ because a parent ACL can create inherited permissions. If that inspection
 fails, Den removes the new directory and stops.
 
 Den resolves existing parent components before validation. Each canonical
-ancestor must prevent replacement by another principal. A writable ancestor
-is valid only when it is sticky and owned by root or the invoking user. A
-sticky directory restricts who can replace entries inside that directory.
+ancestor must prevent replacement by another principal. An ancestor needs the
+sticky exception only if another principal can write it through group or other
+mode bits, or through an ACL. The sticky ancestor must be owned by root or the
+invoking user. A sticky directory restricts who can replace its entries. An
+ancestor writable only by its owner does not need the sticky bit.
 
-The custom directory must not equal, contain, or be contained by a protected
-path. Protected paths include the three default Claude paths and these denied
-credential locations:
+The overlap validator uses protected roots, not filesystem deny globs. The
+protected directory roots are:
 
-- `$HOME/.ssh/id_*`, `$HOME/.ssh/config`, and `$HOME/.ssh/*.pem`
-- `$HOME/.gnupg/**`, `$HOME/.aws/**`, and `$HOME/.config/gcloud/**`
-- `$HOME/.kube/**` and `$HOME/.docker/**`
-- `$HOME/.pypirc`, `$HOME/.netrc`, and `$HOME/.git-credentials`
-- `$HOME/.cargo/credentials` and `$HOME/.cargo/credentials.toml`
-- `$HOME/.gitconfig` and `$HOME/.config/git/**`
+- `$HOME/.ssh`
+- `$HOME/.gnupg`
+- `$HOME/.aws`
+- `$HOME/.config/gcloud`
+- `$HOME/.kube`
+- `$HOME/.docker`
+- `$HOME/.config/git`
 
-This overlap rule rejects broad paths such as `/` and `$HOME`. Filesystem deny
-rules take precedence over working-tree and state-directory grants.
+The protected files are:
+
+- `$HOME/.pypirc`
+- `$HOME/.netrc`
+- `$HOME/.git-credentials`
+- `$HOME/.cargo/credentials`
+- `$HOME/.cargo/credentials.toml`
+- `$HOME/.gitconfig`
+
+The three default Claude paths are also protected:
+
+- `$HOME/.claude/`
+- `$HOME/.claude.json`
+- `$HOME/.config/claude/`
+
+A custom directory cannot equal, contain, or be contained by any protected
+root, file, or default Claude path. This rule rejects broad paths such as `/`
+and `$HOME`. Filesystem deny rules take precedence over working-tree and
+state-directory grants.
 
 Immediately before Fence starts, Den repeats validation of the path, owner,
 mode, ACL, and ancestors. It also compares the directory device and inode. The
@@ -444,8 +463,13 @@ rewrites, and the immutable RepoWolf Git SSH helper.
 
 The launcher removes inherited `TMPDIR`, `DEN_FENCE_TMPDIR`, and
 `DEN_FENCE_POLICY_FILE`. It sets the two temporary-directory variables to a
-private per-launch scratch directory. It exposes its private policy path only
-to the outer Fence process and the mandatory macOS hook.
+private per-launch scratch directory. It sets `DEN_FENCE_POLICY_FILE` to a
+validated internal policy path.
+
+Sandbox descendants inherit this internal read-only path. The mandatory macOS
+hook uses it to invoke nested Fence. The policy file and its parent have
+highest-precedence write denials, so sandbox processes cannot mutate the
+policy. `DEN_FENCE_POLICY_FILE` is internal. Do not set or use it.
 
 Other normal user variables remain available. These include Claude
 authentication, locale, terminal, and editor variables. Den never enables
@@ -565,12 +589,23 @@ Do not replace it with a symbolic link.
 6. Choose a path that is separate from default state and credential paths.
 7. Start `claude` again.
 
-For a directory that you own, this command sets the required mode:
+For environment-selected mode, set the mode on `CLAUDE_CONFIG_DIR`:
 
 ```bash
 chmod 0700 "$CLAUDE_CONFIG_DIR"
 claude
 ```
+
+For a constructor or module `configDir`, use its configured absolute path:
+
+```bash
+chmod 0700 /absolute/config/path
+claude
+```
+
+An ancestor needs the sticky exception only if another principal can write it
+through group or other mode bits, or through an ACL. An ancestor writable only
+by its owner does not need the sticky bit.
 
 On Linux, use the host ACL administration tools to remove extra ACL grants. On
 macOS, use the host ACL administration tools to remove inherited ACL grants.
