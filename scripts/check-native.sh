@@ -13,7 +13,9 @@ if [[ $system != "$current_system" ]]; then
   exit 2
 fi
 
+printf 'evaluating flake for %s\n' "$system"
 nix flake check --no-build
+printf 'building Claude for %s\n' "$system"
 nix build ".#packages.$system.claude" --no-link --print-build-logs
 
 normal_checks=$(nix eval --raw ".#checks.$system" --apply '
@@ -27,9 +29,11 @@ if [[ -z $normal_checks ]]; then
 fi
 while IFS= read -r check; do
   [[ -n $check ]] || continue
+  printf 'building non-native check %s for %s\n' "$check" "$system"
   nix build ".#checks.$system.$check" --no-link --print-build-logs
 done <<< "$normal_checks"
 
+printf 'building native runner for %s\n' "$system"
 runner=$(nix build ".#checks.$system.native-enforcement" \
   --no-link --print-build-logs --print-out-paths)
 if [[ $runner != /nix/store/* || $runner == *$'\n'* ]]; then
@@ -40,4 +44,5 @@ if [[ ! -x $runner/bin/native-enforcement ]]; then
   printf 'native runner is not executable: %s\n' "$runner/bin/native-enforcement" >&2
   exit 1
 fi
+printf 'executing native runner as the invoking host user\n'
 "$runner/bin/native-enforcement"
