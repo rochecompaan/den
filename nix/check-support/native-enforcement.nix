@@ -105,6 +105,16 @@ let
       esac
     '';
   };
+  fixtureClients = pkgs.runCommand "den-native-container-clients" { } ''
+    mkdir -p "$out/bin"
+    for name in docker docker-compose; do
+      cat > "$out/bin/$name" <<'EOF'
+    #!${pkgs.bash}/bin/bash
+    exit 0
+    EOF
+      chmod 0555 "$out/bin/$name"
+    done
+  '';
   mkAgentSandbox = import ../lib/mk-agent-sandbox.nix { inherit inputs pkgs; };
   launcher = import ../packages/den-launcher.nix { inherit pkgs; };
   fixtureSandbox = mkAgentSandbox {
@@ -112,8 +122,8 @@ let
     extraPkgs = [ ];
     docker = {
       enable = true;
-      package = fixtureAgent;
-      composePackage = fixtureAgent;
+      package = fixtureClients;
+      composePackage = fixtureClients;
       socketPath = "/tmp/den-native-container.sock";
       hostPorts = [ 38413 38414 ];
     };
