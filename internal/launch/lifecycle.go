@@ -62,6 +62,13 @@ func runFenceWithTemporary(
 	}
 	defer func() { _ = cleanup() }()
 
+	preparedCA, err := prepareCAFile(config.CAFile, policyDir)
+	if err != nil {
+		fmt.Fprintln(stderr, "RepoWolf CA preparation failed")
+		return 1
+	}
+	config.CAFile = preparedCA
+
 	policyFile := filepath.Join(policyDir, "policy.json")
 	contents, err := generatePolicy(launcherManifest, config, selection, scratchDir, policyFile, docker, podman)
 	if err != nil {
@@ -84,6 +91,7 @@ func runFenceWithTemporary(
 	}
 
 	environment = fenceTemporaryEnvironment(environment, scratchDir)
+	environment = setEnvironment(environment, "REPOWOLF_CA_FILE", preparedCA)
 	environment = append(environment, "DEN_FENCE_POLICY_FILE="+policyFile)
 	argumentsForFence := []string{"--settings", policyFile, "--expose-host-path", config.CAFile, "--", launcherManifest.Agent.Executable}
 	argumentsForFence = append(argumentsForFence, launcherManifest.Agent.MandatoryArgs...)

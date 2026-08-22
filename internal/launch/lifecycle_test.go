@@ -40,7 +40,7 @@ while [ "$1" != -- ]; do shift; done
 shift
 exec "$@"
 `,
-		agent: "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$AGENT_ARGS\"\nprintf '%s' \"$TMPDIR\" > \"$AGENT_TMP\"\nexit 17\n",
+		agent: "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$AGENT_ARGS\"\nprintf '%s' \"$TMPDIR\" > \"$AGENT_TMP\"\nprintf '%s' \"$REPOWOLF_CA_FILE\" > \"$AGENT_CA\"\nexit 17\n",
 	} {
 		mode := os.FileMode(0o600)
 		if path == fence || path == agent {
@@ -55,6 +55,7 @@ exec "$@"
 	policyMode := filepath.Join(root, "policy-mode")
 	agentArgs := filepath.Join(root, "agent-args")
 	agentTMP := filepath.Join(root, "agent-tmp")
+	agentCA := filepath.Join(root, "agent-ca")
 	for name, value := range map[string]string{
 		"REPOWOLF_ENDPOINT": "https://broker.example.test/",
 		"REPOWOLF_TOKEN":    "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -64,6 +65,7 @@ exec "$@"
 		"FENCE_MODE":        policyMode,
 		"AGENT_ARGS":        agentArgs,
 		"AGENT_TMP":         agentTMP,
+		"AGENT_CA":          agentCA,
 	} {
 		t.Setenv(name, value)
 	}
@@ -100,6 +102,13 @@ exec "$@"
 	gotFenceArgs := strings.Split(strings.TrimSpace(readLifecycleFile(t, fenceArgs)), "\n")
 	if len(gotFenceArgs) < 7 || gotFenceArgs[0] != "--settings" || gotFenceArgs[2] != "--expose-host-path" || gotFenceArgs[4] != "--" || gotFenceArgs[5] != agent {
 		t.Fatalf("Fence arguments = %#v", gotFenceArgs)
+	}
+	preparedCA := readLifecycleFile(t, agentCA)
+	if gotFenceArgs[3] != preparedCA || preparedCA == ca || filepath.Base(preparedCA) != "repowolf-ca.pem" {
+		t.Fatalf("CA consumers were not pinned: args=%#v env=%q", gotFenceArgs, preparedCA)
+	}
+	if _, err := os.Lstat(preparedCA); !os.IsNotExist(err) {
+		t.Fatalf("prepared CA was not cleaned up: %v", err)
 	}
 }
 

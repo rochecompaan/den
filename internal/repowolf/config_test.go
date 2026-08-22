@@ -106,11 +106,9 @@ func TestLoadEnvAcceptsOnlyCanonicalToken(t *testing.T) {
 
 func TestLoadEnvValidatesCanonicalCAFile(t *testing.T) {
 	values := validValues()
-	config, err := LoadEnv(lookup(values), func(path string) (fs.FileInfo, error) {
-		if path != testCA {
-			t.Fatalf("lstat path = %q, want %q", path, testCA)
-		}
-		return fakeFileInfo{mode: 0o444}, nil
+	config, err := LoadEnv(lookup(values), func(string) (fs.FileInfo, error) {
+		t.Fatal("LoadEnv inspected the CA path before authoritative preparation")
+		return nil, nil
 	})
 	if err != nil {
 		t.Fatalf("LoadEnv() error = %v", err)
@@ -124,32 +122,13 @@ func TestLoadEnvValidatesCanonicalCAFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config, err = LoadEnv(lookup(values), func(path string) (fs.FileInfo, error) {
-		if path != wantAbsolute {
-			t.Fatalf("lstat path = %q, want %q", path, wantAbsolute)
-		}
-		return fakeFileInfo{mode: 0o444}, nil
-	})
+	config, err = LoadEnv(lookup(values), readableCA)
 	if err != nil || config.CAFile != wantAbsolute {
 		t.Fatalf("relative CA config = %#v, error = %v", config, err)
 	}
-	values["REPOWOLF_CA_FILE"] = testCA
-
-	for _, test := range []struct {
-		name  string
-		lstat func(string) (fs.FileInfo, error)
-	}{
-		{"missing", func(string) (fs.FileInfo, error) { return nil, fs.ErrNotExist }},
-		{"nil file info", func(string) (fs.FileInfo, error) { return nil, nil }},
-		{"unreadable", func(string) (fs.FileInfo, error) { return fakeFileInfo{mode: 0}, nil }},
-		{"directory", func(string) (fs.FileInfo, error) { return fakeFileInfo{mode: fs.ModeDir | 0o555}, nil }},
-		{"symbolic link", func(string) (fs.FileInfo, error) { return fakeFileInfo{mode: fs.ModeSymlink | 0o777}, nil }},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := LoadEnv(lookup(values), test.lstat)
-			assertRedacted(t, err, "REPOWOLF_CA_FILE", testEndpoint, testToken, testCA)
-		})
-	}
+	values["REPOWOLF_CA_FILE"] = "sentinel\x00ca"
+	_, err = LoadEnv(lookup(values), readableCA)
+	assertRedacted(t, err, "REPOWOLF_CA_FILE", testEndpoint, testToken, "sentinel")
 }
 
 func TestLoadEnvRedactsAllEnvironmentValues(t *testing.T) {

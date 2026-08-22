@@ -20,7 +20,7 @@ type Config struct {
 }
 
 // LoadEnv reads and validates the RepoWolf environment without disclosing its values in errors.
-func LoadEnv(lookup func(string) (string, bool), lstat func(string) (fs.FileInfo, error)) (Config, error) {
+func LoadEnv(lookup func(string) (string, bool), _ func(string) (fs.FileInfo, error)) (Config, error) {
 	endpoint, ok := lookup("REPOWOLF_ENDPOINT")
 	if !ok || endpoint == "" || !validEndpoint(endpoint) {
 		return Config{}, errors.New("REPOWOLF_ENDPOINT is invalid")
@@ -33,18 +33,13 @@ func LoadEnv(lookup func(string) (string, bool), lstat func(string) (fs.FileInfo
 	}
 
 	caFile, ok := lookup("REPOWOLF_CA_FILE")
-	if !ok || caFile == "" {
+	if !ok || caFile == "" || strings.IndexByte(caFile, 0) >= 0 {
 		return Config{}, errors.New("REPOWOLF_CA_FILE is invalid")
 	}
 	caFile, err := filepath.Abs(caFile)
 	if err != nil {
 		return Config{}, errors.New("REPOWOLF_CA_FILE is invalid")
 	}
-	info, err := lstat(caFile)
-	if err != nil || info == nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o444 == 0 {
-		return Config{}, errors.New("REPOWOLF_CA_FILE is invalid")
-	}
-
 	return Config{
 		Endpoint: endpoint,
 		Token:    token,
