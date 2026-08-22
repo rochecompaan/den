@@ -8,6 +8,12 @@ let
   launcher = import ../packages/den-launcher.nix { inherit pkgs; };
   default = den.packages.default;
   protectedPathPatterns = builtins.toJSON (import ../lib/protected-paths.nix);
+  expectedPlatform = if pkgs.stdenv.isDarwin then "darwin" else "linux";
+  expectedScratchRoot = if pkgs.stdenv.isDarwin then "/private/tmp" else "/tmp";
+  expectedACLProbe = builtins.toJSON (
+    if pkgs.stdenv.isDarwin then [ "/bin/ls" "-lde" ] else [ "${pkgs.acl}/bin/getfacl" ]
+  );
+  aclClosureRoot = pkgs.lib.optionalString pkgs.stdenv.isLinux (toString pkgs.acl);
   fakeGh = pkgs.writeShellScriptBin "gh" "exit 0";
   fakeDocker = pkgs.writeShellScriptBin "docker" "exit 0";
   fakeDockerCompose = pkgs.writeShellScriptBin "docker-compose" "exit 0";
@@ -123,22 +129,24 @@ pkgs.runCommand "package-api"
     jq -e \
       --arg fence "${fence}/bin/fence" \
       --arg repowolf "${repowolf}" \
-      --arg acl "${pkgs.acl}/bin/getfacl" \
+      --arg platform "${expectedPlatform}" \
+      --arg scratchRoot "${expectedScratchRoot}" \
+      --argjson aclProbe '${expectedACLProbe}' \
       --argjson protected "$expectedProtected" \
       '
         .version == 1 and
-        .platform == "linux" and
-        .scratchRoot == "/tmp" and
+        .platform == $platform and
+        .scratchRoot == $scratchRoot and
         .fenceExecutable == $fence and
         .repoWolfClientDir == $repowolf and
-        .aclProbe == [$acl] and
+        .aclProbe == $aclProbe and
         .protectedPathPatterns == $protected and
         .docker == {enable: false, socketPath: null, hostPorts: [], clientPrograms: []} and
         .podman == {enable: false, socketPath: null, hostPorts: [], clientPrograms: []}
       ' "$defaultManifest"
 
     defaultClosure=$(jq -r .closurePathsFile "$defaultManifest")
-    for root in ${fence} ${repowolf} ${launcher} ${pkgs.gitMinimal} ${pkgs.bash} ${pkgs.coreutils} ${pkgs.acl} ${pkgs.claude-code}; do
+    for root in ${fence} ${repowolf} ${launcher} ${pkgs.gitMinimal} ${pkgs.bash} ${pkgs.coreutils} ${aclClosureRoot} ${pkgs.claude-code}; do
       grep -Fqx "$root" "$defaultClosure"
     done
 
@@ -147,7 +155,9 @@ pkgs.runCommand "package-api"
       --arg repoWolfClient "${repowolf}" \
       --arg fence "${fence}/bin" \
       --arg fenceExecutable "${fence}/bin/fence" \
-      --arg acl "${pkgs.acl}/bin/getfacl" \
+      --arg platform "${expectedPlatform}" \
+      --arg scratchRoot "${expectedScratchRoot}" \
+      --argjson aclProbe '${expectedACLProbe}' \
       --argjson protected "$expectedProtected" \
       --arg git "${pkgs.gitMinimal}/bin" \
       --arg bash "${pkgs.bash}/bin" \
@@ -161,11 +171,11 @@ pkgs.runCommand "package-api"
       --arg podmanCompose "${fakePodmanCompose}/bin/podman-compose" \
       '
         .version == 1 and
-        .platform == "linux" and
-        .scratchRoot == "/tmp" and
+        .platform == $platform and
+        .scratchRoot == $scratchRoot and
         .fenceExecutable == $fenceExecutable and
         .repoWolfClientDir == $repoWolfClient and
-        .aclProbe == [$acl] and
+        .aclProbe == $aclProbe and
         .protectedPathPatterns == $protected and
         .explicitConfigDir == "/tmp/den-claude-config" and
         .docker == {
@@ -187,7 +197,7 @@ pkgs.runCommand "package-api"
       ' "$customManifest"
 
     closure=$(jq -r .closurePathsFile "$customManifest")
-    for root in ${fence} ${repowolf} ${launcher} ${pkgs.gitMinimal} ${pkgs.bash} ${pkgs.coreutils} ${pkgs.acl} ${pkgs.claude-code} ${fakeGh} ${fakeDocker} ${fakeDockerCompose} ${fakePodman} ${fakePodmanCompose}; do
+    for root in ${fence} ${repowolf} ${launcher} ${pkgs.gitMinimal} ${pkgs.bash} ${pkgs.coreutils} ${aclClosureRoot} ${pkgs.claude-code} ${fakeGh} ${fakeDocker} ${fakeDockerCompose} ${fakePodman} ${fakePodmanCompose}; do
       grep -Fqx "$root" "$closure"
     done
 
