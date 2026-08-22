@@ -3,6 +3,8 @@ package launch
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -13,8 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rochecompaan/den/internal/configdir"
+	"github.com/rochecompaan/den/internal/container"
 	"github.com/rochecompaan/den/internal/environment"
 	"github.com/rochecompaan/den/internal/manifest"
+	"github.com/rochecompaan/den/internal/repowolf"
 )
 
 func TestRunRejectsInvalidRepoWolfInputsWithoutLeakingValues(t *testing.T) {
@@ -48,6 +53,28 @@ func TestRunRejectsInvalidRepoWolfInputsWithoutLeakingValues(t *testing.T) {
 		if strings.Contains(stderr.String(), secret) {
 			t.Fatalf("stderr leaked %q: %q", secret, stderr.String())
 		}
+	}
+}
+
+func TestRunFailsClosedWhenInvokingAccountHomeIsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	values := map[string]string{
+		"REPOWOLF_ENDPOINT": "https://broker.example.test/",
+		"REPOWOLF_TOKEN":    "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"REPOWOLF_CA_FILE":  filepath.Join(root, "ca.pem"),
+		"HOME":              filepath.Join(root, "runtime-home"),
+	}
+	var stderr bytes.Buffer
+	code := runWithLifecycleAndHome(context.Background(), manifest.Manifest{}, nil,
+		lookup(values), func(string) (fs.FileInfo, error) { return launchFileInfo{mode: 0o444}, nil },
+		func() []string { return nil }, environment.Build, &stderr,
+		func(context.Context, manifest.Manifest, []string, repowolf.Config, configdir.Selection, func() error, []string, container.Socket, container.Socket, io.Writer) int {
+			t.Fatal("lifecycle ran")
+			return 0
+		},
+		func() (string, error) { return "sentinel-secret-home", errors.New("sentinel detail") })
+	if code != 1 || strings.TrimSpace(stderr.String()) != "invoking account home is unavailable" {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
 	}
 }
 

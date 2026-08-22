@@ -124,7 +124,8 @@ func generatePolicy(
 		Platform: launcherManifest.Platform, RepoWolfHostname: config.Hostname, CAFile: config.CAFile,
 		ClosurePaths: closures, Worktree: worktree, ScratchDir: scratchDir,
 		StatePaths: selection.WritablePaths, DefaultStatePaths: selection.DeniedDefaultPaths,
-		CustomMode: selection.Mode == configdir.Custom, UnixSockets: sockets,
+		ProtectedPaths: selection.ProtectedPaths,
+		CustomMode:     selection.Mode == configdir.Custom, UnixSockets: sockets,
 		HostPorts:  container.CombinePorts(launcherManifest.Docker.HostPorts, launcherManifest.Podman.HostPorts),
 		PolicyFile: policyFile,
 	})

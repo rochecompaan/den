@@ -22,7 +22,8 @@ const (
 
 // Dependencies contains immutable platform tools used to inspect filesystem ACLs.
 type Dependencies struct {
-	ACLProbe []string
+	ACLProbe       []string
+	ProtectedHomes []string
 }
 
 // Selection is the validated state-directory choice and its rollback lifecycle.
@@ -31,6 +32,7 @@ type Selection struct {
 	CanonicalPath      string
 	WritablePaths      []string
 	DeniedDefaultPaths []string
+	ProtectedPaths     []string
 	Device             uint64
 	Inode              uint64
 	Created            bool
@@ -79,12 +81,19 @@ func Select(explicit *string, inherited *string, home string, denied []string, d
 	if home == "" || !filepath.IsAbs(home) {
 		return Selection{}, errInvalid
 	}
+	if len(deps.ProtectedHomes) == 0 {
+		deps.ProtectedHomes = []string{home}
+	}
 	value := explicit
 	if value == nil {
 		value = inherited
 	}
 	if value == nil {
-		return Selection{Mode: Default, WritablePaths: claudeDefaultPaths(home)}, nil
+		protected, err := expandProtectedPatterns(denied, deps.ProtectedHomes)
+		if err != nil {
+			return Selection{}, errInvalid
+		}
+		return Selection{Mode: Default, WritablePaths: claudeDefaultPaths(home), ProtectedPaths: protected}, nil
 	}
 	if *value == "" || !filepath.IsAbs(*value) {
 		return Selection{}, errInvalid
@@ -101,8 +110,14 @@ func selectCustom(value, home string, denied []string, deps Dependencies) (selec
 	if err != nil {
 		return Selection{}, errInvalid
 	}
-	if err := validateProtectedOverlap(canonical, home, denied); err != nil {
-		return Selection{}, err
+	protected, err := expandProtectedPatterns(denied, deps.ProtectedHomes)
+	if err != nil {
+		return Selection{}, errInvalid
+	}
+	for _, protectedHome := range deps.ProtectedHomes {
+		if err := validateProtectedOverlapForHome(canonical, home, protectedHome, denied); err != nil {
+			return Selection{}, err
+		}
 	}
 	ownerUID := uint32(os.Getuid())
 	ownerName, ownerID, err := invokingOwner(ownerUID)
@@ -144,6 +159,7 @@ func selectCustom(value, home string, denied []string, deps Dependencies) (selec
 		CanonicalPath:      canonical,
 		WritablePaths:      []string{directoryPolicyPath(canonical)},
 		DeniedDefaultPaths: claudeDefaultPaths(home),
+		ProtectedPaths:     protected,
 		Device:             identity.device,
 		Inode:              identity.inode,
 		Created:            created,

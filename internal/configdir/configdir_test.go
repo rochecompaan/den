@@ -85,7 +85,7 @@ func TestSelectRejectsExplicitlyEmptyAndRelativeCustomValues(t *testing.T) {
 
 func TestSelectFallbackUsesExactlyDefaultClaudePaths(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "missing-home")
-	selection, err := Select(nil, nil, home, []string{"*"}, Dependencies{ACLProbe: []string{"/missing/probe"}})
+	selection, err := Select(nil, nil, home, []string{"~/.ssh/id_*"}, Dependencies{ACLProbe: []string{"/missing/probe"}})
 	if err != nil {
 		t.Fatalf("Select() error = %v", err)
 	}

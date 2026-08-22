@@ -47,14 +47,18 @@ func canonicalFinal(path string) (string, bool, error) {
 	return canonical, canonicalErr == nil, nil
 }
 
-func validateProtectedOverlap(candidate, home string, patterns []string) error {
+func validateProtectedOverlap(candidate, home string, protected []string) error {
+	return validateProtectedOverlapForHome(candidate, home, home, protected)
+}
+
+func validateProtectedOverlapForHome(candidate, runtimeHome, protectedHome string, protected []string) error {
 	entries := []string{
-		filepath.Join(home, ".claude"),
-		filepath.Join(home, ".claude.json"),
-		filepath.Join(home, ".config", "claude"),
+		filepath.Join(runtimeHome, ".claude"),
+		filepath.Join(runtimeHome, ".claude.json"),
+		filepath.Join(runtimeHome, ".config", "claude"),
 	}
-	for _, pattern := range patterns {
-		root, err := protectedRoot(pattern, home)
+	for _, pattern := range protected {
+		root, err := protectedRoot(pattern, protectedHome)
 		if err != nil {
 			return errInvalid
 		}
@@ -70,6 +74,39 @@ func validateProtectedOverlap(candidate, home string, patterns []string) error {
 		}
 	}
 	return nil
+}
+
+func expandProtectedPatterns(patterns, homes []string) ([]string, error) {
+	result := make([]string, 0, len(patterns)*len(homes))
+	seen := make(map[string]struct{})
+	for _, pattern := range patterns {
+		if filepath.IsAbs(pattern) {
+			result = appendUniquePath(result, seen, filepath.Clean(pattern))
+			continue
+		}
+		if pattern != "~" && !strings.HasPrefix(pattern, "~/") {
+			return nil, errors.New("relative protected pattern")
+		}
+		for _, home := range homes {
+			if home == "" || !filepath.IsAbs(home) || filepath.Clean(home) != home {
+				return nil, errors.New("invalid protected home")
+			}
+			expanded := home
+			if pattern != "~" {
+				expanded = filepath.Join(home, strings.TrimPrefix(pattern, "~/"))
+			}
+			result = appendUniquePath(result, seen, expanded)
+		}
+	}
+	return result, nil
+}
+
+func appendUniquePath(paths []string, seen map[string]struct{}, path string) []string {
+	if _, exists := seen[path]; exists {
+		return paths
+	}
+	seen[path] = struct{}{}
+	return append(paths, path)
 }
 
 func protectedRoot(pattern, home string) (string, error) {

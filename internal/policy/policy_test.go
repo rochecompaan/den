@@ -199,6 +199,38 @@ func TestGenerateDeniesWriteToCAInsideWritableWorktree(t *testing.T) {
 	}
 }
 
+func TestGenerateDeniesAccountAndRuntimeCredentialPathsForReadAndWrite(t *testing.T) {
+	root := t.TempDir()
+	paths := makePaths(t, root)
+	protected := []string{
+		filepath.Join(root, "account", ".ssh", "id_*"),
+		filepath.Join(root, "runtime", ".aws", "**"),
+		filepath.Join(root, "account", ".gitconfig"),
+	}
+	encoded, err := Generate(Base(readBase(t)), Dynamic{
+		Platform: "darwin", RepoWolfHostname: "broker.example.test", CAFile: paths.ca,
+		Worktree: paths.worktree, ScratchDir: paths.scratch, PolicyFile: paths.policy,
+		ProtectedPaths: protected,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got document
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range protected {
+		if !contains(got.Filesystem.DenyRead, path) || !contains(got.Filesystem.DenyWrite, path) {
+			t.Errorf("credential path is not read/write denied: %q", path)
+		}
+	}
+	for _, path := range got.Filesystem.DenyRead {
+		if strings.HasPrefix(path, "~/") {
+			t.Errorf("denyRead retained runtime-dependent home pattern %q", path)
+		}
+	}
+}
+
 func TestGenerateRejectsInvalidInputsAndUnknownFields(t *testing.T) {
 	root := t.TempDir()
 	paths := makePaths(t, root)

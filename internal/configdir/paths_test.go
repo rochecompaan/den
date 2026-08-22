@@ -3,6 +3,8 @@ package configdir
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -17,6 +19,35 @@ func TestSelectTreatsWildcardCharactersInHomeAsLiteral(t *testing.T) {
 	}
 	if selection.CanonicalPath != candidate {
 		t.Fatalf("CanonicalPath = %q, want %q", selection.CanonicalPath, candidate)
+	}
+}
+
+func TestExpandProtectedPatternsUsesAccountAndRuntimeHomes(t *testing.T) {
+	account := filepath.Join(t.TempDir(), "account")
+	runtimeHome := filepath.Join(t.TempDir(), "runtime")
+	patterns := []string{"~/.ssh/id_*", "~/.aws/**", "~/.gitconfig"}
+	got, err := expandProtectedPatterns(patterns, []string{account, runtimeHome, account})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		filepath.Join(account, ".ssh", "id_*"), filepath.Join(runtimeHome, ".ssh", "id_*"),
+		filepath.Join(account, ".aws", "**"), filepath.Join(runtimeHome, ".aws", "**"),
+		filepath.Join(account, ".gitconfig"), filepath.Join(runtimeHome, ".gitconfig"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expanded paths = %#v, want %#v", got, want)
+	}
+}
+
+func TestExpandProtectedPatternsRejectsInvalidAccountHomeWithoutDisclosure(t *testing.T) {
+	sentinel := "relative-secret-home"
+	_, err := expandProtectedPatterns([]string{"~/.ssh/id_*"}, []string{sentinel})
+	if err == nil {
+		t.Fatal("expandProtectedPatterns() error = nil")
+	}
+	if strings.Contains(err.Error(), sentinel) {
+		t.Fatalf("error disclosed home: %v", err)
 	}
 }
 

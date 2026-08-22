@@ -27,6 +27,7 @@ type Dynamic struct {
 	ScratchDir        string
 	StatePaths        []string
 	DefaultStatePaths []string
+	ProtectedPaths    []string
 	CustomMode        bool
 	UnixSockets       []string
 	HostPorts         []uint16
@@ -92,6 +93,11 @@ func Generate(base Base, dynamic Dynamic) ([]byte, error) {
 		return nil, err
 	}
 	policy.Network.AllowedDomains = appendUnique(policy.Network.AllowedDomains, dynamic.RepoWolfHostname)
+	if len(dynamic.ProtectedPaths) > 0 {
+		policy.Filesystem.DenyRead = removeHomePatterns(policy.Filesystem.DenyRead)
+		policy.Filesystem.DenyRead = appendUnique(policy.Filesystem.DenyRead, dynamic.ProtectedPaths...)
+		policy.Filesystem.DenyWrite = appendUnique(policy.Filesystem.DenyWrite, dynamic.ProtectedPaths...)
+	}
 
 	ca, err := canonicalPath("CA file", dynamic.CAFile)
 	if err != nil {
@@ -176,6 +182,16 @@ func Generate(base Base, dynamic Dynamic) ([]byte, error) {
 		return nil, fmt.Errorf("policy: encode: %w", err)
 	}
 	return append(encoded, '\n'), nil
+}
+
+func removeHomePatterns(patterns []string) []string {
+	result := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		if pattern != "~" && !strings.HasPrefix(pattern, "~/") {
+			result = append(result, pattern)
+		}
+	}
+	return result
 }
 
 func decodeBase(base Base) (document, error) {

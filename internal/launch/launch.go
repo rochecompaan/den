@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 
@@ -20,20 +21,22 @@ import (
 )
 
 type environmentBuilder func([]string, environment.Controlled) []string
+type accountHomeResolver func() (string, error)
 
 type lifecycleRunner func(context.Context, manifest.Manifest, []string, repowolf.Config, configdir.Selection, func() error, []string, container.Socket, container.Socket, io.Writer) int
 
 // Run executes one validated launcher manifest.
 func Run(ctx context.Context, launcherManifest manifest.Manifest, arguments []string) int {
-	return runWithLifecycle(ctx, launcherManifest, arguments, os.LookupEnv, os.Lstat, os.Environ, environment.Build, os.Stderr, runFence)
+	return runWithLifecycleAndHome(ctx, launcherManifest, arguments, os.LookupEnv, os.Lstat, os.Environ, environment.Build, os.Stderr, runFence, invokingAccountHome)
 }
 
 // run keeps validation tests isolated from process execution. Production uses
 // Run, which injects the mandatory Fence lifecycle above.
 func run(ctx context.Context, launcherManifest manifest.Manifest, arguments []string, lookup func(string) (string, bool), lstat func(string) (fs.FileInfo, error), environ func() []string, build environmentBuilder, stderr io.Writer) int {
-	return runWithLifecycle(ctx, launcherManifest, arguments, lookup, lstat, environ, build, stderr, func(context.Context, manifest.Manifest, []string, repowolf.Config, configdir.Selection, func() error, []string, container.Socket, container.Socket, io.Writer) int {
+	home, _ := lookup("HOME")
+	return runWithLifecycleAndHome(ctx, launcherManifest, arguments, lookup, lstat, environ, build, stderr, func(context.Context, manifest.Manifest, []string, repowolf.Config, configdir.Selection, func() error, []string, container.Socket, container.Socket, io.Writer) int {
 		return 0
-	})
+	}, func() (string, error) { return home, nil })
 }
 
 func runWithLifecycle(
@@ -46,6 +49,21 @@ func runWithLifecycle(
 	build environmentBuilder,
 	stderr io.Writer,
 	lifecycle lifecycleRunner,
+) (exitCode int) {
+	return runWithLifecycleAndHome(ctx, launcherManifest, arguments, lookup, lstat, environ, build, stderr, lifecycle, invokingAccountHome)
+}
+
+func runWithLifecycleAndHome(
+	ctx context.Context,
+	launcherManifest manifest.Manifest,
+	arguments []string,
+	lookup func(string) (string, bool),
+	lstat func(string) (fs.FileInfo, error),
+	environ func() []string,
+	build environmentBuilder,
+	stderr io.Writer,
+	lifecycle lifecycleRunner,
+	resolveAccountHome accountHomeResolver,
 ) (exitCode int) {
 	config, err := repowolf.LoadEnv(lookup, lstat)
 	if err != nil {
@@ -65,6 +83,11 @@ func runWithLifecycle(
 		}
 	}
 	home, _ := lookup("HOME")
+	accountHome, err := resolveAccountHome()
+	if err != nil || accountHome == "" || !filepath.IsAbs(accountHome) || filepath.Clean(accountHome) != accountHome {
+		fmt.Fprintln(stderr, "invoking account home is unavailable")
+		return 1
+	}
 	var inherited *string
 	if launcherManifest.Agent.ConfigEnvironment != "" {
 		if value, ok := lookup(launcherManifest.Agent.ConfigEnvironment); ok {
@@ -76,7 +99,7 @@ func runWithLifecycle(
 		inherited,
 		home,
 		launcherManifest.ProtectedPathPatterns,
-		configdir.Dependencies{ACLProbe: launcherManifest.ACLProbe},
+		configdir.Dependencies{ACLProbe: launcherManifest.ACLProbe, ProtectedHomes: []string{accountHome, home}},
 	)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -143,6 +166,14 @@ func runWithLifecycle(
 		childEnvironment = setEnvironment(childEnvironment, launcherManifest.Agent.ConfigEnvironment, selection.CanonicalPath)
 	}
 	return lifecycle(ctx, launcherManifest, arguments, config, selection, revalidateDarwinSettings, childEnvironment, dockerSocket, podmanSocket, stderr)
+}
+
+func invokingAccountHome() (string, error) {
+	account, err := user.Current()
+	if err != nil || account == nil {
+		return "", err
+	}
+	return account.HomeDir, nil
 }
 
 func resolveDocker(config manifest.ContainerConfig, env container.Env, home string) (container.Socket, error) {
