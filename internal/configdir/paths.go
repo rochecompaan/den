@@ -83,7 +83,25 @@ func validateProtectedOverlapForHome(candidate, runtimeHome, protectedHome strin
 }
 
 func expandProtectedPatterns(patterns, homes []string) ([]string, error) {
-	result := make([]string, 0, len(patterns)*len(homes))
+	variants := make([]string, 0, len(homes)*2)
+	variantSeen := make(map[string]struct{})
+	for _, home := range homes {
+		if home == "" || !filepath.IsAbs(home) || filepath.Clean(home) != home {
+			return nil, errors.New("invalid protected home")
+		}
+		variants = appendUniquePath(variants, variantSeen, home)
+		canonical, err := filepath.EvalSymlinks(home)
+		if err == nil {
+			if !filepath.IsAbs(canonical) {
+				return nil, errors.New("invalid protected home")
+			}
+			variants = appendUniquePath(variants, variantSeen, filepath.Clean(canonical))
+		} else if !os.IsNotExist(err) && !os.IsPermission(err) {
+			return nil, errors.New("invalid protected home")
+		}
+	}
+
+	result := make([]string, 0, len(patterns)*len(variants))
 	seen := make(map[string]struct{})
 	for _, pattern := range patterns {
 		if filepath.IsAbs(pattern) {
@@ -93,18 +111,26 @@ func expandProtectedPatterns(patterns, homes []string) ([]string, error) {
 		if pattern != "~" && !strings.HasPrefix(pattern, "~/") {
 			return nil, errors.New("relative protected pattern")
 		}
-		for _, home := range homes {
-			if home == "" || !filepath.IsAbs(home) || filepath.Clean(home) != home {
-				return nil, errors.New("invalid protected home")
-			}
-			expanded := home
+		for _, home := range variants {
+			expanded := escapeGlobLiteral(home)
 			if pattern != "~" {
-				expanded = filepath.Join(home, strings.TrimPrefix(pattern, "~/"))
+				expanded = filepath.Join(expanded, strings.TrimPrefix(pattern, "~/"))
 			}
 			result = appendUniquePath(result, seen, expanded)
 		}
 	}
 	return result, nil
+}
+
+func escapeGlobLiteral(value string) string {
+	var escaped strings.Builder
+	for _, character := range value {
+		if strings.ContainsRune(`\\*?[]{}`, character) {
+			escaped.WriteByte('\\')
+		}
+		escaped.WriteRune(character)
+	}
+	return escaped.String()
 }
 
 func appendUniquePath(paths []string, seen map[string]struct{}, path string) []string {

@@ -40,6 +40,27 @@ func TestExpandProtectedPatternsUsesAccountAndRuntimeHomes(t *testing.T) {
 	}
 }
 
+func TestExpandProtectedPatternsEscapesGlobHomesAndProtectsCanonicalAliases(t *testing.T) {
+	root := t.TempDir()
+	realHome := privateDir(t, root, "home[1]")
+	aliasHome := filepath.Join(root, "alias?home")
+	if err := os.Symlink(realHome, aliasHome); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := expandProtectedPatterns([]string{"~/.ssh/id_*"}, []string{aliasHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		filepath.Join(root, `alias\?home`, ".ssh", "id_*"),
+		filepath.Join(root, `home\[1\]`, ".ssh", "id_*"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expanded paths = %#v, want %#v", got, want)
+	}
+}
+
 func TestExpandProtectedPatternsRejectsInvalidAccountHomeWithoutDisclosure(t *testing.T) {
 	sentinel := "relative-secret-home"
 	_, err := expandProtectedPatterns([]string{"~/.ssh/id_*"}, []string{sentinel})
