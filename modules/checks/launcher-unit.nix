@@ -20,6 +20,8 @@
           cd source
           go test ./internal/... ./cmd/... -count=1
           ${pkgs.bash}/bin/bash tests/check-native-driver.sh "$PWD/scripts/check-native.sh"
+          ${pkgs.bash}/bin/bash tests/native-resolver-lifecycle.sh \
+            "$PWD/nix/check-support/native-resolver-lifecycle.sh"
 
           test -x ${den-launcher}/bin/den-launcher
           test ! -e ${den-launcher}/bin/den

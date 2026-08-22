@@ -131,6 +131,31 @@ let
     };
   };
   unrelatedStoreFile = pkgs.writeText "den-native-unrelated" "must remain unreadable\n";
+  resolverHelper = pkgs.stdenv.mkDerivation {
+    pname = "den-native-resolver-helper";
+    version = "0.1.0";
+    src = ./native-resolver-helper;
+    strictDeps = true;
+    buildPhase = ''
+      runHook preBuild
+      $CC -std=c11 -Wall -Wextra -Werror -o den-native-resolver-helper \
+        main.c resolver_transaction.c
+      $CC -std=c11 -Wall -Wextra -Werror -o resolver-transaction-test \
+        resolver_transaction.c resolver_transaction_test.c
+      runHook postBuild
+    '';
+    doCheck = true;
+    checkPhase = ''
+      runHook preCheck
+      ./resolver-transaction-test
+      runHook postCheck
+    '';
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 den-native-resolver-helper "$out/bin/den-native-resolver-helper"
+      runHook postInstall
+    '';
+  };
   nativeTests = pkgs.buildGoModule {
     pname = "den-native-tests";
     version = "0.1.0";
@@ -165,6 +190,7 @@ pkgs.writeShellApplication {
     export DEN_NATIVE_REPOWOLF_CLIENT_DIR=${repoWolfClient}
     export DEN_NATIVE_REPOWOLF_FIXTURE=${repoWolfFixture}/bin/den-native-repowolf-fixture
     export DEN_NATIVE_UNRELATED_STORE_FILE=${unrelatedStoreFile}
+    export DEN_NATIVE_RESOLVER_HELPER=${resolverHelper}/bin/den-native-resolver-helper
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
       export DEN_NATIVE_ACL=${pkgs.acl}/bin/setfacl
       export DEN_NATIVE_GETFACL=${pkgs.acl}/bin/getfacl
@@ -173,6 +199,7 @@ pkgs.writeShellApplication {
       export DEN_NATIVE_IP=${pkgs.iproute2}/bin/ip
       export DEN_NATIVE_BASH=${pkgs.bash}/bin/bash
     ''}
+    ${builtins.readFile ./native-resolver-lifecycle.sh}
     ${builtins.readFile ./native-runner.sh}
   '';
 }
