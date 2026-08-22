@@ -38,6 +38,29 @@ func TestPrepareCAFilePinsRegularFileInPrivatePolicyDirectory(t *testing.T) {
 	}
 }
 
+func TestPrepareCAFileAppliesExactModeWithRestrictiveUmask(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source.pem")
+	policyDir := filepath.Join(root, "policy")
+	if err := os.Mkdir(policyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte("certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldMask := syscall.Umask(0o777)
+	prepared, err := prepareCAFile(source, policyDir)
+	syscall.Umask(oldMask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(prepared)
+	if err != nil || info.Mode().Perm() != 0o400 {
+		t.Fatalf("prepared CA mode = %v, error = %v", info, err)
+	}
+}
+
 func TestPrepareCAFileRejectsUnsafeInputsWithoutDisclosureOrArtifacts(t *testing.T) {
 	root := t.TempDir()
 	regular := filepath.Join(root, "sentinel-secret.pem")

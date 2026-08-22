@@ -31,6 +31,11 @@ func prepareCAFile(source, policyDir string) (string, error) {
 	if err != nil {
 		return "", errCAPreparation
 	}
+	if err := output.Chmod(0o400); err != nil {
+		_ = output.Close()
+		_ = os.Remove(destination)
+		return "", errCAPreparation
+	}
 	ok := false
 	defer func() {
 		_ = output.Close()
