@@ -135,7 +135,7 @@ func resolvePodman(config Config, env Env, home Home, uid UID, platform Platform
 			if os.IsNotExist(err) {
 				continue
 			}
-			return Socket{}, fmt.Errorf("container: inspect Podman socket: %w", err)
+			return Socket{}, errors.New("container: inspect Podman socket failed")
 		}
 		return resolve(candidate)
 	}
@@ -179,7 +179,7 @@ func resolveDiscovered(name string, candidates []string, ownership func(os.FileI
 			if os.IsNotExist(err) {
 				continue
 			}
-			return Socket{}, fmt.Errorf("container: inspect %s socket: %w", name, err)
+			return Socket{}, fmt.Errorf("container: inspect %s socket failed", name)
 		}
 		return resolveSocket(name, candidate, ownership)
 	}
@@ -191,7 +191,7 @@ func resolveSocket(name, path string, ownership func(os.FileInfo) error) (Socket
 		return Socket{}, fmt.Errorf("container: %s socket path must be absolute", name)
 	}
 	if _, err := os.Lstat(path); err != nil {
-		return Socket{}, fmt.Errorf("container: inspect %s socket: %w", name, err)
+		return Socket{}, fmt.Errorf("container: inspect %s socket failed", name)
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {

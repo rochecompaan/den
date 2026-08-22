@@ -65,6 +65,38 @@ let
     podman = { };
     inherit dependencies;
   };
+  missingPrograms = pkgs.runCommand "missing-mandatory-programs" { } ''
+    mkdir -p "$out/bin"
+    touch "$out/bin/claude" "$out/bin/docker"
+  '';
+  extraDocker = pkgs.writeShellScriptBin "docker" "exit 0";
+  invalidAgent = mkAgentSandbox {
+    adapter = adapter.adapter // {
+      runtimePackages = [ missingPrograms ];
+      agent = adapter.adapter.agent // { executable = "${missingPrograms}/bin/claude"; };
+    };
+    configDir = null;
+    extraPkgs = [ ];
+    docker = { };
+    podman = { };
+    inherit dependencies;
+  };
+  invalidDocker = mkAgentSandbox {
+    adapter = adapter.adapter;
+    configDir = null;
+    extraPkgs = [ extraDocker ];
+    docker = {
+      enable = true;
+      package = missingPrograms;
+      composePackage = fakeDockerCompose;
+    };
+    podman = { };
+    inherit dependencies;
+  };
+  expectedBuildFailures = [
+    (pkgs.testers.testBuildFailure invalidAgent)
+    (pkgs.testers.testBuildFailure invalidDocker)
+  ];
 in
 assert builtins.attrNames den.packages == [ "claude" "default" ];
 assert builtins.attrNames den.lib == [ "mkClaude" ];
@@ -111,7 +143,7 @@ assert fails ((mkClaude { resourceBundles = [ ]; }).outPath);
 assert fails ((mkClaude { claudeResources = [ ]; }).outPath);
 pkgs.runCommand "package-api"
   {
-    nativeBuildInputs = [ pkgs.coreutils pkgs.jq ];
+    nativeBuildInputs = [ pkgs.coreutils pkgs.jq ] ++ expectedBuildFailures;
     defaultManifest = claude.denManifest;
     customManifest = custom.denManifest;
     darwinFixtureManifest = darwinFixture.denManifest;

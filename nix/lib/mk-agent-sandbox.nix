@@ -33,6 +33,9 @@ let
   ];
   clientPrograms = config: packages: names:
     if config.enable then lib.zipListsWith (package: name: "${package}/bin/${name}") packages names else [ ];
+  dockerClientPrograms = clientPrograms options.docker dockerPackages [ "docker" "docker-compose" ];
+  podmanClientPrograms = clientPrograms options.podman podmanPackages [ "podman" "podman-compose" ];
+  requiredPrograms = [ adapter.agent.executable ] ++ dockerClientPrograms ++ podmanClientPrograms;
   closureRoots = (map (name: deps.${name}) requiredDependencies)
     ++ adapterRuntimePackages ++ adapterClosureOnlyPackages
     ++ dockerPackages ++ podmanPackages ++ options.extraPkgs;
@@ -65,11 +68,11 @@ let
     agent = adapter.agent;
     docker = {
       inherit (options.docker) enable socketPath hostPorts;
-      clientPrograms = clientPrograms options.docker dockerPackages [ "docker" "docker-compose" ];
+      clientPrograms = dockerClientPrograms;
     };
     podman = {
       inherit (options.podman) enable socketPath hostPorts;
-      clientPrograms = clientPrograms options.podman podmanPackages [ "podman" "podman-compose" ];
+      clientPrograms = podmanClientPrograms;
     };
   });
 in
@@ -89,6 +92,16 @@ pkgs.runCommand "claude"
     };
   }
   ''
+    for program in ${lib.escapeShellArgs requiredPrograms}; do
+      case "$program" in
+        /nix/store/*) ;;
+        *) echo "mandatory program path is not an absolute store path" >&2; exit 1 ;;
+      esac
+      if [ ! -f "$program" ] || [ ! -x "$program" ]; then
+        echo "mandatory program is not an executable regular file" >&2
+        exit 1
+      fi
+    done
     mkdir -p "$out/bin"
     cat > "$out/bin/claude" <<'EOF'
     #!${deps.bash}/bin/bash

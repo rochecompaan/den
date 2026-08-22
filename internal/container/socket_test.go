@@ -225,3 +225,40 @@ func listenSocket(t *testing.T, path string) string {
 }
 
 func pointer(value string) *string { return &value }
+
+func TestSocketInspectionErrorsDoNotDiscloseEnvironmentPaths(t *testing.T) {
+	root := t.TempDir()
+	sentinel := "sentinel-secret-socket-path"
+	notDirectory := filepath.Join(root, sentinel)
+	if err := os.WriteFile(notDirectory, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{"DOCKER_HOST", func() error {
+			_, err := ResolveDocker(Config{Enable: true}, Env{"DOCKER_HOST": "unix://" + filepath.Join(notDirectory, "docker.sock")}, Home(root))
+			return err
+		}},
+		{"CONTAINER_HOST", func() error {
+			_, err := ResolvePodman(Config{Enable: true}, Env{"CONTAINER_HOST": "unix://" + filepath.Join(notDirectory, "podman.sock")}, Home(root), UID(os.Getuid()), "darwin")
+			return err
+		}},
+		{"XDG_RUNTIME_DIR", func() error {
+			_, err := ResolveDocker(Config{Enable: true}, Env{"XDG_RUNTIME_DIR": notDirectory}, Home(""))
+			return err
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.run()
+			if err == nil {
+				t.Fatal("socket resolution error = nil")
+			}
+			if strings.Contains(err.Error(), sentinel) {
+				t.Fatalf("error disclosed environment path: %v", err)
+			}
+		})
+	}
+}
