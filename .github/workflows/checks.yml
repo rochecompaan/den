@@ -19,12 +19,16 @@ jobs:
         include:
           - system: x86_64-linux
             runner: ubuntu-24.04
+            nix_sandbox: "true"
           - system: aarch64-linux
             runner: ubuntu-24.04-arm
+            nix_sandbox: "true"
           - system: x86_64-darwin
             runner: macos-15-intel
+            nix_sandbox: relaxed
           - system: aarch64-darwin
             runner: macos-15
+            nix_sandbox: relaxed
 
     steps:
       - name: Check out full source
@@ -33,11 +37,24 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Enable Linux user namespaces
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          if sysctl -n kernel.unprivileged_userns_clone >/dev/null 2>&1; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          unshare --user --map-root-user true
+
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3 # v17
         with:
           extra-conf: |
-            sandbox = true
+            sandbox = ${{ matrix.nix_sandbox }}
 
       - name: Evaluate and run native checks
         shell: bash
