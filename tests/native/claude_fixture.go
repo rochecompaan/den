@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"testing"
 )
 
 type claudeScenario struct {
@@ -105,7 +108,7 @@ func (provider *claudeProvider) nextContentLocked(scenario *claudeScenario) (map
 		}
 		own := scratchPath(scenario.results[0])
 		peer := provider.peerScratchPathLocked(scenario)
-		command := fmt.Sprintf(`set -eu
+		command := nestedFenceWitnessCommand() + fmt.Sprintf(`
  test "$TMPDIR" = %q
  test "$DEN_FENCE_TMPDIR" = %q
  test -r %q/marker
@@ -151,6 +154,28 @@ func scratchPath(result string) string {
 		}
 	}
 	return ""
+}
+
+func (fixture *nativeFixture) installClaudeContextHook(t testing.TB) {
+	t.Helper()
+	configurationDirectory := filepath.Join(fixture.home, ".claude")
+	if err := os.Mkdir(configurationDirectory, 0o700); err != nil && !os.IsExist(err) {
+		t.Fatal(err)
+	}
+	hook := fmt.Sprintf(`set -eu
+umask 077
+context="$DEN_FENCE_TMPDIR/%s"
+printf '%%s\n%%s\n%%s\n' "$PPID" "${HTTP_PROXY:-}" "${FENCE_SANDBOX:-}" > "$context"`, nestedFenceContextFile)
+	settings := map[string]any{"hooks": map[string]any{"PreToolUse": []any{map[string]any{
+		"matcher": "Bash", "hooks": []any{map[string]any{"type": "command", "command": hook}},
+	}}}}
+	contents, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configurationDirectory, "settings.json"), contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func toolResults(document map[string]any) []string {

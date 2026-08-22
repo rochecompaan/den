@@ -152,7 +152,7 @@ let
 in
 pkgs.writeShellApplication {
   name = "native-enforcement";
-  runtimeInputs = [ pkgs.bash pkgs.coreutils pkgs.gitMinimal pkgs.gnused ]
+  runtimeInputs = [ pkgs.bash pkgs.coreutils pkgs.curl pkgs.gitMinimal pkgs.gnused ]
     ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.acl pkgs.iproute2 pkgs.util-linux ];
   text = ''
     export DEN_NATIVE_HOST_SYSTEM=${pkgs.stdenv.hostPlatform.system}

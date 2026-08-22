@@ -82,6 +82,7 @@ func TestDarwinACLGrantRejected(t *testing.T) {
 
 func TestDarwinBashHook(t *testing.T) {
 	fixture := newNativeFixture(t)
+	fixture.installClaudeContextHook(t)
 	replacement := filepath.Join(fixture.worktree, "replacement-policy")
 	if err := os.WriteFile(replacement, []byte("replacement\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -114,12 +115,15 @@ func TestDarwinBashHook(t *testing.T) {
 
 	allowedMarker := filepath.Join(fixture.worktree, "allowed-rerouted")
 	blockedMarker := filepath.Join(fixture.worktree, "allowed-sequence-blocked")
-	allowed := fmt.Sprintf(`printf allowed > %s; printf 'scratch:%%s\n' "$DEN_FENCE_TMPDIR"`, strconv.Quote(allowedMarker))
+	allowed := nestedFenceWitnessCommand() + fmt.Sprintf(`
+printf allowed > %s
+printf 'scratch:%%s\n' "$DEN_FENCE_TMPDIR"`, strconv.Quote(allowedMarker))
 	blocked := fmt.Sprintf(`gh repo create forbidden; printf escaped > %s`, strconv.Quote(blockedMarker))
 	scenario := fixture.provider.register(allowed, blocked)
 	requireSuccess(t, fixture.launchClaude(scenario, nil))
 	results := fixture.provider.scenarioResults(scenario)
-	if !fileExists(allowedMarker) || fileExists(blockedMarker) || len(results) != 2 || scratchPath(results[0]) == "" {
+	if !fileExists(allowedMarker) || fileExists(blockedMarker) || len(results) != 2 ||
+		scratchPath(results[0]) == "" || !strings.Contains(results[0], "nested-proxy:http://") {
 		t.Fatalf("packaged Claude did not reroute allowed and deny blocked Bash calls: %#v", results)
 	}
 }
@@ -151,12 +155,13 @@ func TestDarwinHookCannotBeSuppressed(t *testing.T) {
 
 func TestDarwinTemporaryDirectories(t *testing.T) {
 	fixture := newNativeFixture(t)
+	fixture.installClaudeContextHook(t)
 	probePaths := outsideFencePositiveControls(t)
 	const launches = 2
 	scenarios := make([]*claudeScenario, launches)
 	results := make([]commandResult, launches)
 	for index := range scenarios {
-		first := `set -eu
+		first := nestedFenceWitnessCommand() + `
  test "$TMPDIR" = "$DEN_FENCE_TMPDIR"
  printf own > "$DEN_FENCE_TMPDIR/marker"
  printf 'scratch:%s\n' "$DEN_FENCE_TMPDIR"`
@@ -179,7 +184,8 @@ func TestDarwinTemporaryDirectories(t *testing.T) {
 	for index, result := range results {
 		requireSuccess(t, result)
 		toolResults := fixture.provider.scenarioResults(scenarios[index])
-		if len(toolResults) != 2 || !strings.Contains(toolResults[1], "complete") {
+		if len(toolResults) != 2 || !strings.Contains(toolResults[0], "nested-proxy:http://") ||
+			!strings.Contains(toolResults[1], "nested-proxy:http://") || !strings.Contains(toolResults[1], "complete") {
 			t.Fatalf("scratch tool exchange did not complete: %#v", toolResults)
 		}
 		first, second := scratchPath(toolResults[0]), scratchPath(toolResults[1])
@@ -219,6 +225,7 @@ func (fixture *nativeFixture) launchClaudeWithArguments(scenario *claudeScenario
 		"ANTHROPIC_BASE_URL=" + fixtureURL(tlsRecorderPort, brokerHostname()),
 		"NODE_EXTRA_CA_CERTS=" + fixture.certificate.ca,
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		"DEN_NATIVE_CONTEXT_CURL=/usr/bin/curl",
 	}
 	providerEnvironment = append(providerEnvironment, extraEnvironment...)
 	command.Env = fixture.launchEnvironment(providerEnvironment)

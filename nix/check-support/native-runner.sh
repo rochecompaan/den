@@ -32,18 +32,65 @@ host_parent=$host_base/den-native-enforcement
 mkdir -p "$host_parent"
 chmod 700 "$host_parent"
 host_root=$(mktemp -d "$host_parent/run.XXXXXX")
-darwin_resolver=
+darwin_resolver_target=
+darwin_resolver_staging=
+darwin_resolver_installed=false
 darwin_resolver_dir_created=false
 cleanup() {
-  if [[ -n $darwin_resolver ]]; then
-    /usr/bin/sudo -n /bin/rm -f "$darwin_resolver" >/dev/null 2>&1 || true
+  status=$?
+  cleanup_failed=0
+  trap - EXIT HUP INT TERM
+
+  if [[ -n $darwin_resolver_target ]]; then
+    if [[ -e $darwin_resolver_target ]]; then
+      if $darwin_resolver_installed || [[ -e $darwin_resolver_staging && $darwin_resolver_target -ef $darwin_resolver_staging ]]; then
+        if ! /usr/bin/sudo -n /bin/rm "$darwin_resolver_target"; then
+          printf 'native registry resolver entry cleanup failed\n' >&2
+          cleanup_failed=1
+        elif [[ -e $darwin_resolver_target ]]; then
+          printf 'native registry resolver entry remains after cleanup\n' >&2
+          cleanup_failed=1
+        fi
+      else
+        printf 'native registry resolver entry appeared during failed setup; refusing to remove it\n' >&2
+        cleanup_failed=1
+      fi
+    elif $darwin_resolver_installed; then
+      printf 'native registry resolver entry disappeared before cleanup\n' >&2
+      cleanup_failed=1
+    fi
+    if [[ -n $darwin_resolver_staging && -e $darwin_resolver_staging ]]; then
+      if ! /usr/bin/sudo -n /bin/rm "$darwin_resolver_staging"; then
+        printf 'native registry resolver staging cleanup failed\n' >&2
+        cleanup_failed=1
+      elif [[ -e $darwin_resolver_staging ]]; then
+        printf 'native registry resolver staging remains after cleanup\n' >&2
+        cleanup_failed=1
+      fi
+    fi
   fi
   if $darwin_resolver_dir_created; then
-    /usr/bin/sudo -n /bin/rmdir /etc/resolver >/dev/null 2>&1 || true
+    if ! /usr/bin/sudo -n /bin/rmdir /etc/resolver; then
+      printf 'native registry resolver directory cleanup failed\n' >&2
+      cleanup_failed=1
+    elif [[ -d /etc/resolver ]]; then
+      printf 'native registry resolver directory remains after cleanup\n' >&2
+      cleanup_failed=1
+    fi
   fi
-  rm -rf "$host_root"
+  if ! rm -rf "$host_root"; then
+    printf 'native enforcement fixture cleanup failed\n' >&2
+    cleanup_failed=1
+  fi
+  if (( status == 0 && cleanup_failed != 0 )); then
+    status=1
+  fi
+  exit "$status"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 export DEN_NATIVE_HOST_ROOT=$host_root/fixtures
 mkdir -m 700 "$DEN_NATIVE_HOST_ROOT"
@@ -56,14 +103,43 @@ if [[ $DEN_NATIVE_HOST_SYSTEM == *-darwin ]]; then
     printf 'native registry resolver entry already exists\n' >&2
     exit 1
   fi
-  darwin_resolver=$resolver_target
   /usr/bin/sudo -n /usr/bin/true
   if [[ ! -d /etc/resolver ]]; then
     /usr/bin/sudo -n /bin/mkdir /etc/resolver
     darwin_resolver_dir_created=true
   fi
+  if [[ ! -d /etc/resolver ]]; then
+    printf 'native registry resolver directory setup failed\n' >&2
+    exit 1
+  fi
+
   printf 'nameserver 127.0.0.1\nport %s\n' "$DEN_NATIVE_DNS_PORT" > "$host_root/registry-resolver"
-  /usr/bin/sudo -n /usr/bin/install -m 0644 "$host_root/registry-resolver" "$resolver_target"
+  darwin_resolver_target=$resolver_target
+  darwin_resolver_staging=/etc/resolver/.den-native-registry.$$
+  if [[ -e $darwin_resolver_staging ]]; then
+    printf 'native registry resolver staging entry already exists\n' >&2
+    exit 1
+  fi
+  /usr/bin/sudo -n /usr/bin/install -m 0644 "$host_root/registry-resolver" "$darwin_resolver_staging"
+  if [[ ! -f $darwin_resolver_staging ]]; then
+    printf 'native registry resolver staging setup failed\n' >&2
+    exit 1
+  fi
+  if ! /usr/bin/sudo -n /bin/ln "$darwin_resolver_staging" "$darwin_resolver_target"; then
+    printf 'native registry resolver entry appeared during setup\n' >&2
+    exit 1
+  fi
+  if [[ ! $darwin_resolver_target -ef $darwin_resolver_staging ]]; then
+    printf 'native registry resolver entry verification failed\n' >&2
+    exit 1
+  fi
+  darwin_resolver_installed=true
+  /usr/bin/sudo -n /bin/rm "$darwin_resolver_staging"
+  if [[ -e $darwin_resolver_staging ]]; then
+    printf 'native registry resolver staging remains after setup\n' >&2
+    exit 1
+  fi
+  darwin_resolver_staging=
   "$DEN_NATIVE_TEST_BINARY" -test.count=1 -test.timeout=2m
   exit
 fi
