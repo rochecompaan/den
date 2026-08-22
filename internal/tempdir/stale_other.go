@@ -4,7 +4,6 @@ package tempdir
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -46,7 +45,7 @@ func removeStale(root string, uid int, olderThan time.Duration, now func() time.
 			_ = directory.Close()
 			continue
 		}
-		descriptorPath := fmt.Sprintf("/dev/fd/%d", directory.Fd())
+		descriptorPath := openedDirectoryPath(directory)
 		lease, err := os.OpenFile(filepath.Join(descriptorPath, leaseName), os.O_RDWR, 0)
 		if err != nil {
 			_ = directory.Close()

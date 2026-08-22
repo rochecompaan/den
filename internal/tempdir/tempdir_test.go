@@ -223,7 +223,7 @@ func TestRemoveOpenedDirectoryContentsPreservesReplacementPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stablePath := fmt.Sprintf("/proc/self/fd/%d", directory.Fd())
+	stablePath := openedDirectoryPath(directory)
 	if err := removeOpenedDirectoryContents(directory, stablePath); err != nil {
 		t.Fatal(err)
 	}
