@@ -128,6 +128,17 @@ fi
 [[ $cleanup_status -eq 1 ]]
 resolver_lifecycle_status 0 0
 
+for signal_status in 129 130 143; do
+  propagated_status=0
+  if resolver_lifecycle_status 0 "$signal_status"; then
+    printf 'helper signal status unexpectedly succeeded: %s\n' "$signal_status" >&2
+    exit 1
+  else
+    propagated_status=$?
+  fi
+  [[ $propagated_status -eq $signal_status ]]
+done
+
 for signal_name in HUP INT TERM; do
   run_start_signal_case "$signal_name" start_after_coproc
   run_stop_signal_case "$signal_name" stop_after_input_close

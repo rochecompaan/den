@@ -152,6 +152,9 @@ resolver_lifecycle_status() {
   if (( primary_status != 0 )); then
     return "$primary_status"
   fi
+  if (( helper_status >= 128 )); then
+    return "$helper_status"
+  fi
   if (( helper_status != 0 )); then
     return 1
   fi

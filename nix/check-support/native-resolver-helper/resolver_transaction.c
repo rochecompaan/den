@@ -152,11 +152,11 @@ int resolver_transaction_begin(struct resolver_transaction *transaction,
   if (fstat(transaction->resolver_fd, &status) != 0) {
     return fail_begin(transaction, errno);
   }
+  transaction->resolver_identity = identity_of(&status);
   if (validate_directory(transaction->resolver_fd, &status, required_owner, acl_probe,
                          acl_context) != 0) {
     return fail_begin(transaction, errno);
   }
-  transaction->resolver_identity = identity_of(&status);
 
   transaction->target_fd = openat(transaction->resolver_fd, target_name,
                                   O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);

@@ -186,7 +186,8 @@ static void test_directory_replacement_refused(void) {
 
 static void test_extended_directory_acl_refused(void) {
   for (int rejected_directory = 1; rejected_directory <= 2; ++rejected_directory) {
-    char *root = make_root(true, 0755);
+    bool create_resolver = rejected_directory == 2;
+    char *root = make_root(!create_resolver, 0755);
     struct resolver_transaction transaction;
     resolver_transaction_init(&transaction);
     struct acl_fixture context = {.reject_call = rejected_directory};
@@ -195,24 +196,41 @@ static void test_extended_directory_acl_refused(void) {
             "named unprivileged write/delete ACL was accepted");
     require(resolver_transaction_cleanup(&transaction) == 0, "ACL rejection cleanup failed");
     char target[512];
+    char resolver[512];
     snprintf(target, sizeof(target), "%s/etc/resolver/%s", root, target_name);
+    snprintf(resolver, sizeof(resolver), "%s/etc/resolver", root);
     errno = 0;
     require(access(target, F_OK) != 0 && errno == ENOENT,
             "target was installed before extended ACL rejection");
+    if (create_resolver) {
+      errno = 0;
+      require(access(resolver, F_OK) != 0 && errno == ENOENT,
+              "created resolver directory remained after ACL rejection");
+    }
     remove_root(root);
   }
 }
 
 static void test_acl_probe_error_refused(void) {
-  char *root = make_root(true, 0755);
-  struct resolver_transaction transaction;
-  resolver_transaction_init(&transaction);
-  struct acl_fixture context = {.error_call = 1};
-  require(resolver_transaction_begin(&transaction, root, geteuid(), fixture_contents,
-                                     fixture_acl_probe, &context) != 0,
-          "directory ACL probe error was accepted");
-  require(resolver_transaction_cleanup(&transaction) == 0, "ACL probe error cleanup failed");
-  remove_root(root);
+  for (int error_directory = 1; error_directory <= 2; ++error_directory) {
+    bool create_resolver = error_directory == 2;
+    char *root = make_root(!create_resolver, 0755);
+    struct resolver_transaction transaction;
+    resolver_transaction_init(&transaction);
+    struct acl_fixture context = {.error_call = error_directory};
+    require(resolver_transaction_begin(&transaction, root, geteuid(), fixture_contents,
+                                       fixture_acl_probe, &context) != 0,
+            "directory ACL probe error was accepted");
+    require(resolver_transaction_cleanup(&transaction) == 0, "ACL probe error cleanup failed");
+    if (create_resolver) {
+      char resolver[512];
+      snprintf(resolver, sizeof(resolver), "%s/etc/resolver", root);
+      errno = 0;
+      require(access(resolver, F_OK) != 0 && errno == ENOENT,
+              "created resolver directory remained after ACL probe error");
+    }
+    remove_root(root);
+  }
 }
 
 static void test_live_root_is_private(void) {
