@@ -329,10 +329,10 @@
       },
       "locked": {
         "lastModified": 1786091253,
-        "narHash": "sha256-Kd5311YhC7B7iAWsW+Uag5zJ7itOHlJ5x+jfNk94SC4=",
+        "narHash": "sha256-emlnrFdbUI7KEHzu4fEWrAkSXN1CsuhbfeQMlVrpptU=",
         "owner": "rochecompaan",
         "repo": "repowolf",
-        "rev": "52fbef19c870f7381d772c4c1a937a1a38ec44bb",
+        "rev": "973b6983c5a39c65a44f3e8b948e3007665e0940",
         "type": "github"
       },
       "original": {
