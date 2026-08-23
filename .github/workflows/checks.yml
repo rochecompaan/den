@@ -20,19 +20,15 @@ jobs:
           - system: x86_64-linux
             runner: ubuntu-24.04
             nix_sandbox: "true"
-            nix_allowed_impure_host_deps: ""
           - system: aarch64-linux
             runner: ubuntu-24.04-arm
             nix_sandbox: "true"
-            nix_allowed_impure_host_deps: ""
           - system: x86_64-darwin
             runner: macos-15-intel
             nix_sandbox: relaxed
-            nix_allowed_impure_host_deps: /bin/ls
           - system: aarch64-darwin
             runner: macos-15
             nix_sandbox: relaxed
-            nix_allowed_impure_host_deps: /bin/ls
 
     steps:
       - name: Check out full source
@@ -59,7 +55,6 @@ jobs:
         with:
           extra-conf: |
             sandbox = ${{ matrix.nix_sandbox }}
-            allowed-impure-host-deps = ${{ matrix.nix_allowed_impure_host_deps }}
 
       - name: Evaluate and run native checks
         shell: bash

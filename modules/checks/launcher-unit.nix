@@ -10,7 +10,7 @@
       checks.launcher-unit = pkgs.runCommand "launcher-unit"
         {
           src = ../..;
-          nativeBuildInputs = [ pkgs.go pkgs.util-linux pkgs.procps ];
+          nativeBuildInputs = [ pkgs.go pkgs.util-linux pkgs.procps pkgs.python3 pkgs.jq ];
         }
         ''
           export HOME="$TMPDIR"
@@ -19,9 +19,15 @@
           chmod -R u+w source
           cd source
           go test ./internal/... ./cmd/... -count=1
+          ${pkgs.python3}/bin/python3 tests/check-derivation-impure-host-deps.py \
+            "$PWD/scripts/check-derivation-impure-host-deps.py"
           ${pkgs.bash}/bin/bash tests/check-native-driver.sh "$PWD/scripts/check-native.sh"
+          ${pkgs.bash}/bin/bash tests/native-runner.sh \
+            "$PWD/nix/check-support/native-runner.sh"
           ${pkgs.bash}/bin/bash tests/native-resolver-lifecycle.sh \
             "$PWD/nix/check-support/native-resolver-lifecycle.sh"
+          ${pkgs.bash}/bin/bash tests/claude-startup-runtime-manifest.sh \
+            "$PWD/nix/check-support/claude-startup-runtime-manifest.sh"
 
           test -x ${den-launcher}/bin/den-launcher
           test ! -e ${den-launcher}/bin/den

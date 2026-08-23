@@ -21,7 +21,10 @@ case "$DEN_NATIVE_HOST_SYSTEM" in
     ;;
   *-darwin)
     : "${DEN_NATIVE_RESOLVER_HELPER:?packaged resolver helper is required}"
-    test -x /usr/bin/sandbox-exec
+    : "${DEN_NATIVE_CLAUDE_STARTUP:?packaged Darwin Claude startup fixture is required}"
+    : "${DEN_NATIVE_SANDBOX_EXEC:?Darwin sandbox-exec path is required}"
+    test -x "$DEN_NATIVE_CLAUDE_STARTUP"
+    test -x "$DEN_NATIVE_SANDBOX_EXEC"
     ;;
   *)
     printf 'unsupported native runner system: %s\n' "$DEN_NATIVE_HOST_SYSTEM" >&2
@@ -91,6 +94,13 @@ mkdir -m 700 "$DEN_NATIVE_HOST_ROOT"
 if [[ $DEN_NATIVE_HOST_SYSTEM == *-darwin ]]; then
   export TMPDIR=${TMPDIR:-/tmp}
   export DEN_NATIVE_DNS_PORT=38415
+  printf 'executing Darwin Claude startup fixture as the invoking host user\n'
+  "$DEN_NATIVE_CLAUDE_STARTUP"
+  completion=$DEN_NATIVE_HOST_ROOT/claude-startup.complete
+  if [[ ! -f $completion || $(<"$completion") != complete ]]; then
+    printf 'Darwin Claude startup fixture did not produce its completion artifact\n' >&2
+    exit 1
+  fi
   start_resolver_helper /usr/bin/sudo -n "$DEN_NATIVE_RESOLVER_HELPER"
 
   test_status=0

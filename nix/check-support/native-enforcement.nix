@@ -1,4 +1,4 @@
-{ inputs, pkgs, claude }:
+{ inputs, pkgs, claude, claudeStartup ? null }:
 
 let
   fence = (import ../lib/fence.nix { inherit pkgs; }).package;
@@ -194,6 +194,11 @@ let
     '';
   };
 in
+assert pkgs.lib.assertMsg
+  (!pkgs.stdenv.isDarwin ||
+    (claudeStartup != null &&
+     (claudeStartup.denHostFixturePlatform or null) == "darwin"))
+  "Darwin native enforcement requires the packaged Darwin Claude startup fixture";
 pkgs.writeShellApplication {
   name = "native-enforcement";
   runtimeInputs = [ pkgs.bash pkgs.coreutils pkgs.curl pkgs.gitMinimal pkgs.gnused ]
@@ -211,6 +216,10 @@ pkgs.writeShellApplication {
     export DEN_NATIVE_REPOWOLF_FIXTURE=${repoWolfFixture}/bin/den-native-repowolf-fixture
     export DEN_NATIVE_UNRELATED_STORE_FILE=${unrelatedStoreFile}
     export DEN_NATIVE_RESOLVER_HELPER=${resolverHelper}/bin/den-native-resolver-helper
+    ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+      export DEN_NATIVE_CLAUDE_STARTUP=${claudeStartup}/bin/claude-startup
+      export DEN_NATIVE_SANDBOX_EXEC=/usr/bin/sandbox-exec
+    ''}
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
       export DEN_NATIVE_ACL=${pkgs.acl}/bin/setfacl
       export DEN_NATIVE_GETFACL=${pkgs.acl}/bin/getfacl

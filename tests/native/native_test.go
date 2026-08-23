@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,6 +27,26 @@ var requiredEnvironment = []string{
 	"DEN_NATIVE_UNRELATED_STORE_FILE",
 }
 
+const claudeStartupCompletion = "claude-startup.complete"
+
+func requireClaudeStartupCompletion(goos, root string) error {
+	if goos != "darwin" {
+		return nil
+	}
+	if root == "" {
+		return fmt.Errorf("Darwin Claude startup completion requires DEN_NATIVE_HOST_ROOT")
+	}
+	path := filepath.Join(root, claudeStartupCompletion)
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read Darwin Claude startup completion: %w", err)
+	}
+	if string(contents) != "complete\n" {
+		return fmt.Errorf("unexpected Darwin Claude startup completion content: %q", contents)
+	}
+	return nil
+}
+
 func TestMain(m *testing.M) {
 	for _, name := range requiredEnvironment {
 		value := os.Getenv(name)
@@ -41,7 +62,46 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 	}
+	if err := requireClaudeStartupCompletion(runtime.GOOS, os.Getenv("DEN_NATIVE_HOST_ROOT")); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	os.Exit(m.Run())
+}
+
+func TestClaudeStartupCompletionContract(t *testing.T) {
+	wrongContent := "incomplete\n"
+	completeContent := "complete\n"
+	tests := []struct {
+		name     string
+		goos     string
+		root     bool
+		contents *string
+		wantErr  bool
+	}{
+		{name: "linux ignores empty root", goos: "linux"},
+		{name: "darwin requires root", goos: "darwin", wantErr: true},
+		{name: "darwin requires artifact", goos: "darwin", root: true, wantErr: true},
+		{name: "darwin rejects wrong content", goos: "darwin", root: true, contents: &wrongContent, wantErr: true},
+		{name: "darwin accepts completion", goos: "darwin", root: true, contents: &completeContent},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := ""
+			if test.root {
+				root = t.TempDir()
+			}
+			if test.contents != nil {
+				if err := os.WriteFile(filepath.Join(root, "claude-startup.complete"), []byte(*test.contents), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := requireClaudeStartupCompletion(test.goos, root)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("requireClaudeStartupCompletion(%q, %q) error = %v, want error %t", test.goos, root, err, test.wantErr)
+			}
+		})
+	}
 }
 
 func TestPackagedFenceIsReal(t *testing.T) {
