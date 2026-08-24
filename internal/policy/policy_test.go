@@ -267,6 +267,33 @@ func TestAllowedDomainsDoNotMatchDeniedGitHosts(t *testing.T) {
 	}
 }
 
+func TestMakePathsCreatesSocketUnderLongPolicyRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), strings.Repeat("policy-root-", 10))
+	var socketDir string
+	t.Run("creates and cleans up socket", func(t *testing.T) {
+		paths := makePaths(t, root)
+		socketDir = filepath.Dir(paths.socket)
+		for _, path := range []string{paths.ca, paths.closureRead, paths.closureExec, paths.worktree, paths.scratch, paths.state, paths.defaultState, paths.policy} {
+			if !strings.HasPrefix(path, root+string(os.PathSeparator)) {
+				t.Errorf("fixture path %q is outside root %q", path, root)
+			}
+		}
+		if !strings.HasPrefix(paths.socket, os.TempDir()+string(os.PathSeparator)) || strings.HasPrefix(paths.socket, root+string(os.PathSeparator)) {
+			t.Fatalf("socket path %q is not in a short temporary directory", paths.socket)
+		}
+		info, err := os.Stat(paths.socket)
+		if err != nil {
+			t.Fatalf("stat socket: %v", err)
+		}
+		if info.Mode()&os.ModeSocket == 0 {
+			t.Fatalf("mode = %v, want Unix socket", info.Mode())
+		}
+	})
+	if _, err := os.Stat(socketDir); !os.IsNotExist(err) {
+		t.Fatalf("socket directory remains after cleanup: %v", err)
+	}
+}
+
 func readBase(t *testing.T) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "policy", "fence.json"))
@@ -294,7 +321,16 @@ type testPaths struct{ ca, closureRead, closureExec, worktree, scratch, state, d
 
 func makePaths(t *testing.T, root string) testPaths {
 	t.Helper()
-	p := testPaths{ca: filepath.Join(root, "ca.pem"), closureRead: filepath.Join(root, "closure-read"), closureExec: filepath.Join(root, "closure-exec"), worktree: filepath.Join(root, "worktree"), scratch: filepath.Join(root, "scratch"), state: filepath.Join(root, "state"), defaultState: filepath.Join(root, "default-state"), socket: filepath.Join(root, "daemon.sock"), policy: filepath.Join(root, "policy", "fence.json")}
+	socketDir, err := os.MkdirTemp("", "den-policy-socket-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(socketDir); err != nil {
+			t.Errorf("remove socket directory: %v", err)
+		}
+	})
+	p := testPaths{ca: filepath.Join(root, "ca.pem"), closureRead: filepath.Join(root, "closure-read"), closureExec: filepath.Join(root, "closure-exec"), worktree: filepath.Join(root, "worktree"), scratch: filepath.Join(root, "scratch"), state: filepath.Join(root, "state"), defaultState: filepath.Join(root, "default-state"), socket: filepath.Join(socketDir, "daemon.sock"), policy: filepath.Join(root, "policy", "fence.json")}
 	for _, dir := range []string{p.closureRead, p.closureExec, p.worktree, p.scratch, p.state, p.defaultState, filepath.Dir(p.policy)} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
