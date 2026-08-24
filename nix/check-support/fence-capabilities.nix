@@ -4,12 +4,7 @@ let
   closure = pkgs.closureInfo {
     rootPaths = [ fence pkgs.bash pkgs.coreutils pkgs.gnugrep pkgs.jq ];
   };
-in
-pkgs.runCommand "fence-capabilities"
-  {
-    nativeBuildInputs = [ pkgs.jq ];
-  }
-  (if pkgs.stdenv.isLinux then ''
+  linuxCapabilities = ''
     set -eu
     fence=${fence}/bin/fence
 
@@ -121,9 +116,16 @@ pkgs.runCommand "fence-capabilities"
     test "$(cat "$tmpFenceProbe")" = unchanged
     test ! -e "$tmpFenceChild"
     touch "$out"
-  '' else ''
+  '';
+  darwinCapabilities = ''
     set -eu
     fence=${fence}/bin/fence
+
+    : "''${DEN_NATIVE_HOST_ROOT:?native host root is required}"
+    root=$DEN_NATIVE_HOST_ROOT/fence-capabilities
+    mkdir -p "$root"
+    chmod 0700 "$root"
+    cd "$root"
 
     "$fence" --version | grep -F 'Version: 0.1.58'
     "$fence" --help > help.txt
@@ -133,13 +135,13 @@ pkgs.runCommand "fence-capabilities"
     printf '{}\n' | "$fence" --claude-pre-tool-use >hook.out 2>hook.err
     test ! -s hook.err
 
-    root=$TMPDIR/capabilities
     home=$root/home
     worktree=$root/worktree
     state=$root/state
     scratch=$root/scratch
     policyDir=$worktree/.den-policy
-    mkdir -m 0700 -p "$home/.npm/_logs" "$home/.fence" "$worktree" "$state" "$scratch" "$policyDir"
+    mkdir -p "$home/.npm/_logs" "$home/.fence" "$worktree" "$state" "$scratch" "$policyDir"
+    chmod 0700 "$home/.npm/_logs" "$home/.fence" "$worktree" "$state" "$scratch" "$policyDir"
     printf secret > "$home/secret"
     printf unchanged > "$home/.npm/_logs/implicit"
     printf unchanged > "$home/.fence/debug"
@@ -155,6 +157,7 @@ pkgs.runCommand "fence-capabilities"
     policy=$policyDir/fence.json
 
     jq -Rn '[inputs]' < ${closure}/store-paths > closure.json
+    # shellcheck disable=SC2094
     jq -n \
       --argjson closure "$(cat closure.json)" \
       --arg home "$home" --arg worktree "$worktree" --arg state "$state" \
@@ -193,6 +196,7 @@ pkgs.runCommand "fence-capabilities"
     export HOME="$home" WORKTREE="$worktree" STATE="$state" SCRATCH="$scratch"
     export POLICY="$policy" TMP_FENCE_PROBE="$tmpFenceProbe" PRIVATE_FENCE_PROBE="$privateFenceProbe"
     export TMPDIR="$scratch" DEN_FENCE_TMPDIR="$scratch"
+    # shellcheck disable=SC2016
     "$fence" --settings "$policy" -- ${pkgs.bash}/bin/bash -c '
       set -eu
       test "$TMPDIR" = "$SCRATCH"
@@ -209,6 +213,7 @@ pkgs.runCommand "fence-capabilities"
       if printf changed >> "$POLICY" 2>/dev/null; then exit 26; fi
       if printf changed > "$(dirname "$POLICY")/other" 2>/dev/null; then exit 27; fi
     '
+    # shellcheck disable=SC2016
     "$fence" --settings "$policy" -c 'test "$TMPDIR" = "$SCRATCH"; test "$DEN_FENCE_TMPDIR" = "$SCRATCH"; printf wrapper > "$TMPDIR/wrapper"'
     test "$(cat "$scratch/outer")" = outer
     test "$(cat "$scratch/wrapper")" = wrapper
@@ -216,6 +221,22 @@ pkgs.runCommand "fence-capabilities"
     test "$(cat "$home/.fence/debug")" = unchanged
     test "$(cat "$tmpFenceProbe")" = unchanged
     test "$(cat "$privateFenceProbe")" = unchanged
-    test "$(stat -f %Lp "$policy")" = 400
-    touch "$out"
-  '')
+    test "$(${pkgs.coreutils}/bin/stat -c %a "$policy")" = 400
+    printf 'complete\n' > "$DEN_NATIVE_HOST_ROOT/fence-capabilities.complete"
+  '';
+in
+if pkgs.stdenv.isLinux then
+  pkgs.runCommand "fence-capabilities"
+    {
+      nativeBuildInputs = [ pkgs.jq ];
+    }
+    linuxCapabilities
+else
+  pkgs.writeShellApplication {
+    name = "fence-capabilities";
+    runtimeInputs = [ pkgs.coreutils pkgs.gnugrep pkgs.jq ];
+    derivationArgs = {
+      passthru.denHostFixturePlatform = "darwin";
+    };
+    text = darwinCapabilities;
+  }

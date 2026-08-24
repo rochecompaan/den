@@ -2,6 +2,9 @@
 
 let
   fence = (import ../lib/fence.nix { inherit pkgs; }).package;
+  fenceCapabilities = import ./fence-capabilities.nix {
+    inherit pkgs fence;
+  };
   claudeSettingsMerge = import ./claude-settings-merge.nix { inherit pkgs; };
   repoWolfClient = import ../packages/repowolf-client.nix { inherit inputs pkgs; };
   repoWolfFixture = pkgs.buildGoModule {
@@ -197,11 +200,13 @@ in
 assert pkgs.lib.assertMsg
   (!pkgs.stdenv.isDarwin ||
     (claudeStartup != null &&
-     (claudeStartup.denHostFixturePlatform or null) == "darwin"))
-  "Darwin native enforcement requires the packaged Darwin Claude startup fixture";
+     (claudeStartup.denHostFixturePlatform or null) == "darwin" &&
+     (fenceCapabilities.denHostFixturePlatform or null) == "darwin"))
+  "Darwin native enforcement requires the packaged Darwin host fixtures";
 pkgs.writeShellApplication {
   name = "native-enforcement";
   runtimeInputs = [ pkgs.bash pkgs.coreutils pkgs.curl pkgs.gitMinimal pkgs.gnused ]
+    ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.diffutils ]
     ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.acl pkgs.iproute2 pkgs.util-linux ];
   text = ''
     export DEN_NATIVE_HOST_SYSTEM=${pkgs.stdenv.hostPlatform.system}
@@ -218,6 +223,7 @@ pkgs.writeShellApplication {
     export DEN_NATIVE_RESOLVER_HELPER=${resolverHelper}/bin/den-native-resolver-helper
     ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
       export DEN_NATIVE_CLAUDE_STARTUP=${claudeStartup}/bin/claude-startup
+      export DEN_NATIVE_FENCE_CAPABILITIES=${fenceCapabilities}/bin/fence-capabilities
       export DEN_NATIVE_SANDBOX_EXEC=/usr/bin/sandbox-exec
     ''}
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''

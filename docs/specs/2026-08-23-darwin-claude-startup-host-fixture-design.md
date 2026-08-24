@@ -360,3 +360,76 @@ The change is complete when all of these results are available:
 12. Fresh independent review has no unresolved blocking findings.
 13. Both push and pull-request CI runs pass at the pushed branch head.
 14. PR #1 remains open and unmerged.
+
+## Addendum: Darwin Fence Capability Host Fixture
+
+### Trigger and root cause
+
+The first Task 8 CI run exposed a separate Darwin-only failure in the pre-existing `fence-capabilities` check. Fence 0.1.58 initializes its HTTP and SOCKS proxies for runtime `--settings` and `-c` commands. The HTTP proxy binds `127.0.0.1:0`. Darwin's Nix build sandbox rejects that bind with `operation not permitted`, so both Darwin architectures fail before `native-runner.sh` starts.
+
+Linux does not have this deterministic failure. Its existing `fence-capabilities` derivation and all Linux execution behavior must remain unchanged.
+
+### Approved execution boundary
+
+`nix/check-support/fence-capabilities.nix` will keep one platform-specific assertion body per platform. The Linux result remains the current `pkgs.runCommand`, which executes every Linux assertion inside the Nix build sandbox.
+
+On Darwin, the same existing Darwin assertion body will become a Nix-built executable. Building `checks.fence-capabilities` will package the executable and its exact dependencies without running Fence. The executable will retain all current version, help, hook, configuration, policy, resource-integrity, temporary-path, and ACL assertions. This package-only boundary avoids a second static script and keeps each Darwin assertion in one place.
+
+The Darwin executable will use a dedicated child of `DEN_NATIVE_HOST_ROOT` for ordinary fixture state. The intentional `/tmp/fence` and `/private/tmp/fence` probes will remain at those absolute host paths because they verify Fence's implicit temporary-path controls. Cleanup must remove only paths created by the fixture.
+
+### Native package wiring
+
+`nix/check-support/native-enforcement.nix` will consume the Darwin executable produced by `fence-capabilities.nix`. The packaged native runner will expose it through one Darwin-only environment variable, `DEN_NATIVE_FENCE_CAPABILITIES`. Linux native-runner inputs and behavior will not change.
+
+The Darwin executable will write `complete` to:
+
+```text
+$DEN_NATIVE_HOST_ROOT/fence-capabilities.complete
+```
+
+It will write this artifact only after its final assertion succeeds. It must not use the artifact to hide or replace any assertion.
+
+### Runner order and failure behavior
+
+The Darwin native runner order will be:
+
+1. run the Claude settings-merge fixture;
+2. create and export the unique `DEN_NATIVE_HOST_ROOT`;
+3. run the Darwin Claude startup fixture and validate `claude-startup.complete`;
+4. run the Darwin Fence capability fixture and validate `fence-capabilities.complete`;
+5. start the resolver helper;
+6. run the native Go suite;
+7. stop the resolver helper and clean the runner-owned host root.
+
+The existing `set -euo pipefail` and completion checks provide fail-fast behavior. If the Fence fixture exits nonzero or omits its completion artifact, resolver startup and native Go execution must not occur. The runner will report a specific missing-artifact error.
+
+### Test strategy
+
+Strict TDD begins in `tests/native-runner.sh`. Before production edits, the behavioral harness will require:
+
+- the exact success order `settings`, `startup`, `fence`, `resolver`, `go`;
+- successful Fence completion before resolver startup;
+- fail-fast behavior when the Fence fixture exits nonzero;
+- fail-fast behavior when the Fence fixture returns success without its completion artifact;
+- cleanup of only the runner-owned host root in every case.
+
+The focused runner test must fail against the current production runner, and that RED result must be recorded before implementation. Production changes may begin only after this failure is observed.
+
+Fresh verification will include the focused runner harness, shell syntax and generated ShellCheck validation, Linux and Darwin Nix evaluation, the native driver checks, `nix flake check --no-build`, and the full flake check. CI must then finish all four jobs in both the push and pull-request runs.
+
+### Rejected alternatives
+
+Splitting Darwin static assertions into a build-time script and runtime assertions into a second host script was rejected because duplicated setup and policy construction could drift. Porting the capability assertions to Go was rejected because it would broaden the change without improving the execution boundary.
+
+No part of this addendum permits `__noChroot`, `allowed-impure-host-deps`, broader host access, relaxed platform sandbox settings, skipped checks, or changes to Linux behavior.
+
+### Addendum acceptance criteria
+
+1. Linux `fence-capabilities` remains behaviorally and structurally unchanged as a sandboxed `runCommand`.
+2. Darwin builds, but does not execute, the Fence capability fixture during `checks.fence-capabilities`.
+3. Darwin executes every existing capability assertion as the invoking host user through `native-runner.sh`.
+4. Ordinary Darwin fixture state stays beneath `DEN_NATIVE_HOST_ROOT`; intentional `/tmp/fence` and `/private/tmp/fence` assertions remain.
+5. The runner requires the Fence completion artifact before resolver startup or native Go execution.
+6. Behavioral tests prove ordering, completion, fail-fast behavior, and cleanup from a recorded RED state.
+7. Nix sandboxing, current platform sandbox values, all four native targets, and every existing assertion remain intact.
+8. Focused and full verification pass, fresh independent review has no unresolved blockers, both CI events finish all four jobs, and PR #1 remains open and unmerged.

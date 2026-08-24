@@ -1593,3 +1593,549 @@ Report:
 - push and pull-request run URLs and conclusions.
 - exact Darwin build and execution lines for both architectures.
 - PR #1 remains open and unmerged.
+
+## Task 8 Recovery Addendum: Darwin Fence Capability Host Fixture
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` to execute this addendum. The sole implementation writer must also use `superpowers:test-driven-development` and `superpowers:verification-before-completion`.
+
+**Goal:** Keep Linux Fence capability checking unchanged while packaging the Darwin capability assertions in Nix and executing them as the invoking host user before resolver startup and native Go tests.
+
+**Architecture:** `fence-capabilities.nix` continues to return the current sandboxed `runCommand` on Linux. On Darwin it returns a `writeShellApplication` containing the existing assertion body, with ordinary state rooted below `DEN_NATIVE_HOST_ROOT` and a final completion artifact. `native-enforcement.nix` passes that executable to `native-runner.sh`, which runs and validates it after the Claude startup fixture and before starting the resolver.
+
+**Tech stack:** Nix flakes, `pkgs.runCommand`, `pkgs.writeShellApplication`, Bash, ShellCheck, jq, GitHub Actions, and `gh`.
+
+### Recovery constraints
+
+- Work only in `/home/roche/projects/den/.worktrees/den-claude-sandbox-design` on `feat/den-claude-sandbox`.
+- Start from `7c7397d7b2cb717516c1b3714afb6a5e48d238ab`; do not rewrite or force-push history.
+- Keep exactly one implementation writer in the shared worktree.
+- Keep the Linux `fence-capabilities` `runCommand` body and behavior unchanged.
+- Preserve all four native targets: `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, and `aarch64-darwin`.
+- Preserve Nix sandboxing and the current platform sandbox values.
+- Do not add `__noChroot`, `allowed-impure-host-deps`, broader host access, or skipped checks.
+- Preserve every existing capability, policy, resource-integrity, temporary-path, and ACL assertion.
+- Keep the intentional `/tmp/fence` and `/private/tmp/fence` probes; put all other Darwin fixture state beneath `DEN_NATIVE_HOST_ROOT`.
+- Record focused RED evidence before changing production code.
+- Obtain a fresh independent review with no unresolved blocker before committing.
+- Create one focused Conventional Commit, push without force, and leave PR #1 open and unmerged.
+
+### Recovery file map
+
+**Modify:**
+
+- `tests/native-runner.sh` — behavioral contract for Darwin fixture ordering, completion, fail-fast behavior, and cleanup.
+- `nix/check-support/native-runner.sh` — validate and run the packaged Fence fixture in the approved Darwin order.
+- `nix/check-support/fence-capabilities.nix` — retain the Linux derivation and package the existing Darwin assertion body as a host executable.
+- `nix/check-support/native-enforcement.nix` — validate the Darwin package marker and export the executable path to the runner.
+- `docs/specs/2026-08-23-darwin-claude-startup-host-fixture-design.md` — already contains the approved recovery design.
+- `.superpowers/sdd/2026-08-23-darwin-claude-startup-host-fixture/progress.md` — append RED, GREEN, verification, review, commit, and CI milestones.
+- `.superpowers/sdd/2026-08-23-darwin-claude-startup-host-fixture/task-8-report.md` — replace the blocker status with exact recovery evidence as work proceeds.
+
+**Verify unchanged unless fresh evidence requires a scoped correction:**
+
+- `modules/checks/fence-policy.nix`
+- `modules/checks/native-enforcement.nix`
+- `scripts/check-native.sh`
+- `tests/native/native_test.go`
+- `tests/native/acl_darwin_test.go`
+- `tests/native/acl_linux_test.go`
+- all workflow sandbox settings and matrix values
+
+---
+
+### Task 9: Specify and implement the Darwin runner contract with strict RED/GREEN TDD
+
+**Files:**
+
+- Modify: `tests/native-runner.sh:37-107`
+- Modify after RED: `nix/check-support/native-runner.sh:22-28,94-105`
+- Record: `.superpowers/sdd/2026-08-23-darwin-claude-startup-host-fixture/progress.md`
+- Record: `.superpowers/sdd/2026-08-23-darwin-claude-startup-host-fixture/task-8-report.md`
+
+**Interfaces:**
+
+- Consumes: `DEN_NATIVE_HOST_ROOT`, `DEN_NATIVE_CLAUDE_STARTUP`, and the current resolver lifecycle functions.
+- Produces: required Darwin input `DEN_NATIVE_FENCE_CAPABILITIES`; completion contract `$DEN_NATIVE_HOST_ROOT/fence-capabilities.complete` containing exactly `complete`; success order `settings → startup → fence → resolver → go`.
+
+- [ ] **Step 1: Confirm the starting point and claim sole-writer ownership**
+
+Run:
+
+```bash
+cd /home/roche/projects/den/.worktrees/den-claude-sandbox-design
+test "$(git branch --show-current)" = feat/den-claude-sandbox
+test "$(git rev-parse HEAD)" = 7c7397d7b2cb717516c1b3714afb6a5e48d238ab
+git status --short
+```
+
+Expected: the branch and HEAD checks pass; only the approved design and plan documentation changes are present.
+
+- [ ] **Step 2: Add the fake Fence fixture before production edits**
+
+In `tests/native-runner.sh`, insert this fixture after the fake Claude startup fixture:
+
+```bash
+printf '#!%s\n' "$BASH" > "$root/fence-capabilities"
+cat >> "$root/fence-capabilities" <<'FAKE_FENCE'
+set -euo pipefail
+printf 'fence\n' >> "$DEN_FAKE_EVENT_LOG"
+fence_status=${DEN_FAKE_FENCE_STATUS:-0}
+if [[ $fence_status -ne 0 ]]; then
+  exit "$fence_status"
+fi
+if [[ ${DEN_FAKE_FENCE_SKIP_COMPLETION:-0} -ne 1 ]]; then
+  printf 'complete\n' > "$DEN_NATIVE_HOST_ROOT/fence-capabilities.complete"
+fi
+FAKE_FENCE
+```
+
+Add `$root/fence-capabilities` to the existing `chmod +x` command and export:
+
+```bash
+export DEN_NATIVE_FENCE_CAPABILITIES=$root/fence-capabilities
+```
+
+Extend the fake native Go binary so it requires both completion artifacts:
+
+```bash
+[[ -f $DEN_NATIVE_HOST_ROOT/fence-capabilities.complete ]]
+[[ $(<"$DEN_NATIVE_HOST_ROOT/fence-capabilities.complete") == complete ]]
+```
+
+- [ ] **Step 3: Add success, failure, and missing-completion assertions**
+
+Change the success event assertion to:
+
+```bash
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence\nresolver\ngo' ]]
+```
+
+Keep the startup-failure assertion unchanged, then add:
+
+```bash
+run_runner fence-failure env DEN_FAKE_FENCE_STATUS=23
+[[ $status -eq 23 ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence' ]]
+assert_runner_cleanup
+
+run_runner fence-missing-completion env DEN_FAKE_FENCE_SKIP_COMPLETION=1
+[[ $status -eq 1 ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence' ]]
+grep -F 'Darwin Fence capability fixture did not produce its completion artifact' \
+  "$root/fence-missing-completion.stderr"
+assert_runner_cleanup
+```
+
+Run each scenario with the unrelated fake status variables unset so one case cannot leak into another.
+
+- [ ] **Step 4: Run the focused test and record RED**
+
+Run:
+
+```bash
+set +e
+bash tests/native-runner.sh nix/check-support/native-runner.sh \
+  > /tmp/den-task8-fence-red.stdout \
+  2> /tmp/den-task8-fence-red.stderr
+red_status=$?
+set -e
+printf 'RED exit=%s\n' "$red_status"
+test "$red_status" -ne 0
+```
+
+Expected: nonzero because the current runner never executes `DEN_NATIVE_FENCE_CAPABILITIES`, so the required `fence` event and completion artifact are absent.
+
+Append the command, exit status, and observed failing assertion to both Task 8 evidence files before any production edit. Do not accept a syntax error, missing test dependency, or unrelated failure as RED.
+
+- [ ] **Step 5: Add the minimal Darwin runner implementation**
+
+In the Darwin branch of `nix/check-support/native-runner.sh`, require and validate the packaged fixture beside the Claude startup fixture:
+
+```bash
+: "${DEN_NATIVE_FENCE_CAPABILITIES:?packaged Darwin Fence capability fixture is required}"
+test -x "$DEN_NATIVE_FENCE_CAPABILITIES"
+```
+
+Immediately after validating `claude-startup.complete` and before `start_resolver_helper`, add:
+
+```bash
+printf 'executing Darwin Fence capability fixture as the invoking host user\n'
+"$DEN_NATIVE_FENCE_CAPABILITIES"
+completion=$DEN_NATIVE_HOST_ROOT/fence-capabilities.complete
+if [[ ! -f $completion || $(<"$completion") != complete ]]; then
+  printf 'Darwin Fence capability fixture did not produce its completion artifact\n' >&2
+  exit 1
+fi
+```
+
+Do not change Linux validation or execution.
+
+- [ ] **Step 6: Run focused GREEN checks**
+
+Run:
+
+```bash
+bash -n tests/native-runner.sh nix/check-support/native-runner.sh
+shellcheck tests/native-runner.sh nix/check-support/native-runner.sh
+bash tests/native-runner.sh nix/check-support/native-runner.sh
+```
+
+Expected: all commands exit zero; the harness prints `native runner tests passed`.
+
+Append the exact GREEN commands and exit statuses to the Task 8 evidence files. Do not commit.
+
+---
+
+### Task 10: Package the existing Darwin assertions and wire them into native enforcement
+
+**Files:**
+
+- Modify: `nix/check-support/fence-capabilities.nix:3-221`
+- Modify: `nix/check-support/native-enforcement.nix:3-7,196-222`
+- Verify: `modules/checks/fence-policy.nix`
+- Verify: `modules/checks/native-enforcement.nix`
+- Verify: `scripts/check-native.sh`
+
+**Interfaces:**
+
+- Consumes: the Fence package, closure information, `DEN_NATIVE_HOST_ROOT`, and the runner contract from Task 9.
+- Produces: a Linux `fence-capabilities` `runCommand` identical to the current derivation; on Darwin, executable `${fenceCapabilities}/bin/fence-capabilities` with `denHostFixturePlatform = "darwin"` and completion artifact `fence-capabilities.complete`.
+
+- [ ] **Step 1: Capture the Linux derivation identity before refactoring**
+
+Run:
+
+```bash
+linux_fence_drv_before=$(nix eval --raw \
+  .#checks.x86_64-linux.fence-capabilities.drvPath)
+printf '%s\n' "$linux_fence_drv_before"
+printf '%s\n' "$linux_fence_drv_before" > /tmp/den-task8-linux-fence-drv.before
+```
+
+Expected: one `/nix/store/...-fence-capabilities.drv` path.
+
+- [ ] **Step 2: Split only the Nix execution boundary**
+
+Refactor `nix/check-support/fence-capabilities.nix` without rewriting either assertion sequence. Move every command between the current `if pkgs.stdenv.isLinux then ''` and `'' else ''` delimiters into `linuxCapabilities`, including the final `touch "$out"`. Move every command between the current `'' else ''` delimiter and the closing `''` into `darwinCapabilities`, then apply only the Darwin adaptation groups listed below. The resulting expression boundaries must be:
+
+```nix
+{ pkgs, fence }:
+
+let
+  closure = pkgs.closureInfo {
+    rootPaths = [ fence pkgs.bash pkgs.coreutils pkgs.gnugrep pkgs.jq ];
+  };
+  linuxCapabilities = ''
+```
+
+The current Linux commands follow that opening delimiter without command changes. Close that string and open the Darwin string with:
+
+```nix
+  '';
+  darwinCapabilities = ''
+```
+
+After the complete Darwin commands and the four listed adaptations, close the `let` and select the platform result with:
+
+```nix
+  '';
+in
+if pkgs.stdenv.isLinux then
+  pkgs.runCommand "fence-capabilities"
+    {
+      nativeBuildInputs = [ pkgs.jq ];
+    }
+    linuxCapabilities
+else
+  pkgs.writeShellApplication {
+    name = "fence-capabilities";
+    runtimeInputs = [ pkgs.coreutils pkgs.gnugrep pkgs.jq ];
+    derivationArgs = {
+      passthru.denHostFixturePlatform = "darwin";
+    };
+    text = darwinCapabilities;
+  }
+```
+
+Use the current file as the exact source for both command sequences; do not add relocation comments to production code.
+
+Make exactly these Darwin-body adaptation groups:
+
+1. Immediately after `fence=${fence}/bin/fence` and before `help.txt`, `hook.out`, or any other relative file is created, require the runner root, create a dedicated child, and enter it:
+
+   ```bash
+   : "${DEN_NATIVE_HOST_ROOT:?native host root is required}"
+   root=$DEN_NATIVE_HOST_ROOT/fence-capabilities
+   mkdir -m 0700 -p "$root"
+   cd "$root"
+   ```
+
+   Remove the later `root=$TMPDIR/capabilities` assignment and leave `home=$root/home` as the next fixture-tree assignment. Escape Bash interpolation for the Nix indented string as required: `''${DEN_NATIVE_HOST_ROOT...}`. This keeps `help.txt`, `hook.out`, `hook.err`, `closure.json`, `parsed.json`, policy data, home data, worktree data, state, and scratch below the runner-owned root.
+
+2. Keep `/tmp/fence` and `/private/tmp/fence` creation, assertions, and cleanup unchanged.
+
+3. Because `writeShellApplication.runtimeInputs` supplies GNU coreutils, replace the Darwin policy mode command with a deterministic store-backed equivalent:
+
+   ```bash
+   test "$(${pkgs.coreutils}/bin/stat -c %a "$policy")" = 400
+   ```
+
+   This preserves the existing `0400` policy-integrity assertion.
+
+4. Replace the final `touch "$out"` with:
+
+   ```bash
+   printf 'complete\n' > "$DEN_NATIVE_HOST_ROOT/fence-capabilities.complete"
+   ```
+
+Do not split static and runtime assertions. The artifact must remain the final successful action.
+
+- [ ] **Step 3: Wire the package into `native-enforcement.nix`**
+
+After the existing Fence import, add:
+
+```nix
+fenceCapabilities = import ./fence-capabilities.nix {
+  inherit pkgs fence;
+};
+```
+
+Extend the Darwin assertion so both host fixtures carry the marker:
+
+```nix
+assert pkgs.lib.assertMsg
+  (!pkgs.stdenv.isDarwin ||
+    (claudeStartup != null &&
+     (claudeStartup.denHostFixturePlatform or null) == "darwin" &&
+     (fenceCapabilities.denHostFixturePlatform or null) == "darwin"))
+  "Darwin native enforcement requires the packaged Darwin host fixtures";
+```
+
+In the existing Darwin-only environment block, add:
+
+```nix
+export DEN_NATIVE_FENCE_CAPABILITIES=${fenceCapabilities}/bin/fence-capabilities
+```
+
+Do not add the package to the Linux runtime closure or environment.
+
+- [ ] **Step 4: Verify evaluation, package markers, and Linux identity**
+
+Run:
+
+```bash
+nix eval --raw .#checks.aarch64-darwin.fence-capabilities.denHostFixturePlatform
+nix eval --raw .#checks.x86_64-darwin.fence-capabilities.denHostFixturePlatform
+nix eval --raw .#checks.aarch64-darwin.native-enforcement.drvPath
+nix eval --raw .#checks.x86_64-darwin.native-enforcement.drvPath
+linux_fence_drv_after=$(nix eval --raw \
+  .#checks.x86_64-linux.fence-capabilities.drvPath)
+test "$linux_fence_drv_after" = "$(< /tmp/den-task8-linux-fence-drv.before)"
+```
+
+Expected: both marker evaluations print `darwin`; both native runner evaluations return derivation paths; the Linux derivation path is unchanged.
+
+- [ ] **Step 5: Verify the focused package and driver surface on the current host**
+
+Run:
+
+```bash
+bash -n tests/native-runner.sh nix/check-support/native-runner.sh scripts/check-native.sh
+shellcheck tests/native-runner.sh nix/check-support/native-runner.sh scripts/check-native.sh
+bash tests/native-runner.sh nix/check-support/native-runner.sh
+nix flake check --no-build
+scripts/check-native.sh x86_64-linux
+```
+
+If the current host system is not `x86_64-linux`, replace only the final argument with `$(nix eval --impure --raw --expr builtins.currentSystem)`. Expected: every command exits zero.
+
+Confirm directly that `modules/checks/fence-policy.nix`, `modules/checks/native-enforcement.nix`, and `scripts/check-native.sh` have no diff. Record all results and do not commit.
+
+---
+
+### Task 11: Run full verification, obtain fresh review, commit once, push, and monitor both CI events
+
+**Files:**
+
+- Update: `.superpowers/sdd/2026-08-23-darwin-claude-startup-host-fixture/progress.md`
+- Update: `.superpowers/sdd/2026-08-23-darwin-claude-startup-host-fixture/task-8-report.md`
+- Review all changed files against: `7c7397d7b2cb717516c1b3714afb6a5e48d238ab`
+
+**Interfaces:**
+
+- Consumes: the GREEN implementation from Tasks 9 and 10.
+- Produces: fresh verification evidence, independent review approval, one Conventional Commit, two completed four-job CI events, and confirmation that PR #1 is still open and unmerged.
+
+- [ ] **Step 1: Run fresh focused verification from a clean process**
+
+Run:
+
+```bash
+bash -n tests/native-runner.sh nix/check-support/native-runner.sh scripts/check-native.sh
+shellcheck tests/native-runner.sh nix/check-support/native-runner.sh scripts/check-native.sh
+bash tests/native-runner.sh nix/check-support/native-runner.sh
+nix eval --raw .#checks.aarch64-darwin.fence-capabilities.denHostFixturePlatform
+nix eval --raw .#checks.x86_64-darwin.fence-capabilities.denHostFixturePlatform
+nix eval --raw .#checks.aarch64-darwin.native-enforcement.drvPath
+nix eval --raw .#checks.x86_64-darwin.native-enforcement.drvPath
+nix flake check --no-build
+scripts/check-native.sh x86_64-linux
+```
+
+Expected: every command exits zero. Record the current host if the native-driver target must be adjusted as described in Task 10.
+
+- [ ] **Step 2: Run full local verification**
+
+Run:
+
+```bash
+nix flake check --accept-flake-config --print-build-logs
+```
+
+Expected: exit zero. This repository change does not update Pi or packaged Pi dependencies, so the Pi extension-load check is not required.
+
+- [ ] **Step 3: Verify scope and prohibited changes**
+
+Run:
+
+```bash
+git diff --check
+git status --short
+git diff --name-only
+if git diff | grep -E '__noChroot|allowed-impure-host-deps'; then
+  printf 'forbidden sandbox escape appeared in the diff\n' >&2
+  exit 1
+fi
+git diff --exit-code -- \
+  modules/checks/fence-policy.nix \
+  modules/checks/native-enforcement.nix \
+  scripts/check-native.sh \
+  tests/native/native_test.go \
+  tests/native/acl_darwin_test.go \
+  tests/native/acl_linux_test.go
+```
+
+Expected: no whitespace errors, no prohibited setting, and no diff in the verify-unchanged files.
+
+- [ ] **Step 4: Obtain fresh independent review before committing**
+
+Dispatch the canonical Pi `reviewer` with fresh context and read-only scope. Resolve and pass its active model and thinking overrides. Include:
+
+- task: Darwin-only Fence capability package/host execution recovery;
+- approved spec and this plan addendum;
+- base SHA `7c7397d7b2cb717516c1b3714afb6a5e48d238ab`;
+- working-tree diff as the head artifact;
+- all RED, GREEN, focused, and full verification evidence;
+- requirements to preserve Linux behavior, all assertions, all four targets, sandboxing, host-root ownership, fail-fast order, and PR state.
+
+Require findings with severity and file/line evidence. If the reviewer finds a blocker, use `superpowers:receiving-code-review`, let the same sole writer apply only verified fixes, rerun affected focused checks plus full verification, and obtain a fresh scoped re-review. Do not commit with an unresolved blocker.
+
+- [ ] **Step 5: Update final evidence files and inspect the exact diff**
+
+Record:
+
+- the RED command, exit status, and intended failure;
+- GREEN and full verification commands with exit statuses;
+- Linux derivation identity before and after;
+- review result and any fix/re-review cycle;
+- the exact expected Darwin runner log line:
+
+  ```text
+  executing Darwin Fence capability fixture as the invoking host user
+  ```
+
+Run:
+
+```bash
+git diff --check
+git diff --stat
+git status --short
+```
+
+Expected: only the approved implementation, design/plan addenda, and Task 8 evidence files are modified.
+
+- [ ] **Step 6: Create one focused Conventional Commit**
+
+Read the project `commit` skill before committing. Stage only approved files, inspect the staged diff, then run:
+
+```bash
+git add \
+  nix/check-support/fence-capabilities.nix \
+  nix/check-support/native-enforcement.nix \
+  nix/check-support/native-runner.sh \
+  tests/native-runner.sh \
+  docs/specs/2026-08-23-darwin-claude-startup-host-fixture-design.md \
+  docs/plans/2026-08-23-darwin-claude-startup-host-fixture.md \
+  .superpowers/sdd/2026-08-23-darwin-claude-startup-host-fixture/progress.md \
+  .superpowers/sdd/2026-08-23-darwin-claude-startup-host-fixture/task-8-report.md
+git diff --cached --check
+git diff --cached --stat
+git commit -m "fix(ci): run Darwin Fence capabilities on host"
+```
+
+Expected: one new commit; the worktree is clean. Do not amend prior commits.
+
+- [ ] **Step 7: Push without force and identify both workflow runs**
+
+Run:
+
+```bash
+git push origin feat/den-claude-sandbox
+head_sha=$(git rev-parse HEAD)
+runs=$(gh run list --repo rochecompaan/den \
+  --branch feat/den-claude-sandbox --limit 20 \
+  --json databaseId,event,headSha,status,conclusion,url)
+printf '%s\n' "$runs" | jq --arg sha "$head_sha" \
+  '[.[] | select(.headSha == $sha and (.event == "push" or .event == "pull_request"))]'
+```
+
+Poll only until one push run and one pull-request run for `$head_sha` appear. Do not force-push.
+
+- [ ] **Step 8: Monitor every job in both CI events to terminal state**
+
+For each run ID, run:
+
+```bash
+gh run watch "$run_id" --repo rochecompaan/den --exit-status
+```
+
+Then retrieve structured job results:
+
+```bash
+gh run view "$run_id" --repo rochecompaan/den \
+  --json event,headSha,status,conclusion,url,jobs
+```
+
+Require both events to match `$head_sha`, reach `completed`, conclude `success`, and report successful jobs for all four native targets. If CI exposes a new failure, invoke `superpowers:systematic-debugging` before proposing or making another change.
+
+- [ ] **Step 9: Capture Darwin host-execution evidence**
+
+For both the push and pull-request runs, inspect each Darwin architecture log and require this order:
+
+```text
+building non-native check fence-capabilities for <darwin-system>
+building native runner for <darwin-system>
+executing native runner as the invoking host user
+executing Darwin Claude startup fixture as the invoking host user
+executing Darwin Fence capability fixture as the invoking host user
+```
+
+Also confirm resolver/native Go execution follows the Fence line and that neither Darwin log contains `bind: operation not permitted`.
+
+- [ ] **Step 10: Confirm PR #1 remains open and unmerged**
+
+Run:
+
+```bash
+gh pr view 1 --repo rochecompaan/den \
+  --json number,state,mergedAt,mergeStateStatus,headRefName,headRefOid,url
+```
+
+Require:
+
+- `state` is `OPEN`;
+- `mergedAt` is `null`;
+- `headRefName` is `feat/den-claude-sandbox`;
+- `headRefOid` equals `$head_sha`.
+
+Update the Task 8 report with the commit SHA, both run URLs, eight terminal job results, Darwin ordering evidence, and final PR state. Do not merge the PR.

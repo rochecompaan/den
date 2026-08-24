@@ -45,11 +45,29 @@ fi
 printf 'complete\n' > "$DEN_NATIVE_HOST_ROOT/claude-startup.complete"
 FAKE_STARTUP
 
+printf '#!%s\n' "$BASH" > "$root/fence-capabilities"
+cat >> "$root/fence-capabilities" <<'FAKE_FENCE'
+set -euo pipefail
+printf 'fence\n' >> "$DEN_FAKE_EVENT_LOG"
+fence_status=${DEN_FAKE_FENCE_STATUS:-0}
+if [[ $fence_status -ne 0 ]]; then
+  exit "$fence_status"
+fi
+if [[ ${DEN_FAKE_FENCE_SKIP_COMPLETION:-0} -ne 1 ]]; then
+  printf 'complete\n' > "$DEN_NATIVE_HOST_ROOT/fence-capabilities.complete"
+  if [[ ${DEN_FAKE_FENCE_EXTRA_NEWLINE:-0} -eq 1 ]]; then
+    printf '\n' >> "$DEN_NATIVE_HOST_ROOT/fence-capabilities.complete"
+  fi
+fi
+FAKE_FENCE
+
 printf '#!%s\n' "$BASH" > "$root/native-tests"
 cat >> "$root/native-tests" <<'FAKE_GO'
 set -euo pipefail
 [[ -f $DEN_NATIVE_HOST_ROOT/claude-startup.complete ]]
 [[ $(<"$DEN_NATIVE_HOST_ROOT/claude-startup.complete") == complete ]]
+[[ -f $DEN_NATIVE_HOST_ROOT/fence-capabilities.complete ]]
+[[ $(<"$DEN_NATIVE_HOST_ROOT/fence-capabilities.complete") == complete ]]
 printf 'go\n' >> "$DEN_FAKE_EVENT_LOG"
 FAKE_GO
 
@@ -58,8 +76,8 @@ cat >> "$root/resolver-helper" <<'FAKE_MARKER'
 exit 0
 FAKE_MARKER
 cp "$root/resolver-helper" "$root/sandbox-exec"
-chmod +x "$root/settings-merge" "$root/claude-startup" "$root/native-tests" \
-  "$root/resolver-helper" "$root/sandbox-exec"
+chmod +x "$root/settings-merge" "$root/claude-startup" "$root/fence-capabilities" \
+  "$root/native-tests" "$root/resolver-helper" "$root/sandbox-exec"
 
 mkdir -p "$root/home" "$root/runtime/den-native-enforcement"
 printf 'host-user data\n' > "$root/runtime/den-native-enforcement/host-user-marker"
@@ -68,6 +86,7 @@ export XDG_RUNTIME_DIR=$root/runtime
 export DEN_NATIVE_HOST_SYSTEM=aarch64-darwin
 export DEN_NATIVE_SETTINGS_MERGE=$root/settings-merge
 export DEN_NATIVE_CLAUDE_STARTUP=$root/claude-startup
+export DEN_NATIVE_FENCE_CAPABILITIES=$root/fence-capabilities
 export DEN_NATIVE_TEST_BINARY=$root/native-tests
 export DEN_NATIVE_RESOLVER_HELPER=$root/resolver-helper
 export DEN_NATIVE_SANDBOX_EXEC=$root/sandbox-exec
@@ -91,17 +110,42 @@ assert_runner_cleanup() {
   fi
 }
 
-run_runner success env -u DEN_FAKE_STARTUP_STATUS
+run_runner success env -u DEN_FAKE_STARTUP_STATUS -u DEN_FAKE_FENCE_STATUS \
+  -u DEN_FAKE_FENCE_SKIP_COMPLETION
 if [[ $status -ne 0 ]]; then
   cat "$root/success.stderr" >&2
   exit 1
 fi
-[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nresolver\ngo' ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence\nresolver\ngo' ]]
 assert_runner_cleanup
 
-run_runner startup-failure env DEN_FAKE_STARTUP_STATUS=19
+run_runner startup-failure env -u DEN_FAKE_FENCE_STATUS \
+  -u DEN_FAKE_FENCE_SKIP_COMPLETION DEN_FAKE_STARTUP_STATUS=19
 [[ $status -eq 19 ]]
 [[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup' ]]
+assert_runner_cleanup
+
+run_runner fence-failure env -u DEN_FAKE_STARTUP_STATUS \
+  -u DEN_FAKE_FENCE_SKIP_COMPLETION DEN_FAKE_FENCE_STATUS=23
+[[ $status -eq 23 ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence' ]]
+assert_runner_cleanup
+
+run_runner fence-missing-completion env -u DEN_FAKE_STARTUP_STATUS \
+  -u DEN_FAKE_FENCE_STATUS DEN_FAKE_FENCE_SKIP_COMPLETION=1
+[[ $status -eq 1 ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence' ]]
+grep -F 'Darwin Fence capability fixture did not produce its completion artifact' \
+  "$root/fence-missing-completion.stderr"
+assert_runner_cleanup
+
+run_runner fence-malformed-completion env -u DEN_FAKE_STARTUP_STATUS \
+  -u DEN_FAKE_FENCE_STATUS -u DEN_FAKE_FENCE_SKIP_COMPLETION \
+  DEN_FAKE_FENCE_EXTRA_NEWLINE=1
+[[ $status -eq 1 ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence' ]]
+grep -F 'Darwin Fence capability fixture did not produce its completion artifact' \
+  "$root/fence-malformed-completion.stderr"
 assert_runner_cleanup
 
 printf 'native runner tests passed\n'
