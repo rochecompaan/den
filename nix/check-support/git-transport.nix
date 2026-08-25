@@ -17,7 +17,7 @@ let
 in
 pkgs.runCommand "git-transport-check"
   {
-    nativeBuildInputs = [ pkgs.coreutils pkgs.diffutils pkgs.gitMinimal ];
+    nativeBuildInputs = [ pkgs.coreutils pkgs.diffutils pkgs.gitMinimal pkgs.gnugrep ];
   }
   ''
     set -eu
@@ -51,7 +51,7 @@ EOF
   helper = !$TMPDIR/global-helper
 EOF
 
-    export PATH="${pkgs.gitMinimal}/bin:${pkgs.coreutils}/bin:${pkgs.diffutils}/bin"
+    export PATH="${pkgs.gitMinimal}/bin:${pkgs.coreutils}/bin:${pkgs.diffutils}/bin:${pkgs.gnugrep}/bin"
     export GIT_TERMINAL_PROMPT=0
     export GIT_SSH_COMMAND="${fakeSSH}"
     export GIT_CONFIG_COUNT=3
@@ -82,9 +82,16 @@ EOF
       cat "$TMPDIR/transport.log" >&2
       exit 1
     fi
-    if grep -v "^git@github.com git-\\(upload\\|receive\\)-pack 'owner/repo.git'$" "$TMPDIR/transport.log"; then
+    if unexpected=$(grep -v "^git@github.com git-\\(upload\\|receive\\)-pack 'owner/repo.git'$" "$TMPDIR/transport.log"); then
       echo "Git used an unexpected transport helper" >&2
+      printf '%s\n' "$unexpected" >&2
       exit 1
+    else
+      grep_status=$?
+      if test "$grep_status" -ne 1; then
+        echo "Git transport validation failed with grep status $grep_status" >&2
+        exit "$grep_status"
+      fi
     fi
 
     touch "$out"
