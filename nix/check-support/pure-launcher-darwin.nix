@@ -2,6 +2,7 @@
 
 let
   fakes = import ./fakes.nix { inherit inputs pkgs; };
+  den-launcher = import ../packages/den-launcher.nix { inherit pkgs; };
   sandbox = fakes.mkSandbox { };
   relativeExplicitSandbox = fakes.overrideManifest {
     name = "claude-relative-explicit";
@@ -23,7 +24,7 @@ pkgs.runCommand "pure-launcher"
     export HOME="$root/home"
     cp -R "$src" "$root/source"
     chmod -R u+w "$root/source"
-    (cd "$root/source" && go test ./internal/... ./cmd/... -count=1)
+    (cd "$root/source" && ln -s ${den-launcher.goModules} vendor && go test -mod=vendor ./internal/... ./cmd/... -count=1)
 
     cd "$root/worktree"
     printf fixture-ca > "$root/ca.pem"

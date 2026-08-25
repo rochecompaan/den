@@ -18,7 +18,8 @@
           cp -R "$src" source
           chmod -R u+w source
           cd source
-          go test ./internal/... ./cmd/... -count=1
+          ln -s ${den-launcher.goModules} vendor
+          go test -mod=vendor ./internal/... ./cmd/... -count=1
           ${pkgs.python3}/bin/python3 tests/check-derivation-impure-host-deps.py \
             "$PWD/scripts/check-derivation-impure-host-deps.py"
           ${pkgs.bash}/bin/bash tests/check-native-driver.sh "$PWD/scripts/check-native.sh"

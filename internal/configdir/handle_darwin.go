@@ -3,7 +3,6 @@
 package configdir
 
 import (
-	"fmt"
 	"os"
 	"syscall"
 )
@@ -14,10 +13,6 @@ func openDirectoryHandle(path string) (*os.File, error) {
 		return nil, err
 	}
 	return os.NewFile(uintptr(fd), path), nil
-}
-
-func localDirectoryHandlePath(file *os.File) string {
-	return fmt.Sprintf("/dev/fd/%d", file.Fd())
 }
 
 func childDirectoryHandlePath() string {

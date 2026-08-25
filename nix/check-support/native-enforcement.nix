@@ -2,6 +2,7 @@
 
 let
   fence = (import ../lib/fence.nix { inherit pkgs; }).package;
+  denGoVendorHash = import ../lib/den-go-vendor-hash.nix { lib = pkgs.lib; };
   fenceCapabilities = import ./fence-capabilities.nix {
     inherit pkgs fence;
   };
@@ -14,7 +15,7 @@ let
     vendorHash = "sha256-gTntGkqO04KwcyrJi3jNVwNAevKQddTGU3npLupIWik=";
     postPatch = ''
       mkdir -p cmd/den-native-repowolf-fixture
-      cp ${./repowolf-protocol-fixture.go} cmd/den-native-repowolf-fixture/main.go
+      cp ${./repowolf-protocol-fixture.go.fixture} cmd/den-native-repowolf-fixture/main.go
     '';
     subPackages = [ "cmd/den-native-repowolf-fixture" ];
     tags = [ "repowolf_native_fixture" ];
@@ -182,7 +183,7 @@ let
     pname = "den-native-tests";
     version = "0.1.0";
     src = ../..;
-    vendorHash = null;
+    vendorHash = denGoVendorHash;
     env.CGO_ENABLED = "0";
     doCheck = false;
     buildPhase = ''

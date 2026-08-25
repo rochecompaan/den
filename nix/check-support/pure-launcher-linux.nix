@@ -2,6 +2,7 @@
 
 let
   fakes = import ./fakes.nix { inherit inputs pkgs; };
+  den-launcher = import ../packages/den-launcher.nix { inherit pkgs; };
   sandbox = fakes.mkSandbox { };
   explicitSandbox = fakes.mkSandbox { configDir = "/tmp/den-task12-explicit"; };
   relativeExplicitSandbox = fakes.overrideManifest {
@@ -26,7 +27,7 @@ pkgs.runCommand "pure-launcher"
     # The complete deterministic Go suite is part of this pure gate. It covers
     # validation matrices and race/error seams that cannot be induced safely by
     # a black-box shell process.
-    (cd source && go test ./internal/... ./cmd/... -count=1)
+    (cd source && ln -s ${den-launcher.goModules} vendor && go test -mod=vendor ./internal/... ./cmd/... -count=1)
 
     namespaceTmp="$TMPDIR/namespace-tmp"
     rootHost="$namespaceTmp/den-task12-pure"
