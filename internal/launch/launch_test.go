@@ -316,7 +316,7 @@ func TestRunRollsBackConfigurationWhenContainerSocketValidationFails(t *testing.
 
 func TestRunAddsOnlyValidatedContainerEnvironment(t *testing.T) {
 	root := t.TempDir()
-	socketPath := filepath.Join(root, "docker.sock")
+	socketPath := filepath.Join(shortSocketDir(t, "den-launch-socket-"), "docker.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)
@@ -334,6 +334,20 @@ func TestRunAddsOnlyValidatedContainerEnvironment(t *testing.T) {
 	if result != 0 || got.DockerHost != "unix://"+socketPath {
 		t.Fatalf("run() = %d, controlled = %#v", result, got)
 	}
+}
+
+func shortSocketDir(t *testing.T, pattern string) string {
+	t.Helper()
+	directory, err := os.MkdirTemp("", pattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(directory); err != nil {
+			t.Errorf("remove socket directory: %v", err)
+		}
+	})
+	return directory
 }
 
 func TestFenceTemporaryEnvironmentReplacesInheritedTemporaryState(t *testing.T) {

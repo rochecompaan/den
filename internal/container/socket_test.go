@@ -11,7 +11,7 @@ import (
 )
 
 func TestResolveDockerPrecedenceAndCanonicalEndpoint(t *testing.T) {
-	root := t.TempDir()
+	root := shortSocketDir(t, "den-container-socket-")
 	explicit := listenSocket(t, filepath.Join(root, "explicit.sock"))
 	environment := listenSocket(t, filepath.Join(root, "environment.sock"))
 	xdg := listenSocket(t, filepath.Join(root, "runtime", "docker.sock"))
@@ -44,7 +44,7 @@ func TestResolveDockerPrecedenceAndCanonicalEndpoint(t *testing.T) {
 }
 
 func TestResolveDockerDefaultSocketOrdering(t *testing.T) {
-	root := t.TempDir()
+	root := shortSocketDir(t, "den-container-socket-")
 	first := listenSocket(t, filepath.Join(root, "run", "docker.sock"))
 	second := listenSocket(t, filepath.Join(root, "var-run", "docker.sock"))
 	for _, test := range []struct {
@@ -68,7 +68,7 @@ func TestResolveDockerDefaultSocketOrdering(t *testing.T) {
 }
 
 func TestResolveDockerRejectsInvalidEndpointsAndTargets(t *testing.T) {
-	root := t.TempDir()
+	root := shortSocketDir(t, "den-container-socket-")
 	valid := listenSocket(t, filepath.Join(root, "valid.sock"))
 	regular := filepath.Join(root, "regular")
 	if err := os.WriteFile(regular, []byte("not a socket"), 0o600); err != nil {
@@ -98,7 +98,7 @@ func TestResolveDockerRejectsInvalidEndpointsAndTargets(t *testing.T) {
 }
 
 func TestResolvePodmanDiscoveryOwnershipAndPorts(t *testing.T) {
-	root := t.TempDir()
+	root := shortSocketDir(t, "den-container-socket-")
 	explicit := listenSocket(t, filepath.Join(root, "explicit.sock"))
 	environment := listenSocket(t, filepath.Join(root, "environment.sock"))
 	xdg := listenSocket(t, filepath.Join(root, "runtime", "podman", "podman.sock"))
@@ -162,7 +162,7 @@ func TestResolvePodmanDiscoveryOwnershipAndPorts(t *testing.T) {
 }
 
 func TestResolvePodmanUsesRuntimeFallback(t *testing.T) {
-	root := t.TempDir()
+	root := shortSocketDir(t, "den-container-socket-")
 	uid := UID(os.Getuid())
 	runtimeRoot := filepath.Join(root, "run", "user")
 	want := listenSocket(t, filepath.Join(runtimeRoot, strconv.Itoa(int(uid)), "podman", "podman.sock"))
@@ -222,6 +222,20 @@ func listenSocket(t *testing.T, path string) string {
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 	return path
+}
+
+func shortSocketDir(t *testing.T, pattern string) string {
+	t.Helper()
+	directory, err := os.MkdirTemp("", pattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(directory); err != nil {
+			t.Errorf("remove socket directory: %v", err)
+		}
+	})
+	return directory
 }
 
 func pointer(value string) *string { return &value }
