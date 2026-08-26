@@ -5,12 +5,18 @@
     let
       den-launcher = import ../../nix/packages/den-launcher.nix { inherit pkgs; };
       git-transport = import ../../nix/check-support/git-transport.nix { inherit pkgs; };
+      script = pkgs.unixtools.script;
+      scriptInvocation = command:
+        if pkgs.stdenv.hostPlatform.isDarwin then
+          "${script}/bin/script -q /dev/null ./process-harness ${command}"
+        else
+          "${script}/bin/script -qfec './process-harness ${command}' /dev/null";
     in
     {
       checks.launcher-unit = pkgs.runCommand "launcher-unit"
         {
           src = ../..;
-          nativeBuildInputs = [ pkgs.go pkgs.util-linux pkgs.procps pkgs.python3 pkgs.jq ];
+          nativeBuildInputs = [ pkgs.go script pkgs.procps pkgs.python3 pkgs.jq ];
         }
         ''
           export HOME="$TMPDIR"
@@ -34,12 +40,12 @@
           test ! -e ${den-launcher}/bin/den
           test -e ${git-transport}
           go build -o process-harness ./cmd/process-harness
-          ${pkgs.util-linux}/bin/script -qfec './process-harness pty' /dev/null > pty.out
+          ${scriptInvocation "pty"} > pty.out
           tr -d '\r' < pty.out | grep -qx 'pty-ok'
           export DEN_PROCESS_PID_FILE="$TMPDIR/process.pid"
           export DEN_PROCESS_SIGNAL_FILE="$TMPDIR/process.signals"
           export DEN_PROCESS_READY_FILE="$TMPDIR/process.ready"
-          ${pkgs.util-linux}/bin/script -qfec './process-harness job-control' /dev/null &
+          ${scriptInvocation "job-control"} &
           harness_pid=$!
           for _ in $(seq 1 50); do test -e "$DEN_PROCESS_PID_FILE" && break; sleep 0.1; done
           test -s "$DEN_PROCESS_PID_FILE"
