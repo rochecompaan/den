@@ -3,6 +3,7 @@
 {
   perSystem = { pkgs, ... }:
     let
+      den-launcher = import ../../nix/packages/den-launcher.nix { inherit pkgs; };
       fence = import ../../nix/lib/fence.nix { inherit pkgs; };
       fence-capabilities = import ../../nix/check-support/fence-capabilities.nix {
         inherit pkgs;
@@ -24,6 +25,7 @@
           cp -R "$src" source
           chmod -R u+w source
           cd source
+          ln -s ${den-launcher.goModules} vendor
 
           jq -e '
             .allowPty == true and
@@ -39,7 +41,7 @@
             echo 'base policy contains a RepoWolf token prefix' >&2
             exit 1
           fi
-          go test ./internal/policy -count=1
+          go test -mod=vendor ./internal/policy -count=1
 
           denSource=$PWD
           cp -R ${fence.package.src} fence-source
