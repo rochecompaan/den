@@ -46,6 +46,8 @@ Use `pkgs.unixtools.script` for `launcher-unit` on all platforms. Nixpkgs resolv
 
 Use the same package in `nativeBuildInputs` and the explicit command path. Do not add host paths or relax the Nix sandbox.
 
+The two providers use different command syntax. Keep `-qfec '<command>' <file>` on Linux. Use `-q <file> <command> [args]` on Darwin.
+
 ### Linux failure classification
 
 Do not change production code for the pull-request-only Linux failure. The push job passed the same test at the same commit.
