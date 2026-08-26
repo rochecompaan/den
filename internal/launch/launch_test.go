@@ -316,7 +316,7 @@ func TestRunRollsBackConfigurationWhenContainerSocketValidationFails(t *testing.
 
 func TestRunAddsOnlyValidatedContainerEnvironment(t *testing.T) {
 	root := t.TempDir()
-	socketPath := filepath.Join(shortSocketDir(t, "den-launch-socket-"), "docker.sock")
+	socketPath := filepath.Join(shortSocketDir(t, "den-l-"), "docker.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)

@@ -11,7 +11,7 @@ import (
 )
 
 func TestResolveDockerPrecedenceAndCanonicalEndpoint(t *testing.T) {
-	root := shortSocketDir(t, "den-container-socket-")
+	root := shortSocketDir(t, "den-c-")
 	explicit := listenSocket(t, filepath.Join(root, "explicit.sock"))
 	environment := listenSocket(t, filepath.Join(root, "environment.sock"))
 	xdg := listenSocket(t, filepath.Join(root, "runtime", "docker.sock"))
@@ -44,7 +44,7 @@ func TestResolveDockerPrecedenceAndCanonicalEndpoint(t *testing.T) {
 }
 
 func TestResolveDockerDefaultSocketOrdering(t *testing.T) {
-	root := shortSocketDir(t, "den-container-socket-")
+	root := shortSocketDir(t, "den-c-")
 	first := listenSocket(t, filepath.Join(root, "run", "docker.sock"))
 	second := listenSocket(t, filepath.Join(root, "var-run", "docker.sock"))
 	for _, test := range []struct {
@@ -68,7 +68,7 @@ func TestResolveDockerDefaultSocketOrdering(t *testing.T) {
 }
 
 func TestResolveDockerRejectsInvalidEndpointsAndTargets(t *testing.T) {
-	root := shortSocketDir(t, "den-container-socket-")
+	root := shortSocketDir(t, "den-c-")
 	valid := listenSocket(t, filepath.Join(root, "valid.sock"))
 	regular := filepath.Join(root, "regular")
 	if err := os.WriteFile(regular, []byte("not a socket"), 0o600); err != nil {
@@ -98,7 +98,7 @@ func TestResolveDockerRejectsInvalidEndpointsAndTargets(t *testing.T) {
 }
 
 func TestResolvePodmanDiscoveryOwnershipAndPorts(t *testing.T) {
-	root := shortSocketDir(t, "den-container-socket-")
+	root := shortSocketDir(t, "den-c-")
 	explicit := listenSocket(t, filepath.Join(root, "explicit.sock"))
 	environment := listenSocket(t, filepath.Join(root, "environment.sock"))
 	xdg := listenSocket(t, filepath.Join(root, "runtime", "podman", "podman.sock"))
@@ -162,7 +162,7 @@ func TestResolvePodmanDiscoveryOwnershipAndPorts(t *testing.T) {
 }
 
 func TestResolvePodmanUsesRuntimeFallback(t *testing.T) {
-	root := shortSocketDir(t, "den-container-socket-")
+	root := shortSocketDir(t, "den-c-")
 	uid := UID(os.Getuid())
 	runtimeRoot := filepath.Join(root, "run", "user")
 	want := listenSocket(t, filepath.Join(runtimeRoot, strconv.Itoa(int(uid)), "podman", "podman.sock"))
