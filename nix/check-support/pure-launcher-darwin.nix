@@ -181,7 +181,9 @@ pkgs.runCommand "pure-launcher"
     ptyRunner="$root/pty-runner"
     cat > "$ptyRunner" <<EOF
     #!${pkgs.bash}/bin/bash
+    printf 'pty-stage: runner-entered\n' >&2
     cd "$root/worktree"
+    printf 'pty-stage: runner-cd-ok\n' >&2
     exec ${sandbox}/bin/claude
     EOF
     chmod 0700 "$ptyRunner"
