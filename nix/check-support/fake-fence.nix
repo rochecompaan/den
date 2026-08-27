@@ -38,6 +38,7 @@ pkgs.writeShellScriptBin "fence" ''
   test "$TMPDIR" != "$(dirname "$policy")"
   test "$DEN_FENCE_POLICY_FILE" = "$policy"
   if test -n "''${DEN_FAKE_POLICY_COPY-}"; then
+    rm -f "$DEN_FAKE_POLICY_COPY"
     ${pkgs.coreutils}/bin/cp "$policy" "$DEN_FAKE_POLICY_COPY"
   fi
   if test -n "''${DEN_FAKE_FENCE_LOG-}"; then
