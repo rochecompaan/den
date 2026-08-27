@@ -16,7 +16,52 @@ pkgs.runCommand "pure-launcher"
     nativeBuildInputs = [ pkgs.go pkgs.jq pkgs.gitMinimal pkgs.python3 ];
   }
   ''
-    set -eu
+    set -ETeu
+    current_phase=initialization
+    last_command=
+    last_line=
+    failure_command=
+    failure_line=
+
+    capture_command() {
+      local line=''${BASH_LINENO[0]}
+      if [[ $line == 1 || ''${FUNCNAME[1]:-} == report_failure ]]; then
+        return 0
+      fi
+      last_line=$line
+      last_command=$BASH_COMMAND
+    }
+
+    capture_failure() {
+      local status=$1
+      if [[ -z $failure_line ]]; then
+        failure_line=$2
+        failure_command=$3
+      fi
+      return "$status"
+    }
+
+    report_failure() {
+      local status=$1
+      trap - DEBUG ERR EXIT
+      if (( status != 0 )); then
+        local line=''${failure_line:-$last_line}
+        local command=''${failure_command:-$last_command}
+        printf 'pure-launcher failure: phase=%s line=%s status=%s command=%q\n' \
+          "$current_phase" "$line" "$status" "$command" >&2
+      fi
+      exit "$status"
+    }
+
+    set_phase() {
+      current_phase=$1
+      printf 'pure-launcher phase: %s\n' "$current_phase" >&2
+    }
+
+    trap capture_command DEBUG
+    trap 'capture_failure "$?" "$LINENO" "$BASH_COMMAND"' ERR
+    trap 'report_failure "$?"' EXIT
+    set_phase "source-setup-and-go-tests"
     export CGO_ENABLED=0
     root=/private/tmp/den-task12-pure
     rm -rf "$root"
@@ -26,6 +71,7 @@ pkgs.runCommand "pure-launcher"
     chmod -R u+w "$root/source"
     (cd "$root/source" && ln -s ${den-launcher.goModules} vendor && go test -mod=vendor ./internal/... ./cmd/... -count=1)
 
+    set_phase "git-and-credential-fixture-setup"
     cd "$root/worktree"
     printf fixture-ca > "$root/ca.pem"
     chmod 0400 "$root/ca.pem"
@@ -53,7 +99,9 @@ pkgs.runCommand "pure-launcher"
     export CLAUDE_CODE_OAUTH_TOKEN=claude-auth-fixture
     run_sandbox() { (cd "$root/worktree" && ${sandbox}/bin/claude "$@"); }
 
+    set_phase "normal-launcher-execution"
     run_sandbox "argument with spaces" "" --plugin-dir user-plugin --mcp-config user-mcp.json --strict-mcp-config
+    set_phase "success-path-evidence-assertions"
     test "$(grep -Fxc invoked "$root/fence.marker")" = 1
     if grep -Fq preflight "$root/fence.marker"; then exit 1; fi
     policyPath=$(sed -n 's/^policy=<\(.*\)>$/\1/p' "$root/fence.log")
@@ -83,6 +131,7 @@ pkgs.runCommand "pure-launcher"
     unset DEN_FAKE_GIT_ROOT DEN_FAKE_GIT_REMOTE
     if grep -Fq "$token" "$root/policy.json" "$root/fence.log" "$root/agent.log"; then exit 1; fi
 
+    set_phase "early-rejection-cases"
     expect_early_failure() {
       rm -f "$root/fence.marker" "$root/policy.json" "$root/agent.log" "$root/fence.log" "$root/fence-argv.log" "$root/rejected.out" "$root/rejected.err"
       if "$@" > "$root/rejected.out" 2> "$root/rejected.err"; then exit 1; fi
@@ -121,10 +170,12 @@ pkgs.runCommand "pure-launcher"
     expect_early_failure run_sandbox
     rm "$HOME/.claude/settings.json"
 
+    set_phase "simple-mode"
     export CLAUDE_CODE_SIMPLE=1 DEN_FAKE_EXPECT_SIMPLE_SCRUB=1
     run_sandbox ordinary
     unset CLAUDE_CODE_SIMPLE DEN_FAKE_EXPECT_SIMPLE_SCRUB
 
+    set_phase "pty-execution"
     ptyRunner="$root/pty-runner"
     cat > "$ptyRunner" <<EOF
     #!${pkgs.bash}/bin/bash
@@ -136,6 +187,7 @@ pkgs.runCommand "pure-launcher"
     ${pkgs.python3}/bin/python ${./pty-driver.py} "$ptyRunner" "$root"
     unset DEN_PTY_LOGICAL_ROOT
 
+    set_phase "cleanup-and-completion"
     rm -rf "$root"
     touch "$out"
   ''
