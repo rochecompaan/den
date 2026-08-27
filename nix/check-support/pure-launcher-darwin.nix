@@ -110,7 +110,9 @@ pkgs.runCommand "pure-launcher"
     grep -Fqx 'argv[0]=<--settings>' "$root/fence-argv.log"
     grep -Fqx "argv[1]=<$policyPath>" "$root/fence-argv.log"
     grep -Fqx 'argv[2]=<--expose-host-path>' "$root/fence-argv.log"
-    grep -Fqx "argv[3]=<$REPOWOLF_CA_FILE>" "$root/fence-argv.log"
+    preparedCA=$(sed -n 's/^argv\[3\]=<\(.*\)>$/\1/p' "$root/fence-argv.log")
+    test "$preparedCA" != "$REPOWOLF_CA_FILE"
+    test "$(basename "$preparedCA")" = repowolf-ca.pem
     grep -Fqx 'argv[4]=<-->' "$root/fence-argv.log"
     grep -Fqx 'argv[5]=<${fakes.fakeClaude}/bin/claude>' "$root/fence-argv.log"
     grep -Fqx 'argv[6]=<--dangerously-skip-permissions>' "$root/fence-argv.log"
