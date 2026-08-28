@@ -19,3 +19,7 @@ func openDirectoryHandle(path string) (*os.File, error) {
 func localDirectoryHandlePath(file *os.File) string {
 	return fmt.Sprintf("/proc/self/fd/%d", file.Fd())
 }
+
+func childDirectoryHandlePath() string {
+	return "/proc/self/fd/9"
+}
