@@ -6,7 +6,7 @@ let
   patch = ../../patches/fence-0.1.58-den-tmpdir.patch;
   expectedVersion = "0.1.58";
   expectedSourceHash = "sha256-ACe3N4bXYJW6QDQHtRChFWOTXTZTbEUbZ4d8cuFRqMY=";
-  expectedPatchHash = "578d1ab068cebfa1acbb39c0d452f455875f5b190b2e33774660426288e378f3";
+  expectedPatchHash = "4be4f0266a0a79da10002893752ea8185915f6ecfb146513946bde8a96e41e2a";
   upstreamPatches = upstream.patches or [ ];
   patchHash = builtins.hashFile "sha256" patch;
 
@@ -28,7 +28,7 @@ let
     checkPhase = ''
       runHook preCheck
       go test ./cmd/fence -count=1
-      go test ./internal/sandbox -run '^(TestEnsureSandboxTMPDIRHonorsDenFenceTMPDIR|TestGenerateProxyEnvVars)$' -count=1
+      go test ./internal/sandbox -run '^(TestEnsureSandboxTMPDIRHonorsDenFenceTMPDIR|TestGenerateProxyEnvVars|TestWrapCommandMacOS_PinsSandboxExecAbsolutePath)$' -count=1
       runHook postCheck
     '';
     passthru = (old.passthru or { }) // {

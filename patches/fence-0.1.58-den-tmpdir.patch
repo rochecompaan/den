@@ -82,3 +82,32 @@
 +	}
 +	return false
 +}
+--- a/internal/sandbox/macos.go
++++ b/internal/sandbox/macos.go
+@@ -773,1 +773,1 @@
+-	parts = append(parts, "sandbox-exec", "-p", profile, shellPath, shellFlag, command)
++	parts = append(parts, "/usr/bin/sandbox-exec", "-p", profile, shellPath, shellFlag, command)
+--- a/internal/sandbox/macos_test.go
++++ b/internal/sandbox/macos_test.go
+@@ -849,0 +850,21 @@
++
++// TestWrapCommandMacOS_PinsSandboxExecAbsolutePath verifies that the wrapper
++// invokes sandbox-exec by its stable absolute path, never via PATH lookup.
++// Den's controlled agent PATH is store-paths-only, so a bare "sandbox-exec"
++// fails to resolve at launch (exit 127). Pinning is also strictly safer:
++// a PATH-resolved sandbox entrypoint is hijackable.
++func TestWrapCommandMacOS_PinsSandboxExecAbsolutePath(t *testing.T) {
++	cfg := &config.Config{}
++
++	cmd, err := WrapCommandMacOS(cfg, "true", "", 8080, 1080, nil, nil, false, ShellModeDefault, false)
++	if err != nil {
++		t.Fatalf("WrapCommandMacOS: %v", err)
++	}
++
++	if !strings.Contains(cmd, "/usr/bin/sandbox-exec") {
++		t.Errorf("wrapper must pin /usr/bin/sandbox-exec, got:\n%s", cmd)
++	}
++	if strings.Contains(cmd, " sandbox-exec ") || strings.HasPrefix(cmd, "sandbox-exec ") {
++		t.Errorf("wrapper must not invoke a bare PATH-resolved sandbox-exec, got:\n%s", cmd)
++	}
++}
