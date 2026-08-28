@@ -122,20 +122,13 @@ func snapshotACLProbe(arguments []string) (aclProbe, error) {
 }
 
 func inspectACL(path, ownerName, ownerID string, probe aclProbe) ([sha256.Size]byte, aclAccess, error) {
-	return runACLProbe(path, path, ownerName, ownerID, probe, nil)
+	return runACLProbe(path, path, ownerName, ownerID, probe)
 }
 
-func inspectACLHandle(file *os.File, path, ownerName, ownerID string, probe aclProbe) ([sha256.Size]byte, aclAccess, error) {
-	// Keep the handle above descriptors commonly consumed by script interpreters.
-	files := []*os.File{file, file, file, file, file, file, file}
-	return runACLProbe(childDirectoryHandlePath(), path, ownerName, ownerID, probe, files)
-}
-
-func runACLProbe(probePath, originalPath, ownerName, ownerID string, probe aclProbe, files []*os.File) ([sha256.Size]byte, aclAccess, error) {
+func runACLProbe(probePath, originalPath, ownerName, ownerID string, probe aclProbe) ([sha256.Size]byte, aclAccess, error) {
 	arguments := append([]string{}, probe.arguments...)
 	arguments = append(arguments, probePath)
 	command := exec.Command(probe.executable, arguments...)
-	command.ExtraFiles = files
 	command.Env = aclProbeEnvironment(originalPath)
 	output, err := command.Output()
 	if err != nil {

@@ -191,7 +191,7 @@ func captureFinalState(path string, ownerUID uint32, ownerName, ownerID string, 
 	if !ok || identity.uid != ownerUID || !privateDirectoryMode(identity.mode) || !directoryHandleWritable(file) {
 		return fileIdentity{}, [sha256.Size]byte{}, errPrivate
 	}
-	acl, access, err := inspectACLHandle(file, path, ownerName, ownerID, probe)
+	acl, access, err := inspectACL(path, ownerName, ownerID, probe)
 	if err != nil {
 		return identity, [sha256.Size]byte{}, err
 	}
