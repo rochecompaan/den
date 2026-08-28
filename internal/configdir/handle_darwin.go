@@ -16,5 +16,5 @@ func openDirectoryHandle(path string) (*os.File, error) {
 }
 
 func childDirectoryHandlePath() string {
-	return "/dev/fd/9/"
+	return "/dev/fd/9"
 }
