@@ -96,6 +96,7 @@ pkgs.writeShellScriptBin "claude" ''
       trap 'printf TSTP >> "$DEN_FAKE_SIGNAL_LOG"' TSTP
       trap 'printf CONT >> "$DEN_FAKE_SIGNAL_LOG"' CONT
       printf '%s' "$$" > "$DEN_FAKE_PROCESS_PID_FILE"
+      printf '%s' "$PPID" > "$DEN_FAKE_PROCESS_PID_FILE.ppid"
       printf ready > "$DEN_FAKE_READY_FILE"
       while :; do sleep 1; done
       ;;

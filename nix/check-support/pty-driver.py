@@ -109,8 +109,14 @@ def start():
     wait_file(os.path.join(host_root, "pty.ready"))
     wait_file(os.path.join(host_root, "pty.pid"), True)
     child = int(open(os.path.join(host_root, "pty.pid"), encoding="utf-8").read())
-    ps = "/bin/ps" if os.path.exists("/bin/ps") else "ps"
-    parent = int(subprocess.check_output([ps, "-o", "ppid=", "-p", str(child)], text=True).strip())
+    ppid_path = os.path.join(host_root, "pty.pid.ppid")
+    if os.path.exists(ppid_path):
+        parent = int(open(ppid_path, encoding="utf-8").read())
+        if parent != process.pid:
+            raise RuntimeError("fake Claude parent is not the driver child")
+    else:
+        ps = "/bin/ps" if os.path.exists("/bin/ps") else "ps"
+        parent = int(subprocess.check_output([ps, "-o", "ppid=", "-p", str(child)], text=True).strip())
     if os.tcgetpgrp(master) != os.getpgid(child):
         raise RuntimeError("fake Claude is not the PTY foreground group")
     return process, master, parent, child, drain
