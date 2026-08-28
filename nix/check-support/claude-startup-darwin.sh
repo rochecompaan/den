@@ -57,7 +57,7 @@ den_adapt_claude_startup_manifest \
 printf '.den-claude/\n' > "$root/worktree/.gitignore"
 printf fixture-ca > "$root/ca.pem"
 chmod 0400 "$root/ca.pem"
-token='[REDACTED]'
+token='rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 uid=$(id -u)
 cd "$root/worktree"
 git init -q
