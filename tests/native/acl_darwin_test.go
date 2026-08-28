@@ -3,6 +3,8 @@
 package native
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,7 +12,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func testValidationTimePathSwap(t *testing.T, fixture *nativeFixture) {
@@ -77,6 +81,276 @@ func TestDarwinACLGrantRejected(t *testing.T) {
 	result := fixture.launchWith([]string{"CLAUDE_CONFIG_DIR=" + state}, "marker", marker)
 	if result.err == nil || fileExists(marker) {
 		t.Fatalf("macOS ACL grant did not fail closed: %v\n%s", result.err, result.stderr)
+	}
+}
+
+// TEMPORARY Task 4j diagnostic
+func TestDarwinACLProbeHandleDiagnostic(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "acl-state")
+	if err := os.Mkdir(state, 0o700); err != nil {
+		fmt.Println("DIAG-ACL: create state:", err)
+		return
+	}
+	if output, err := exec.Command("/bin/chmod", "+a", "everyone allow read,readattr,readextattr,readsecurity", state).CombinedOutput(); err != nil {
+		fmt.Println("DIAG-ACL: apply ACL:", err)
+		printDiagnosticOutput("DIAG-ACL:", string(output))
+		return
+	}
+	fd, err := syscall.Open(state, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		fmt.Println("DIAG-ACL: open directory handle:", err)
+		return
+	}
+	file := os.NewFile(uintptr(fd), state)
+	defer file.Close()
+
+	command := exec.Command("/bin/sh", "-c", `
+diag() {
+  printf 'DIAG-ACL: $'
+  printf ' %s' "$@"
+  printf '\n'
+  "$@" 2>&1 | sed 's/^/DIAG-ACL: /' || true
+}
+diag readlink /dev/fd/9
+diag /bin/ls -lde /dev/fd/9
+diag /bin/ls -lde /dev/fd/9/
+diag /bin/ls -lde "$DIAG_STATE"
+diag stat -f '%N type=%HT mode=%Sp owner=%Su:%Sg' /dev/fd/9
+diag stat -f '%N type=%HT mode=%Sp owner=%Su:%Sg' /dev/fd/9/
+diag stat -l -f '%N type=%HT mode=%Sp owner=%Su:%Sg' /dev/fd/9
+`)
+	command.ExtraFiles = []*os.File{file, file, file, file, file, file, file}
+	command.Env = append(os.Environ(), "DIAG_STATE="+state)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		fmt.Println("DIAG-ACL: probe command:", err)
+	}
+	printRawDiagnosticOutput(string(output))
+}
+
+// TEMPORARY Task 4j diagnostic
+func TestDarwinBashHookHangDiagnostic(t *testing.T) {
+	fixture := newNativeFixture(t)
+	fixture.installClaudeContextHook(t)
+	replacement := filepath.Join(fixture.worktree, "replacement-policy")
+	if err := os.WriteFile(replacement, []byte("replacement\n"), 0o600); err != nil {
+		fmt.Println("DIAG-HOOK: write replacement policy:", err)
+		return
+	}
+	marker := filepath.Join(fixture.worktree, "blocked-truncate")
+	scenario := fixture.provider.register(
+		`: > "$DEN_FENCE_POLICY_FILE" 2>/dev/null || true`,
+		`gh repo create forbidden; printf escaped > "$DEN_NATIVE_BLOCKED_MARKER"`,
+	)
+	absoluteDeadline := time.Now().Add(60 * time.Second)
+	diagnosticContext, cancel := context.WithDeadline(context.Background(), absoluteDeadline)
+	defer cancel()
+	command, results, err := startDarwinDiagnosticClaude(diagnosticContext, fixture, scenario, []string{
+		"DEN_NATIVE_REPLACEMENT=" + replacement,
+		"DEN_NATIVE_BLOCKED_MARKER=" + marker,
+	})
+	if err != nil {
+		fmt.Println("DIAG-HOOK: launch failed:", err)
+		return
+	}
+
+	var result *commandResult
+	observation := time.NewTimer(45 * time.Second)
+	defer observation.Stop()
+	select {
+	case returned := <-results:
+		result = &returned
+		fmt.Println("DIAG-HOOK: launch returned:", result.err)
+		printDiagnosticOutput("DIAG-HOOK:", result.stdout)
+		printDiagnosticOutput("DIAG-HOOK:", result.stderr)
+	case <-observation.C:
+		fmt.Println("DIAG-HOOK: launch still running after 45s")
+		fixtureBash, err := resolveFixtureBash()
+		if err != nil {
+			fmt.Println("DIAG-HOOK: resolve fixture Bash:", err)
+		}
+		evidenceContext, cancelEvidence := context.WithTimeout(diagnosticContext, 5*time.Second)
+		dumpDarwinHookProcesses(evidenceContext, fixtureBash)
+		cancelEvidence()
+	case <-diagnosticContext.Done():
+		fmt.Println("DIAG-HOOK: overall diagnostic deadline reached before evidence:", diagnosticContext.Err())
+	}
+	confirmDarwinHookLaunchStopped(diagnosticContext, command.Process.Pid, results, result)
+}
+
+func resolveFixtureBash() (string, error) {
+	claude, err := filepath.EvalSymlinks(os.Getenv("DEN_NATIVE_CLAUDE"))
+	if err != nil {
+		return "", err
+	}
+	contents, err := os.ReadFile(claude)
+	if err != nil {
+		return "", err
+	}
+	firstLine, _, _ := strings.Cut(string(contents), "\n")
+	interpreter := strings.Fields(strings.TrimPrefix(firstLine, "#!"))
+	if !strings.HasPrefix(firstLine, "#!") || len(interpreter) == 0 || !filepath.IsAbs(interpreter[0]) {
+		return "", fmt.Errorf("fixture Claude executable has no absolute shebang: %q", firstLine)
+	}
+	return filepath.EvalSymlinks(interpreter[0])
+}
+
+func dumpDarwinHookProcesses(diagnosticContext context.Context, fixtureBash string) {
+	psContext, cancel := context.WithTimeout(diagnosticContext, 2*time.Second)
+	ps := exec.CommandContext(psContext, "ps", "-Ao", "pid,ppid,stat,etime,command")
+	ps.WaitDelay = 2 * time.Second
+	output, err := ps.CombinedOutput()
+	cancel()
+	fmt.Println("DIAG-HOOK: ps:", err)
+	printDiagnosticOutput("DIAG-HOOK:", string(output))
+	if diagnosticContext.Err() != nil {
+		fmt.Println("DIAG-HOOK: overall diagnostic deadline reached before samples:", diagnosticContext.Err())
+		return
+	}
+	if _, err := os.Stat("/usr/bin/sample"); err != nil {
+		fmt.Println("DIAG-HOOK: /usr/bin/sample unavailable:", err)
+		return
+	}
+
+	sampleContext, cancel := context.WithTimeout(diagnosticContext, 3*time.Second)
+	defer cancel()
+	var samples sync.WaitGroup
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		command := strings.Join(fields[4:], " ")
+		commandFields := strings.Fields(command)
+		matchesFixtureBash := len(commandFields) > 0 && commandFields[0] == fixtureBash
+		if !strings.Contains(command, "fence") && !matchesFixtureBash {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		samples.Add(1)
+		go func(pid int, command string) {
+			defer samples.Done()
+			sampleCommand := exec.CommandContext(sampleContext, "/usr/bin/sample", strconv.Itoa(pid), "2", "1")
+			sampleCommand.WaitDelay = 2 * time.Second
+			sample, err := sampleCommand.CombinedOutput()
+			fmt.Println("DIAG-HOOK: sample pid=", pid, "command=", command, ":", err)
+			printDiagnosticOutput("DIAG-HOOK:", string(sample))
+		}(pid, command)
+	}
+	samplesDone := make(chan struct{})
+	go func() {
+		samples.Wait()
+		close(samplesDone)
+	}()
+	select {
+	case <-samplesDone:
+	case <-diagnosticContext.Done():
+		fmt.Println("DIAG-HOOK: overall diagnostic deadline reached while sampling:", diagnosticContext.Err())
+	}
+}
+
+func startDarwinDiagnosticClaude(diagnosticContext context.Context, fixture *nativeFixture, scenario *claudeScenario, extraEnvironment []string) (*exec.Cmd, <-chan commandResult, error) {
+	arguments := []string{"-p", scenario.prompt(), "--output-format", "text"}
+	command := exec.CommandContext(diagnosticContext, os.Getenv("DEN_NATIVE_CLAUDE"), arguments...)
+	command.Dir = fixture.worktree
+	providerEnvironment := []string{
+		"ANTHROPIC_API_KEY=den-native-local-test-key",
+		"ANTHROPIC_BASE_URL=" + fixtureURL(tlsRecorderPort, brokerHostname()),
+		"NODE_EXTRA_CA_CERTS=" + fixture.certificate.ca,
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		"DEN_NATIVE_CONTEXT_CURL=/usr/bin/curl",
+	}
+	command.Env = fixture.launchEnvironment(append(providerEnvironment, extraEnvironment...))
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.WaitDelay = 2 * time.Second
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	if err := command.Start(); err != nil {
+		return nil, nil, err
+	}
+	results := make(chan commandResult, 1)
+	go func() {
+		err := command.Wait()
+		results <- commandResult{stdout: stdout.String(), stderr: stderr.String(), err: err}
+	}()
+	return command, results, nil
+}
+
+func confirmDarwinHookLaunchStopped(diagnosticContext context.Context, processGroup int, results <-chan commandResult, result *commandResult) {
+	if result != nil && !darwinProcessGroupAlive(processGroup) {
+		fmt.Println("DIAG-HOOK: launch result drained and process tree confirmed dead")
+		return
+	}
+	if diagnosticContext.Err() != nil {
+		printDarwinHookDeadlineEvidence(processGroup, result, diagnosticContext.Err())
+		return
+	}
+
+	fmt.Println("DIAG-HOOK: terminating launched process group:", processGroup)
+	fmt.Println("DIAG-HOOK: process-group TERM:", syscall.Kill(-processGroup, syscall.SIGTERM))
+	for attempts := 0; attempts < 40; attempts++ {
+		if result != nil && !darwinProcessGroupAlive(processGroup) {
+			fmt.Println("DIAG-HOOK: launch result drained and process tree confirmed dead")
+			return
+		}
+		select {
+		case returned := <-results:
+			result = &returned
+			fmt.Println("DIAG-HOOK: launch returned after TERM:", result.err)
+			printDiagnosticOutput("DIAG-HOOK:", result.stdout)
+			printDiagnosticOutput("DIAG-HOOK:", result.stderr)
+		case <-diagnosticContext.Done():
+			printDarwinHookDeadlineEvidence(processGroup, result, diagnosticContext.Err())
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	drainDarwinHookResult(diagnosticContext, processGroup, results, result)
+}
+
+func drainDarwinHookResult(diagnosticContext context.Context, processGroup int, results <-chan commandResult, result *commandResult) {
+	fmt.Println("DIAG-HOOK: process-group KILL:", syscall.Kill(-processGroup, syscall.SIGKILL))
+	for {
+		if result != nil && !darwinProcessGroupAlive(processGroup) {
+			fmt.Println("DIAG-HOOK: launch result drained and process tree confirmed dead")
+			return
+		}
+		select {
+		case returned := <-results:
+			result = &returned
+			fmt.Println("DIAG-HOOK: launch returned after KILL:", result.err)
+			printDiagnosticOutput("DIAG-HOOK:", result.stdout)
+			printDiagnosticOutput("DIAG-HOOK:", result.stderr)
+		case <-diagnosticContext.Done():
+			printDarwinHookDeadlineEvidence(processGroup, result, diagnosticContext.Err())
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func printDarwinHookDeadlineEvidence(processGroup int, result *commandResult, err error) {
+	fmt.Println("DIAG-HOOK: overall diagnostic deadline reached:", err)
+	fmt.Println("DIAG-HOOK: launch result drained:", result != nil)
+	fmt.Println("DIAG-HOOK: process group alive:", darwinProcessGroupAlive(processGroup))
+}
+
+func darwinProcessGroupAlive(processGroup int) bool {
+	return syscall.Kill(-processGroup, 0) == nil
+}
+
+func printDiagnosticOutput(prefix, output string) {
+	for _, line := range strings.Split(strings.TrimSuffix(output, "\n"), "\n") {
+		fmt.Println(prefix, line)
+	}
+}
+
+func printRawDiagnosticOutput(output string) {
+	for _, line := range strings.Split(strings.TrimSuffix(output, "\n"), "\n") {
+		fmt.Println(line)
 	}
 }
 
