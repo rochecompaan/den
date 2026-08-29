@@ -5,7 +5,9 @@ package native
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -198,16 +200,36 @@ func TestDarwinBashHookHangDiagnostic(t *testing.T) {
 		return
 	}
 	marker := filepath.Join(fixture.worktree, "blocked-truncate")
+	hookEvidence := filepath.Join(fixture.worktree, "hook-evidence")
 	scenario := fixture.provider.register(
-		`: > "$DEN_FENCE_POLICY_FILE" 2>/dev/null || true`,
+		`{
+  printf 'before stat: '
+  stat -f 'size=%z mode=%Mp%Lp perms=%Sp' "$DEN_FENCE_POLICY_FILE"
+  printf '\n'
+  printf 'before sha256: '
+  shasum -a 256 "$DEN_FENCE_POLICY_FILE"
+  if : > "$DEN_FENCE_POLICY_FILE"; then
+    printf 'truncate: succeeded\n'
+  else
+    status=$?
+    printf 'truncate: failed status=%s\n' "$status"
+  fi
+  printf 'after stat: '
+  stat -f 'size=%z mode=%Mp%Lp perms=%Sp' "$DEN_FENCE_POLICY_FILE"
+  printf '\n'
+  printf 'after sha256: '
+  shasum -a 256 "$DEN_FENCE_POLICY_FILE"
+} >> "$DEN_NATIVE_HOOK_EVIDENCE" 2>&1 || true
+true`,
 		`gh repo create forbidden; printf escaped > "$DEN_NATIVE_BLOCKED_MARKER"`,
 	)
 	absoluteDeadline := time.Now().Add(60 * time.Second)
 	diagnosticContext, cancel := context.WithDeadline(context.Background(), absoluteDeadline)
 	defer cancel()
-	command, results, err := startDarwinDiagnosticClaude(diagnosticContext, fixture, scenario, []string{
+	command, results, stdout, stderr, err := startDarwinDiagnosticClaude(diagnosticContext, fixture, scenario, []string{
 		"DEN_NATIVE_REPLACEMENT=" + replacement,
 		"DEN_NATIVE_BLOCKED_MARKER=" + marker,
+		"DEN_NATIVE_HOOK_EVIDENCE=" + hookEvidence,
 	})
 	if err != nil {
 		fmt.Println("DIAG-HOOK: launch failed:", err)
@@ -230,7 +252,8 @@ func TestDarwinBashHookHangDiagnostic(t *testing.T) {
 			fmt.Println("DIAG-HOOK: resolve fixture Bash:", err)
 		}
 		evidenceContext, cancelEvidence := context.WithTimeout(diagnosticContext, 5*time.Second)
-		dumpDarwinHookProcesses(evidenceContext, fixtureBash)
+		psOutput := dumpDarwinHookProcesses(evidenceContext, fixtureBash, command.Process.Pid)
+		printDarwinHookObservation(fixture, scenario, psOutput, hookEvidence, stdout, stderr)
 		cancelEvidence()
 	case <-diagnosticContext.Done():
 		fmt.Println("DIAG-HOOK: overall diagnostic deadline reached before evidence:", diagnosticContext.Err())
@@ -255,9 +278,9 @@ func resolveFixtureBash() (string, error) {
 	return filepath.EvalSymlinks(interpreter[0])
 }
 
-func dumpDarwinHookProcesses(diagnosticContext context.Context, fixtureBash string) {
+func dumpDarwinHookProcesses(diagnosticContext context.Context, fixtureBash string, processGroup int) string {
 	psContext, cancel := context.WithTimeout(diagnosticContext, 2*time.Second)
-	ps := exec.CommandContext(psContext, "ps", "-Ao", "pid,ppid,stat,etime,command")
+	ps := exec.CommandContext(psContext, "ps", "-Ao", "pid,ppid,pgid,stat,etime,command")
 	ps.WaitDelay = 2 * time.Second
 	output, err := ps.CombinedOutput()
 	cancel()
@@ -265,11 +288,11 @@ func dumpDarwinHookProcesses(diagnosticContext context.Context, fixtureBash stri
 	printDiagnosticOutput("DIAG-HOOK:", string(output))
 	if diagnosticContext.Err() != nil {
 		fmt.Println("DIAG-HOOK: overall diagnostic deadline reached before samples:", diagnosticContext.Err())
-		return
+		return string(output)
 	}
 	if _, err := os.Stat("/usr/bin/sample"); err != nil {
 		fmt.Println("DIAG-HOOK: /usr/bin/sample unavailable:", err)
-		return
+		return string(output)
 	}
 
 	sampleContext, cancel := context.WithTimeout(diagnosticContext, 3*time.Second)
@@ -277,13 +300,19 @@ func dumpDarwinHookProcesses(diagnosticContext context.Context, fixtureBash stri
 	var samples sync.WaitGroup
 	for _, line := range strings.Split(string(output), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 5 {
+		if len(fields) < 6 {
 			continue
 		}
-		command := strings.Join(fields[4:], " ")
+		command := strings.Join(fields[5:], " ")
 		commandFields := strings.Fields(command)
 		matchesFixtureBash := len(commandFields) > 0 && commandFields[0] == fixtureBash
-		if !strings.Contains(command, "fence") && !matchesFixtureBash {
+		pgid, parsePGIDError := strconv.Atoi(fields[2])
+		matchesResolver := strings.Contains(command, "resolver") || strings.Contains(command, "sudo")
+		matches := matchesResolver || (parsePGIDError == nil && pgid == processGroup)
+		if parsePGIDError != nil {
+			matches = matchesResolver || strings.Contains(command, "fence") || matchesFixtureBash
+		}
+		if !matches {
 			continue
 		}
 		pid, err := strconv.Atoi(fields[0])
@@ -310,9 +339,141 @@ func dumpDarwinHookProcesses(diagnosticContext context.Context, fixtureBash stri
 	case <-diagnosticContext.Done():
 		fmt.Println("DIAG-HOOK: overall diagnostic deadline reached while sampling:", diagnosticContext.Err())
 	}
+	return string(output)
 }
 
-func startDarwinDiagnosticClaude(diagnosticContext context.Context, fixture *nativeFixture, scenario *claudeScenario, extraEnvironment []string) (*exec.Cmd, <-chan commandResult, error) {
+func printDarwinHookObservation(fixture *nativeFixture, scenario *claudeScenario, psOutput, hookEvidence string, stdout, stderr *lockedBuffer) {
+	printDarwinHookPolicyEvidence(psOutput)
+	printDarwinHookContextEvidence()
+	printDarwinHookFile("mutation evidence", hookEvidence)
+	results := fixture.provider.scenarioResults(scenario)
+	fmt.Println("DIAG-HOOK: provider scenario results:", len(results), results)
+	printDiagnosticOutput("DIAG-HOOK: launch stdout at observation:", stdout.String())
+	printDiagnosticOutput("DIAG-HOOK: launch stderr at observation:", stderr.String())
+}
+
+func printDarwinHookPolicyEvidence(psOutput string) {
+	policyPath, source := policyPathFromDarwinHookPS(psOutput)
+	if policyPath == "" {
+		var err error
+		policyPath, err = newestDarwinHookPath(filepath.Join("/private/tmp", fmt.Sprintf("den-%d", os.Getuid()), "policy-*", "policy.json"))
+		if err != nil {
+			fmt.Println("DIAG-HOOK: policy fallback:", err)
+		}
+		source = "newest policy glob"
+	}
+	if policyPath == "" {
+		fmt.Println("DIAG-HOOK: policy after-state unavailable")
+		return
+	}
+	info, err := os.Stat(policyPath)
+	if err != nil {
+		fmt.Println("DIAG-HOOK: policy after-state source=", source, "path=", policyPath, "stat:", err)
+		return
+	}
+	file, err := os.Open(policyPath)
+	if err != nil {
+		fmt.Println("DIAG-HOOK: policy after-state source=", source, "path=", policyPath, "open:", err)
+		return
+	}
+	hash := sha256.New()
+	_, copyErr := io.Copy(hash, file)
+	closeErr := file.Close()
+	if copyErr != nil || closeErr != nil {
+		fmt.Println("DIAG-HOOK: policy after-state source=", source, "path=", policyPath, "hash:", copyErr, closeErr)
+		return
+	}
+	fmt.Printf("DIAG-HOOK: policy after-state source=%s path=%s size=%d mode=%#o sha256=%x\n", source, policyPath, info.Size(), info.Mode().Perm(), hash.Sum(nil))
+}
+
+func policyPathFromDarwinHookPS(output string) (string, string) {
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 6 {
+			continue
+		}
+		command := strings.Fields(strings.Join(fields[5:], " "))
+		if !strings.Contains(strings.Join(command, " "), "fence") {
+			continue
+		}
+		for index, argument := range command[:len(command)-1] {
+			if argument == "--settings" {
+				return command[index+1], "fence --settings"
+			}
+		}
+	}
+	return "", ""
+}
+
+func printDarwinHookContextEvidence() {
+	scratchPath, err := newestDarwinHookPath(filepath.Join("/private/tmp", fmt.Sprintf("den-%d", os.Getuid()), "scratch-*"))
+	if err != nil {
+		fmt.Println("DIAG-HOOK: hook context scratch lookup:", err)
+	}
+	if scratchPath == "" {
+		fmt.Println("DIAG-HOOK: hook context unavailable (no scratch directory)")
+		return
+	}
+	printDarwinHookFile("hook context", filepath.Join(scratchPath, nestedFenceContextFile))
+}
+
+func newestDarwinHookPath(pattern string) (string, error) {
+	paths, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", err
+	}
+	var newest string
+	var newestTime time.Time
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil || (!info.IsDir() && filepath.Base(path) != "policy.json") {
+			continue
+		}
+		if newest == "" || info.ModTime().After(newestTime) {
+			newest, newestTime = path, info.ModTime()
+		}
+	}
+	return newest, nil
+}
+
+func printDarwinHookFile(label, path string) {
+	file, err := os.Open(path)
+	if err != nil {
+		fmt.Println("DIAG-HOOK:", label, "path=", path, "read:", err)
+		return
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(file, 64*1024+1))
+	closeErr := file.Close()
+	if readErr != nil || closeErr != nil {
+		fmt.Println("DIAG-HOOK:", label, "path=", path, "read:", readErr, closeErr)
+		return
+	}
+	if len(contents) > 64*1024 {
+		contents = contents[:64*1024]
+		fmt.Println("DIAG-HOOK:", label, "truncated at 65536 bytes")
+	}
+	fmt.Println("DIAG-HOOK:", label, "path=", path, "exists")
+	printDiagnosticOutput("DIAG-HOOK:", string(contents))
+}
+
+type lockedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (buffer *lockedBuffer) Write(contents []byte) (int, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.Write(contents)
+}
+
+func (buffer *lockedBuffer) String() string {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.String()
+}
+
+func startDarwinDiagnosticClaude(diagnosticContext context.Context, fixture *nativeFixture, scenario *claudeScenario, extraEnvironment []string) (*exec.Cmd, <-chan commandResult, *lockedBuffer, *lockedBuffer, error) {
 	arguments := []string{"-p", scenario.prompt(), "--output-format", "text"}
 	command := exec.CommandContext(diagnosticContext, os.Getenv("DEN_NATIVE_CLAUDE"), arguments...)
 	command.Dir = fixture.worktree
@@ -326,17 +487,17 @@ func startDarwinDiagnosticClaude(diagnosticContext context.Context, fixture *nat
 	command.Env = fixture.launchEnvironment(append(providerEnvironment, extraEnvironment...))
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	command.WaitDelay = 2 * time.Second
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
+	stdout, stderr := &lockedBuffer{}, &lockedBuffer{}
+	command.Stdout, command.Stderr = stdout, stderr
 	if err := command.Start(); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	results := make(chan commandResult, 1)
 	go func() {
 		err := command.Wait()
 		results <- commandResult{stdout: stdout.String(), stderr: stderr.String(), err: err}
 	}()
-	return command, results, nil
+	return command, results, stdout, stderr, nil
 }
 
 func confirmDarwinHookLaunchStopped(diagnosticContext context.Context, processGroup int, results <-chan commandResult, result *commandResult) {
