@@ -57,7 +57,7 @@ pkgs.runCommand "package-closure"
         .fenceExecutable == $fence and
         .repoWolfClientDir == $repowolf and
         .basePolicy == $policy and
-        (if .platform == "darwin" then .aclProbe == [$aclProbe] else true) and
+        (if .platform == "darwin" then .aclProbe == [$aclProbe] else true end) and
         (.pathEntries[0] == ($repowolf + "/bin"))
       ' "$manifest"
 
