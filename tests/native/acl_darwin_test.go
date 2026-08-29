@@ -253,7 +253,7 @@ true`,
 		}
 		evidenceContext, cancelEvidence := context.WithTimeout(diagnosticContext, 5*time.Second)
 		psOutput := dumpDarwinHookProcesses(evidenceContext, fixtureBash, command.Process.Pid)
-		printDarwinHookObservation(fixture, scenario, psOutput, hookEvidence, stdout, stderr)
+		printDarwinHookObservation(evidenceContext, fixture, scenario, psOutput, hookEvidence, stdout, stderr)
 		cancelEvidence()
 	case <-diagnosticContext.Done():
 		fmt.Println("DIAG-HOOK: overall diagnostic deadline reached before evidence:", diagnosticContext.Err())
@@ -342,21 +342,48 @@ func dumpDarwinHookProcesses(diagnosticContext context.Context, fixtureBash stri
 	return string(output)
 }
 
-func printDarwinHookObservation(fixture *nativeFixture, scenario *claudeScenario, psOutput, hookEvidence string, stdout, stderr *lockedBuffer) {
-	printDarwinHookPolicyEvidence(psOutput)
-	printDarwinHookContextEvidence()
-	printDarwinHookFile("mutation evidence", hookEvidence)
+const darwinHookObservationLimit = 64 * 1024
+
+func printDarwinHookObservation(diagnosticContext context.Context, fixture *nativeFixture, scenario *claudeScenario, psOutput, hookEvidence string, stdout, stderr *lockedBuffer) {
+	if !darwinHookEvidenceActive(diagnosticContext) {
+		return
+	}
+	printDarwinHookPolicyEvidence(diagnosticContext, psOutput)
+	if !darwinHookEvidenceActive(diagnosticContext) {
+		return
+	}
+	printDarwinHookContextEvidence(diagnosticContext)
+	if !darwinHookEvidenceActive(diagnosticContext) {
+		return
+	}
+	printDarwinHookFile(diagnosticContext, "mutation evidence", hookEvidence)
+	if !darwinHookEvidenceActive(diagnosticContext) {
+		return
+	}
 	results := fixture.provider.scenarioResults(scenario)
-	fmt.Println("DIAG-HOOK: provider scenario results:", len(results), results)
-	printDiagnosticOutput("DIAG-HOOK: launch stdout at observation:", stdout.String())
-	printDiagnosticOutput("DIAG-HOOK: launch stderr at observation:", stderr.String())
+	fmt.Println("DIAG-HOOK: provider scenario result count:", len(results))
+	for index, result := range results {
+		if !printDarwinHookOutput(diagnosticContext, fmt.Sprintf("DIAG-HOOK: provider scenario result %d:", index), result) {
+			return
+		}
+	}
+	printDarwinHookStream(diagnosticContext, "launch stdout at observation", stdout)
+	printDarwinHookStream(diagnosticContext, "launch stderr at observation", stderr)
 }
 
-func printDarwinHookPolicyEvidence(psOutput string) {
-	policyPath, source := policyPathFromDarwinHookPS(psOutput)
-	if policyPath == "" {
+func darwinHookEvidenceActive(diagnosticContext context.Context) bool {
+	if err := diagnosticContext.Err(); err != nil {
+		fmt.Println("DIAG-HOOK: observation evidence deadline reached:", err)
+		return false
+	}
+	return true
+}
+
+func printDarwinHookPolicyEvidence(diagnosticContext context.Context, psOutput string) {
+	policyPath, source := policyPathFromDarwinHookPS(diagnosticContext, psOutput)
+	if policyPath == "" && darwinHookEvidenceActive(diagnosticContext) {
 		var err error
-		policyPath, err = newestDarwinHookPath(filepath.Join("/private/tmp", fmt.Sprintf("den-%d", os.Getuid()), "policy-*", "policy.json"))
+		policyPath, err = newestDarwinHookPath(diagnosticContext, filepath.Join("/private/tmp", fmt.Sprintf("den-%d", os.Getuid()), "policy-*", "policy.json"))
 		if err != nil {
 			fmt.Println("DIAG-HOOK: policy fallback:", err)
 		}
@@ -371,23 +398,28 @@ func printDarwinHookPolicyEvidence(psOutput string) {
 		fmt.Println("DIAG-HOOK: policy after-state source=", source, "path=", policyPath, "stat:", err)
 		return
 	}
-	file, err := os.Open(policyPath)
+	if !info.Mode().IsRegular() {
+		fmt.Println("DIAG-HOOK: policy after-state source=", source, "path=", policyPath, "rejected non-regular mode=", info.Mode())
+		return
+	}
+	contents, truncated, err := readDarwinHookRegularFile(diagnosticContext, policyPath)
 	if err != nil {
-		fmt.Println("DIAG-HOOK: policy after-state source=", source, "path=", policyPath, "open:", err)
+		fmt.Println("DIAG-HOOK: policy after-state source=", source, "path=", policyPath, "read:", err)
 		return
 	}
-	hash := sha256.New()
-	_, copyErr := io.Copy(hash, file)
-	closeErr := file.Close()
-	if copyErr != nil || closeErr != nil {
-		fmt.Println("DIAG-HOOK: policy after-state source=", source, "path=", policyPath, "hash:", copyErr, closeErr)
+	if truncated {
+		fmt.Println("DIAG-HOOK: policy after-state source=", source, "path=", policyPath, "hash skipped: exceeds", darwinHookObservationLimit, "bytes")
 		return
 	}
-	fmt.Printf("DIAG-HOOK: policy after-state source=%s path=%s size=%d mode=%#o sha256=%x\n", source, policyPath, info.Size(), info.Mode().Perm(), hash.Sum(nil))
+	hash := sha256.Sum256(contents)
+	fmt.Println(fmt.Sprintf("DIAG-HOOK: policy after-state source=%s path=%s size=%d mode=%#o sha256=%x", source, policyPath, info.Size(), info.Mode().Perm(), hash))
 }
 
-func policyPathFromDarwinHookPS(output string) (string, string) {
+func policyPathFromDarwinHookPS(diagnosticContext context.Context, output string) (string, string) {
 	for _, line := range strings.Split(output, "\n") {
+		if !darwinHookEvidenceActive(diagnosticContext) {
+			return "", ""
+		}
 		fields := strings.Fields(line)
 		if len(fields) < 6 {
 			continue
@@ -405,8 +437,8 @@ func policyPathFromDarwinHookPS(output string) (string, string) {
 	return "", ""
 }
 
-func printDarwinHookContextEvidence() {
-	scratchPath, err := newestDarwinHookPath(filepath.Join("/private/tmp", fmt.Sprintf("den-%d", os.Getuid()), "scratch-*"))
+func printDarwinHookContextEvidence(diagnosticContext context.Context) {
+	scratchPath, err := newestDarwinHookPath(diagnosticContext, filepath.Join("/private/tmp", fmt.Sprintf("den-%d", os.Getuid()), "scratch-*"))
 	if err != nil {
 		fmt.Println("DIAG-HOOK: hook context scratch lookup:", err)
 	}
@@ -414,10 +446,13 @@ func printDarwinHookContextEvidence() {
 		fmt.Println("DIAG-HOOK: hook context unavailable (no scratch directory)")
 		return
 	}
-	printDarwinHookFile("hook context", filepath.Join(scratchPath, nestedFenceContextFile))
+	printDarwinHookFile(diagnosticContext, "hook context", filepath.Join(scratchPath, nestedFenceContextFile))
 }
 
-func newestDarwinHookPath(pattern string) (string, error) {
+func newestDarwinHookPath(diagnosticContext context.Context, pattern string) (string, error) {
+	if err := diagnosticContext.Err(); err != nil {
+		return "", err
+	}
 	paths, err := filepath.Glob(pattern)
 	if err != nil {
 		return "", err
@@ -425,6 +460,9 @@ func newestDarwinHookPath(pattern string) (string, error) {
 	var newest string
 	var newestTime time.Time
 	for _, path := range paths {
+		if err := diagnosticContext.Err(); err != nil {
+			return "", err
+		}
 		info, err := os.Stat(path)
 		if err != nil || (!info.IsDir() && filepath.Base(path) != "policy.json") {
 			continue
@@ -436,24 +474,97 @@ func newestDarwinHookPath(pattern string) (string, error) {
 	return newest, nil
 }
 
-func printDarwinHookFile(label, path string) {
-	file, err := os.Open(path)
+func printDarwinHookFile(diagnosticContext context.Context, label, path string) {
+	contents, truncated, err := readDarwinHookRegularFile(diagnosticContext, path)
 	if err != nil {
 		fmt.Println("DIAG-HOOK:", label, "path=", path, "read:", err)
 		return
 	}
-	contents, readErr := io.ReadAll(io.LimitReader(file, 64*1024+1))
-	closeErr := file.Close()
-	if readErr != nil || closeErr != nil {
-		fmt.Println("DIAG-HOOK:", label, "path=", path, "read:", readErr, closeErr)
+	fmt.Println("DIAG-HOOK:", label, "path=", path, "exists")
+	if truncated {
+		fmt.Println("DIAG-HOOK:", label, "truncated at", darwinHookObservationLimit, "bytes")
+	}
+	printDarwinHookOutput(diagnosticContext, "DIAG-HOOK:", string(contents))
+}
+
+func readDarwinHookRegularFile(diagnosticContext context.Context, path string) ([]byte, bool, error) {
+	if err := diagnosticContext.Err(); err != nil {
+		return nil, false, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, false, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, fmt.Errorf("rejected non-regular mode %s", info.Mode())
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, false, err
+	}
+	defer file.Close()
+	info, err = file.Stat()
+	if err != nil {
+		return nil, false, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, fmt.Errorf("rejected non-regular mode %s", info.Mode())
+	}
+	contents := make([]byte, 0, darwinHookObservationLimit)
+	chunk := make([]byte, 4096)
+	for len(contents) <= darwinHookObservationLimit {
+		if err := diagnosticContext.Err(); err != nil {
+			return nil, false, err
+		}
+		limit := len(chunk)
+		if remaining := darwinHookObservationLimit + 1 - len(contents); remaining < limit {
+			limit = remaining
+		}
+		count, readErr := file.Read(chunk[:limit])
+		contents = append(contents, chunk[:count]...)
+		if len(contents) > darwinHookObservationLimit {
+			return contents[:darwinHookObservationLimit], true, nil
+		}
+		if readErr == io.EOF {
+			return contents, false, nil
+		}
+		if readErr != nil {
+			return nil, false, readErr
+		}
+		if count == 0 {
+			return nil, false, io.ErrNoProgress
+		}
+	}
+	return contents, true, nil
+}
+
+func printDarwinHookStream(diagnosticContext context.Context, label string, buffer *lockedBuffer) {
+	contents, truncated, available := buffer.Snapshot(diagnosticContext, darwinHookObservationLimit)
+	if !available {
+		fmt.Println("DIAG-HOOK:", label, "snapshot unavailable before observation deadline")
 		return
 	}
-	if len(contents) > 64*1024 {
-		contents = contents[:64*1024]
-		fmt.Println("DIAG-HOOK:", label, "truncated at 65536 bytes")
+	if truncated {
+		fmt.Println("DIAG-HOOK:", label, "truncated at", darwinHookObservationLimit, "bytes")
 	}
-	fmt.Println("DIAG-HOOK:", label, "path=", path, "exists")
-	printDiagnosticOutput("DIAG-HOOK:", string(contents))
+	printDarwinHookOutput(diagnosticContext, "DIAG-HOOK: "+label+":", contents)
+}
+
+func printDarwinHookOutput(diagnosticContext context.Context, prefix, output string) bool {
+	truncated := len(output) > darwinHookObservationLimit
+	if truncated {
+		output = output[:darwinHookObservationLimit]
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(output, "\n"), "\n") {
+		if !darwinHookEvidenceActive(diagnosticContext) {
+			return false
+		}
+		fmt.Println(prefix, line)
+	}
+	if truncated {
+		fmt.Println(prefix, "output truncated at", darwinHookObservationLimit, "bytes")
+	}
+	return true
 }
 
 type lockedBuffer struct {
@@ -471,6 +582,33 @@ func (buffer *lockedBuffer) String() string {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
 	return buffer.buffer.String()
+}
+
+func (buffer *lockedBuffer) Snapshot(diagnosticContext context.Context, limit int) (string, bool, bool) {
+	for {
+		if diagnosticContext.Err() != nil {
+			return "", false, false
+		}
+		if buffer.mu.TryLock() {
+			if diagnosticContext.Err() != nil {
+				buffer.mu.Unlock()
+				return "", false, false
+			}
+			contents := buffer.buffer.Bytes()
+			truncated := len(contents) > limit
+			if truncated {
+				contents = contents[:limit]
+			}
+			snapshot := string(contents)
+			buffer.mu.Unlock()
+			return snapshot, truncated, true
+		}
+		select {
+		case <-diagnosticContext.Done():
+			return "", false, false
+		case <-time.After(time.Millisecond):
+		}
+	}
 }
 
 func startDarwinDiagnosticClaude(diagnosticContext context.Context, fixture *nativeFixture, scenario *claudeScenario, extraEnvironment []string) (*exec.Cmd, <-chan commandResult, *lockedBuffer, *lockedBuffer, error) {
