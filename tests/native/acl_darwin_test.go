@@ -348,7 +348,29 @@ func printDarwinHookObservation(diagnosticContext context.Context, fixture *nati
 	if !darwinHookEvidenceActive(diagnosticContext) {
 		return
 	}
-	printDarwinHookPolicyEvidence(diagnosticContext, psOutput)
+	requests := fixture.requestCount()
+	dnsNames := fixture.dns.names()
+	fmt.Println("DIAG-HOOK: egress fixture requests:", requests)
+	fmt.Println("DIAG-HOOK: egress fixture DNS names:", len(dnsNames))
+	for index, name := range dnsNames {
+		fmt.Println("DIAG-HOOK: egress fixture DNS name", index, ":", name)
+	}
+	if !darwinHookEvidenceActive(diagnosticContext) {
+		return
+	}
+	policyPath := printDarwinHookPolicyEvidence(diagnosticContext, psOutput)
+	if !darwinHookEvidenceActive(diagnosticContext) {
+		return
+	}
+	policyContent := printDarwinHookPolicyContent(diagnosticContext, policyPath)
+	if !darwinHookEvidenceActive(diagnosticContext) {
+		return
+	}
+	lsof := printDarwinHookLsof(diagnosticContext, psOutput)
+	if !darwinHookEvidenceActive(diagnosticContext) {
+		return
+	}
+	fmt.Println("DIAG-HOOK: egress summary requests=" + strconv.Itoa(requests) + " dnsNames=" + strconv.Itoa(len(dnsNames)) + " policyContent=" + policyContent + " lsof=" + lsof)
 	if !darwinHookEvidenceActive(diagnosticContext) {
 		return
 	}
@@ -379,7 +401,7 @@ func darwinHookEvidenceActive(diagnosticContext context.Context) bool {
 	return true
 }
 
-func printDarwinHookPolicyEvidence(diagnosticContext context.Context, psOutput string) {
+func printDarwinHookPolicyEvidence(diagnosticContext context.Context, psOutput string) string {
 	policyPath, source := policyPathFromDarwinHookPS(diagnosticContext, psOutput)
 	if policyPath == "" && darwinHookEvidenceActive(diagnosticContext) {
 		var err error
@@ -391,28 +413,108 @@ func printDarwinHookPolicyEvidence(diagnosticContext context.Context, psOutput s
 	}
 	if policyPath == "" {
 		fmt.Println("DIAG-HOOK: policy after-state unavailable")
-		return
+		return ""
 	}
 	info, err := os.Stat(policyPath)
 	if err != nil {
 		fmt.Println("DIAG-HOOK: policy after-state source=", source, "path=", policyPath, "stat:", err)
-		return
+		return policyPath
 	}
 	if !info.Mode().IsRegular() {
 		fmt.Println("DIAG-HOOK: policy after-state source=", source, "path=", policyPath, "rejected non-regular mode=", info.Mode())
-		return
+		return policyPath
 	}
 	contents, truncated, err := readDarwinHookRegularFile(diagnosticContext, policyPath)
 	if err != nil {
 		fmt.Println("DIAG-HOOK: policy after-state source=", source, "path=", policyPath, "read:", err)
-		return
+		return policyPath
 	}
 	if truncated {
 		fmt.Println("DIAG-HOOK: policy after-state source=", source, "path=", policyPath, "hash skipped: exceeds", darwinHookObservationLimit, "bytes")
-		return
+		return policyPath
 	}
 	hash := sha256.Sum256(contents)
 	fmt.Println(fmt.Sprintf("DIAG-HOOK: policy after-state source=%s path=%s size=%d mode=%#o sha256=%x", source, policyPath, info.Size(), info.Mode().Perm(), hash))
+	return policyPath
+}
+
+func printDarwinHookPolicyContent(diagnosticContext context.Context, policyPath string) string {
+	if policyPath == "" {
+		fmt.Println("DIAG-HOOK: policy content unavailable")
+		return "error"
+	}
+	contents, truncated, err := readDarwinHookRegularFile(diagnosticContext, policyPath)
+	if err != nil {
+		fmt.Println("DIAG-HOOK: policy content path=", policyPath, "read:", err)
+		return "error"
+	}
+	if truncated {
+		fmt.Println("DIAG-HOOK: policy content path=", policyPath, "truncated at", darwinHookObservationLimit, "bytes")
+		return "error"
+	}
+	if !printDarwinHookOutput(diagnosticContext, "DIAG-HOOK: policy content:", string(contents)) {
+		return "error"
+	}
+	return "printed"
+}
+
+func printDarwinHookLsof(diagnosticContext context.Context, psOutput string) string {
+	pids := darwinHookProcessGroupPIDs(diagnosticContext, psOutput)
+	if !darwinHookEvidenceActive(diagnosticContext) {
+		return "error"
+	}
+	if len(pids) == 0 {
+		fmt.Println("DIAG-HOOK: lsof unavailable (no launched process-group pids)")
+		return "error"
+	}
+	lsofContext, cancel := context.WithTimeout(diagnosticContext, 2*time.Second)
+	lsof := exec.CommandContext(lsofContext, "/usr/sbin/lsof", "-nP", "-a", "-i", "-p", strings.Join(pids, ","))
+	lsof.WaitDelay = 2 * time.Second
+	output, err := lsof.CombinedOutput()
+	cancel()
+	fmt.Println("DIAG-HOOK: lsof:", err)
+	if !printDarwinHookOutput(diagnosticContext, "DIAG-HOOK:", string(output)) {
+		return "error"
+	}
+	if err != nil {
+		return "error"
+	}
+	return "ok"
+}
+
+func darwinHookProcessGroupPIDs(diagnosticContext context.Context, output string) []string {
+	var processGroup string
+	for _, line := range strings.Split(output, "\n") {
+		if !darwinHookEvidenceActive(diagnosticContext) {
+			return nil
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 6 {
+			continue
+		}
+		command := strings.Join(fields[5:], " ")
+		if strings.Contains(command, "fence") && strings.Contains(command, "--settings") {
+			processGroup = fields[2]
+			break
+		}
+	}
+	if processGroup == "" {
+		return nil
+	}
+	var pids []string
+	for _, line := range strings.Split(output, "\n") {
+		if !darwinHookEvidenceActive(diagnosticContext) {
+			return nil
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 6 || fields[2] != processGroup {
+			continue
+		}
+		if _, err := strconv.Atoi(fields[0]); err == nil {
+			pids = append(pids, fields[0])
+		}
+	}
+	return pids
 }
 
 func policyPathFromDarwinHookPS(diagnosticContext context.Context, output string) (string, string) {
