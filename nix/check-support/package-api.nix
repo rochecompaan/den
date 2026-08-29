@@ -59,6 +59,18 @@ let
   };
   adapter = (mkAdapter false) { };
   darwinAdapter = (mkAdapter true) { };
+  fakeClaude = (pkgs.writeShellScriptBin "claude" ''
+    mkdir -p "$CLAUDE_CAPTURE_DIR"
+    printf '%s' "$NODE_EXTRA_CA_CERTS" > "$CLAUDE_CAPTURE_DIR/node-extra-ca-certs"
+    printf '%s\0' "$@" > "$CLAUDE_CAPTURE_DIR/args"
+    exit 73
+  '').overrideAttrs (_: { version = "2.1.158"; });
+  fakeAdapter = (import ../lib/mk-claude.nix {
+    fence = fakeDependency;
+    mkAgentSandbox = value: value;
+    isDarwin = false;
+    pkgs = pkgs // { claude-code = fakeClaude; };
+  }) { };
   darwinFixture = mkAgentSandbox {
     adapter = darwinAdapter.adapter;
     configDir = null;
@@ -114,8 +126,11 @@ assert !(adapter.adapter ? resourceBundles);
 assert !(adapter.adapter ? claudeResources);
 assert !(adapter.adapter.agent ? resourceBundles);
 assert !(adapter.adapter.agent ? claudeResources);
-assert builtins.length darwinAdapter.adapter.closureOnlyPackages == 1;
-assert toString (builtins.head darwinAdapter.adapter.closureOnlyPackages) == toString darwinAdapter.adapter.agent.darwinSettings;
+assert builtins.length adapter.adapter.closureOnlyPackages == 1;
+assert toString (builtins.head adapter.adapter.closureOnlyPackages) == adapter.adapter.agent.executable;
+assert builtins.length darwinAdapter.adapter.closureOnlyPackages == 2;
+assert builtins.elem darwinAdapter.adapter.agent.executable (map toString darwinAdapter.adapter.closureOnlyPackages);
+assert builtins.elem (toString darwinAdapter.adapter.agent.darwinSettings) (map toString darwinAdapter.adapter.closureOnlyPackages);
 assert defaults.configDir == null;
 assert defaults.extraPkgs == [ ];
 assert defaults.docker.enable == false;
@@ -149,6 +164,9 @@ pkgs.runCommand "package-api"
     defaultManifest = claude.denManifest;
     customManifest = custom.denManifest;
     darwinFixtureManifest = darwinFixture.denManifest;
+    defaultExecutable = adapter.adapter.agent.executable;
+    darwinExecutable = darwinAdapter.adapter.agent.executable;
+    fakeExecutable = fakeAdapter.adapter.agent.executable;
     darwinSettings = toString darwinAdapter.adapter.agent.darwinSettings;
   }
   ''
@@ -180,7 +198,9 @@ pkgs.runCommand "package-api"
       ' "$defaultManifest"
 
     defaultClosure=$(jq -r .closurePathsFile "$defaultManifest")
-    for root in ${fence} ${repowolf} ${launcher} ${pkgs.gitMinimal} ${pkgs.bash} ${pkgs.coreutils} ${aclClosureRoot} ${pkgs.claude-code}; do
+    test "$(jq -r .agent.executable "$defaultManifest")" = "$defaultExecutable"
+    test "$(jq -r .agent.executable "$defaultManifest")" != "${pkgs.claude-code}/bin/claude"
+    for root in ${fence} ${repowolf} ${launcher} ${pkgs.gitMinimal} ${pkgs.bash} ${pkgs.coreutils} ${aclClosureRoot} ${pkgs.claude-code} "$defaultExecutable"; do
       grep -Fqx "$root" "$defaultClosure"
     done
 
@@ -231,11 +251,30 @@ pkgs.runCommand "package-api"
       ' "$customManifest"
 
     closure=$(jq -r .closurePathsFile "$customManifest")
-    for root in ${fence} ${repowolf} ${launcher} ${pkgs.gitMinimal} ${pkgs.bash} ${pkgs.coreutils} ${aclClosureRoot} ${pkgs.claude-code} ${fakeGh} ${fakeDocker} ${fakeDockerCompose} ${fakePodman} ${fakePodmanCompose}; do
+    test "$(jq -r .agent.executable "$customManifest")" = "$defaultExecutable"
+    test "$(jq -r .agent.executable "$customManifest")" != "${pkgs.claude-code}/bin/claude"
+    for root in ${fence} ${repowolf} ${launcher} ${pkgs.gitMinimal} ${pkgs.bash} ${pkgs.coreutils} ${aclClosureRoot} ${pkgs.claude-code} "$defaultExecutable" ${fakeGh} ${fakeDocker} ${fakeDockerCompose} ${fakePodman} ${fakePodmanCompose}; do
       grep -Fqx "$root" "$closure"
     done
 
     darwinFixtureClosure=$(jq -r .closurePathsFile "$darwinFixtureManifest")
+    test "$(jq -r .agent.executable "$darwinFixtureManifest")" = "$darwinExecutable"
+    test "$(jq -r .agent.executable "$darwinFixtureManifest")" != "${pkgs.claude-code}/bin/claude"
+    grep -Fqx "$darwinExecutable" "$darwinFixtureClosure"
+    grep -Fqx "${pkgs.claude-code}" "$darwinFixtureClosure"
     grep -Fqx "$darwinSettings" "$darwinFixtureClosure"
+
+    capture="$TMPDIR/claude-capture"
+    set +e
+    CLAUDE_CAPTURE_DIR="$capture" \
+      NODE_EXTRA_CA_CERTS="/hostile/inherited-ca.pem" \
+      REPOWOLF_CA_FILE="/canonical/launcher-prepared-ca.pem" \
+      "$fakeExecutable" "space argument" 'semi;$(not-executed)'
+    status=$?
+    set -e
+    test "$status" = 73
+    test "$(cat "$capture/node-extra-ca-certs")" = "/canonical/launcher-prepared-ca.pem"
+    printf '%s\0' "space argument" 'semi;$(not-executed)' > expected-args
+    cmp expected-args "$capture/args"
     touch "$out"
   ''

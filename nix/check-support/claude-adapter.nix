@@ -14,14 +14,17 @@ pkgs.runCommand "claude-adapter"
   {
     nativeBuildInputs = [ pkgs.jq ];
     adapter = builtins.toJSON claudeAdapter;
+    claudeExecutable = claudeAdapter.agent.executable;
+    claudeBinary = "${pkgs.claude-code}/bin/claude";
     darwinSettings = darwinClaudeAdapter.agent.darwinSettings;
   }
   ''
     set -eu
     printf '%s\n' "$adapter" > adapter.json
-    jq -e '
+    jq -e --arg executable "$claudeExecutable" --arg claudeBinary "$claudeBinary" '
       .agent.name == "claude" and
-      (.agent.executable | endswith("/bin/claude")) and
+      .agent.executable == $executable and
+      .agent.executable != $claudeBinary and
       .agent.mandatoryArgs == ["--dangerously-skip-permissions"] and
       .agent.reservedFlags == ["--settings", "--permission-mode", "--dangerously-skip-permissions"] and
       .agent.configEnvironment == "CLAUDE_CONFIG_DIR" and

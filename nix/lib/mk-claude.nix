@@ -6,6 +6,10 @@ let
   lib = pkgs.lib;
   options = import ./options.nix { inherit pkgs; } args;
   claude = pkgs.claude-code;
+  claudeExecutable = pkgs.writeShellScript "den-claude-agent" ''
+    export NODE_EXTRA_CA_CERTS="$REPOWOLF_CA_FILE"
+    exec ${claude}/bin/claude "$@"
+  '';
   settings = pkgs.writeText "den-claude-settings.json" (builtins.toJSON {
     hooks.PreToolUse = [
       {
@@ -28,10 +32,11 @@ mkAgentSandbox {
   inherit (options) configDir extraPkgs docker podman;
   adapter = {
     runtimePackages = [ claude ];
-    closureOnlyPackages = lib.optionals isDarwin [ settings ];
+    closureOnlyPackages = [ claudeExecutable ]
+      ++ lib.optionals isDarwin [ settings ];
     agent = {
       name = "claude";
-      executable = "${claude}/bin/claude";
+      executable = "${claudeExecutable}";
       inherit mandatoryArgs;
       reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" ];
       configEnvironment = "CLAUDE_CONFIG_DIR";

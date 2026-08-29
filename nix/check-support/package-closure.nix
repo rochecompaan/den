@@ -26,6 +26,8 @@ let
     mkAgentSandbox = value: value;
   }) { };
   darwinSettings = darwinAdapter.adapter.agent.darwinSettings;
+  productionExecutable = productionAdapter.adapter.agent.executable;
+  darwinExecutable = darwinAdapter.adapter.agent.executable;
 in
 assert fence.version == "0.1.58";
 assert builtins.all (value: value) (builtins.attrValues fence.capabilities);
@@ -40,7 +42,7 @@ pkgs.runCommand "package-closure"
   {
     nativeBuildInputs = [ pkgs.jq pkgs.coreutils pkgs.findutils pkgs.gnugrep ];
     manifest = claude.denManifest;
-    inherit fenceCapabilityCheck packageClosure;
+    inherit fenceCapabilityCheck packageClosure productionExecutable;
   }
   ''
     set -eu
@@ -62,9 +64,11 @@ pkgs.runCommand "package-closure"
       ' "$manifest"
 
     closure=$(jq -r .closurePathsFile "$manifest")
+    test "$(jq -r .agent.executable "$manifest")" = "$productionExecutable"
+    test "$(jq -r .agent.executable "$manifest")" != "${pkgs.claude-code}/bin/claude"
     for required in \
       ${fence.package} ${repowolfClient} ${pkgs.gitMinimal} ${pkgs.bash} \
-      ${pkgs.coreutils} ${launcher} ${pkgs.claude-code}; do
+      ${pkgs.coreutils} ${launcher} ${pkgs.claude-code} "$productionExecutable"; do
       grep -Fqx "$required" "$closure"
     done
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''grep -Fqx "${pkgs.acl}" "$closure"''}
@@ -92,7 +96,10 @@ pkgs.runCommand "package-closure"
         }]
       }]
     ' ${darwinSettings}
-    ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''grep -Fqx "${darwinSettings}" "$closure"''}
+    ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+      grep -Fqx "${darwinExecutable}" "$closure"
+      grep -Fqx "${darwinSettings}" "$closure"
+    ''}
 
     test -e "$fenceCapabilityCheck"
 
