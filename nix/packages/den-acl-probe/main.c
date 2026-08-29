@@ -243,7 +243,7 @@ int main(int argc, char *argv[]) {
       entry_status = acl_get_entry(acl, ACL_NEXT_ENTRY, &entry);
       saved_errno = errno;
     }
-    if (entry_status == -1 && saved_errno == ENOENT) {
+    if (entry_status == -1 && saved_errno == EINVAL) {
       result = 0;
     }
   }
