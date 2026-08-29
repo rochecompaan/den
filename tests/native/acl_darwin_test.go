@@ -353,11 +353,16 @@ func printDarwinHookObservation(diagnosticContext context.Context, fixture *nati
 	if !darwinHookEvidenceActive(diagnosticContext) {
 		return
 	}
+	providerMessageRequests := fixture.provider.messageRequestCount()
+	if !darwinHookEvidenceActive(diagnosticContext) {
+		return
+	}
 	dnsNames := fixture.dns.names()
 	if !darwinHookEvidenceActive(diagnosticContext) {
 		return
 	}
 	fmt.Println("DIAG-HOOK: egress fixture requests:", requests)
+	fmt.Println("DIAG-HOOK: provider /v1/messages arrivals:", providerMessageRequests)
 	fmt.Println("DIAG-HOOK: egress fixture DNS names:", len(dnsNames))
 	for index, name := range dnsNames {
 		if !darwinHookEvidenceActive(diagnosticContext) {
@@ -380,7 +385,7 @@ func printDarwinHookObservation(diagnosticContext context.Context, fixture *nati
 	if !darwinHookEvidenceActive(diagnosticContext) {
 		return
 	}
-	fmt.Println("DIAG-HOOK: egress summary requests=" + strconv.Itoa(requests) + " dnsNames=" + strconv.Itoa(len(dnsNames)) + " policyContent=" + policyContent + " lsof=" + lsof)
+	fmt.Println("DIAG-HOOK: egress summary requests=" + strconv.Itoa(requests) + " providerMessageRequests=" + strconv.Itoa(providerMessageRequests) + " dnsNames=" + strconv.Itoa(len(dnsNames)) + " policyContent=" + policyContent + " lsof=" + lsof)
 	if !darwinHookEvidenceActive(diagnosticContext) {
 		return
 	}

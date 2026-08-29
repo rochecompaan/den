@@ -21,10 +21,11 @@ type claudeScenario struct {
 }
 
 type claudeProvider struct {
-	mu        sync.Mutex
-	ready     *sync.Cond
-	next      int
-	scenarios map[string]*claudeScenario
+	mu              sync.Mutex
+	ready           *sync.Cond
+	next            int
+	messageRequests int
+	scenarios       map[string]*claudeScenario
 }
 
 func newClaudeProvider() *claudeProvider {
@@ -58,7 +59,17 @@ func (provider *claudeProvider) scenarioResults(scenario *claudeScenario) []stri
 	return append([]string(nil), scenario.results...)
 }
 
+func (provider *claudeProvider) messageRequestCount() int {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	return provider.messageRequests
+}
+
 func (provider *claudeProvider) serveHTTP(writer http.ResponseWriter, request *http.Request) {
+	provider.mu.Lock()
+	provider.messageRequests++
+	provider.mu.Unlock()
+
 	if request.Method != http.MethodPost || !strings.HasPrefix(request.URL.Path, "/v1/messages") {
 		http.Error(writer, "local messages fixture only", http.StatusForbidden)
 		return
