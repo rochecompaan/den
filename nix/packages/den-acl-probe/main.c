@@ -232,17 +232,20 @@ int main(int argc, char *argv[]) {
 
   {
     acl_entry_t entry;
+    int saved_errno;
     entry_status = acl_get_entry(acl, ACL_FIRST_ENTRY, &entry);
+    saved_errno = errno;
     while (entry_status == 0) {
       if (print_entry(entry, index) != 0 || index == UINT_MAX) {
         goto cleanup;
       }
       index++;
       entry_status = acl_get_entry(acl, ACL_NEXT_ENTRY, &entry);
+      saved_errno = errno;
     }
-  }
-  if (entry_status == 1) {
-    result = 0;
+    if (entry_status == -1 && saved_errno == ENOENT) {
+      result = 0;
+    }
   }
 
 cleanup:
