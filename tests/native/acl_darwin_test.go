@@ -193,6 +193,7 @@ func sameDarwinPermissions(left, right map[string]struct{}) bool {
 // TEMPORARY Task 4j diagnostic
 func TestDarwinBashHookHangDiagnostic(t *testing.T) {
 	fixture := newNativeFixture(t)
+	fixture.startDNS(t)
 	fixture.installClaudeContextHook(t)
 	replacement := filepath.Join(fixture.worktree, "replacement-policy")
 	if err := os.WriteFile(replacement, []byte("replacement\n"), 0o600); err != nil {
@@ -349,11 +350,20 @@ func printDarwinHookObservation(diagnosticContext context.Context, fixture *nati
 		return
 	}
 	requests := fixture.requestCount()
+	if !darwinHookEvidenceActive(diagnosticContext) {
+		return
+	}
 	dnsNames := fixture.dns.names()
+	if !darwinHookEvidenceActive(diagnosticContext) {
+		return
+	}
 	fmt.Println("DIAG-HOOK: egress fixture requests:", requests)
 	fmt.Println("DIAG-HOOK: egress fixture DNS names:", len(dnsNames))
 	for index, name := range dnsNames {
-		fmt.Println("DIAG-HOOK: egress fixture DNS name", index, ":", name)
+		if !darwinHookEvidenceActive(diagnosticContext) {
+			return
+		}
+		fmt.Println("DIAG-HOOK: egress fixture DNS name", index, ":", strconv.Quote(name))
 	}
 	if !darwinHookEvidenceActive(diagnosticContext) {
 		return
@@ -468,15 +478,25 @@ func printDarwinHookLsof(diagnosticContext context.Context, psOutput string) str
 		return "error"
 	}
 	lsofContext, cancel := context.WithTimeout(diagnosticContext, 2*time.Second)
+	output := &lockedBuffer{limit: darwinHookObservationLimit}
 	lsof := exec.CommandContext(lsofContext, "/usr/sbin/lsof", "-nP", "-a", "-i", "-p", strings.Join(pids, ","))
 	lsof.WaitDelay = 2 * time.Second
-	output, err := lsof.CombinedOutput()
+	lsof.Stdout, lsof.Stderr = output, output
+	err := lsof.Run()
 	cancel()
 	fmt.Println("DIAG-HOOK: lsof:", err)
-	if !printDarwinHookOutput(diagnosticContext, "DIAG-HOOK:", string(output)) {
+	contents, truncated, available := output.Snapshot(diagnosticContext, darwinHookObservationLimit)
+	if !available {
+		fmt.Println("DIAG-HOOK: lsof output unavailable before observation deadline")
 		return "error"
 	}
-	if err != nil {
+	if truncated {
+		fmt.Println("DIAG-HOOK: lsof output truncated at", darwinHookObservationLimit, "bytes")
+	}
+	if !printDarwinHookOutput(diagnosticContext, "DIAG-HOOK:", contents) {
+		return "error"
+	}
+	if err != nil || truncated {
 		return "error"
 	}
 	return "ok"
@@ -670,13 +690,27 @@ func printDarwinHookOutput(diagnosticContext context.Context, prefix, output str
 }
 
 type lockedBuffer struct {
-	mu     sync.Mutex
-	buffer bytes.Buffer
+	mu        sync.Mutex
+	buffer    bytes.Buffer
+	limit     int
+	truncated bool
 }
 
 func (buffer *lockedBuffer) Write(contents []byte) (int, error) {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
+	if buffer.limit > 0 {
+		remaining := buffer.limit - buffer.buffer.Len()
+		if remaining <= 0 {
+			buffer.truncated = true
+			return len(contents), nil
+		}
+		if len(contents) > remaining {
+			_, _ = buffer.buffer.Write(contents[:remaining])
+			buffer.truncated = true
+			return len(contents), nil
+		}
+	}
 	return buffer.buffer.Write(contents)
 }
 
@@ -697,7 +731,7 @@ func (buffer *lockedBuffer) Snapshot(diagnosticContext context.Context, limit in
 				return "", false, false
 			}
 			contents := buffer.buffer.Bytes()
-			truncated := len(contents) > limit
+			truncated := buffer.truncated || len(contents) > limit
 			if truncated {
 				contents = contents[:limit]
 			}
