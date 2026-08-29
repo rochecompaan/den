@@ -5,6 +5,7 @@ let
   fakeClaude = import ./fake-claude.nix { inherit pkgs; };
   fakeRepoWolfClient = import ./fake-repowolf-client.nix { inherit pkgs; };
   launcher = import ../packages/den-launcher.nix { inherit pkgs; };
+  aclProbeDarwin = import ../packages/den-acl-probe.nix { inherit (pkgs) lib stdenv; };
   mkAgentSandbox = import ../lib/mk-agent-sandbox.nix { inherit inputs pkgs; };
   darwinAdapter = (import ../lib/mk-claude.nix {
     inherit pkgs;
@@ -20,6 +21,7 @@ let
     git = pkgs.gitMinimal;
     bash = pkgs.bash;
     coreutils = pkgs.coreutils;
+    inherit aclProbeDarwin;
   } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux { acl = pkgs.acl; };
   mkSandbox = { configDir ? null }:
     mkAgentSandbox {

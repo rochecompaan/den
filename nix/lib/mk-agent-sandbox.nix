@@ -17,10 +17,13 @@ let
     coreutils = pkgs.coreutils;
   } // lib.optionalAttrs pkgs.stdenv.isLinux {
     acl = pkgs.acl;
+  } // lib.optionalAttrs pkgs.stdenv.isDarwin {
+    aclProbeDarwin = import ../packages/den-acl-probe.nix { inherit (pkgs) lib stdenv; };
   };
   deps = if dependencies == null then productionDependencies else dependencies;
   requiredDependencies = [ "fence" "repoWolfClient" "launcher" "git" "bash" "coreutils" ]
-    ++ lib.optional pkgs.stdenv.isLinux "acl";
+    ++ lib.optional pkgs.stdenv.isLinux "acl"
+    ++ lib.optional pkgs.stdenv.isDarwin "aclProbeDarwin";
   adapterRuntimePackages = adapter.runtimePackages or [ ];
   adapterClosureOnlyPackages = adapter.closureOnlyPackages or [ ];
   dockerPackages = lib.optionals options.docker.enable [
@@ -61,7 +64,7 @@ let
     basePolicy = "${../../policy/fence.json}";
     closurePathsFile = "${closure}/store-paths";
     scratchRoot = if pkgs.stdenv.isDarwin then "/private/tmp" else "/tmp";
-    aclProbe = if pkgs.stdenv.isDarwin then [ "/bin/ls" "-lde" ] else [ "${deps.acl}/bin/getfacl" ];
+    aclProbe = if pkgs.stdenv.isDarwin then [ "${deps.aclProbeDarwin}/bin/den-acl-probe" ] else [ "${deps.acl}/bin/getfacl" ];
     protectedPathPatterns = import ./protected-paths.nix;
     inherit pathEntries;
     explicitConfigDir = options.configDir;

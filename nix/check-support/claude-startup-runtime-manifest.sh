@@ -32,12 +32,12 @@ den_adapt_claude_startup_manifest() {
         [[ -z $config_dir ]] || return 2
         jq -e '.explicitConfigDir == null' "$base" >/dev/null || return 2
         jq --arg probe "$DEN_CLAUDE_STARTUP_ACL_PROBE" \
-          '.aclProbe = [$probe, "-lde"]' "$base" > "$output" || return 2
+          '.aclProbe = [$probe]' "$base" > "$output" || return 2
         ;;
       explicit)
         [[ $config_dir == /* ]] || return 2
         jq --arg probe "$DEN_CLAUDE_STARTUP_ACL_PROBE" --arg config "$config_dir" \
-          '.aclProbe = [$probe, "-lde"] | .explicitConfigDir = $config' \
+          '.aclProbe = [$probe] | .explicitConfigDir = $config' \
           "$base" > "$output" || return 2
         ;;
       *)

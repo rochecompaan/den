@@ -6,14 +6,15 @@ let
   fence = (import ../lib/fence.nix { inherit pkgs; }).package;
   repowolf = import ../packages/repowolf-client.nix { inherit inputs pkgs; };
   launcher = import ../packages/den-launcher.nix { inherit pkgs; };
+  aclProbeDarwin = import ../packages/den-acl-probe.nix { inherit (pkgs) lib stdenv; };
   default = den.packages.default;
   protectedPathPatterns = builtins.toJSON (import ../lib/protected-paths.nix);
   expectedPlatform = if pkgs.stdenv.isDarwin then "darwin" else "linux";
   expectedScratchRoot = if pkgs.stdenv.isDarwin then "/private/tmp" else "/tmp";
   expectedACLProbe = builtins.toJSON (
-    if pkgs.stdenv.isDarwin then [ "/bin/ls" "-lde" ] else [ "${pkgs.acl}/bin/getfacl" ]
+    if pkgs.stdenv.isDarwin then [ "${aclProbeDarwin}/bin/den-acl-probe" ] else [ "${pkgs.acl}/bin/getfacl" ]
   );
-  aclClosureRoot = pkgs.lib.optionalString pkgs.stdenv.isLinux (toString pkgs.acl);
+  aclClosureRoot = if pkgs.stdenv.isDarwin then toString aclProbeDarwin else toString pkgs.acl;
   fakeGh = pkgs.writeShellScriptBin "gh" "exit 0";
   fakeDocker = pkgs.writeShellScriptBin "docker" "exit 0";
   fakeDockerCompose = pkgs.writeShellScriptBin "docker-compose" "exit 0";
@@ -49,6 +50,7 @@ let
     bash = fakeDependency;
     coreutils = fakeDependency;
     acl = fakeDependency;
+    aclProbeDarwin = fakeDependency;
   };
   mkAdapter = isDarwin: import ../lib/mk-claude.nix {
     fence = fakeDependency;

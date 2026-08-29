@@ -25,16 +25,16 @@ cat > "$base" <<'JSON'
   "version": 1,
   "platform": "darwin",
   "explicitConfigDir": null,
-  "aclProbe": ["/bin/ls", "-lde"],
+  "aclProbe": ["/bin/den-acl-probe"],
   "agent": {"name": "claude"},
   "filesystem": {"sentinel": "unchanged"}
 }
 JSON
 
-export DEN_CLAUDE_STARTUP_ACL_PROBE=/usr/bin/ls
+export DEN_CLAUDE_STARTUP_ACL_PROBE=/usr/bin/den-acl-probe
 
 den_adapt_claude_startup_manifest "$base" "$inherited" inherited ""
-jq -e '.explicitConfigDir == null and .aclProbe == ["/usr/bin/ls", "-lde"] and
+jq -e '.explicitConfigDir == null and .aclProbe == ["/usr/bin/den-acl-probe"] and
   has("explicitConfigDir") and has("aclProbe")' "$inherited" >/dev/null
 den_validate_claude_startup_manifest "$base" "$inherited"
 
@@ -46,7 +46,7 @@ if den_adapt_claude_startup_manifest "$invalid_inherited_base" \
 fi
 
 den_adapt_claude_startup_manifest "$base" "$explicit" explicit /private/etc/claude
-jq -e '.explicitConfigDir == "/private/etc/claude" and .aclProbe == ["/usr/bin/ls", "-lde"] and
+jq -e '.explicitConfigDir == "/private/etc/claude" and .aclProbe == ["/usr/bin/den-acl-probe"] and
   has("explicitConfigDir") and has("aclProbe")' "$explicit" >/dev/null
 den_validate_claude_startup_manifest "$base" "$explicit"
 

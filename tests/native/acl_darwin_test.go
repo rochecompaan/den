@@ -19,8 +19,12 @@ import (
 
 func testValidationTimePathSwap(t *testing.T, fixture *nativeFixture) {
 	t.Helper()
+	probe := os.Getenv("DEN_NATIVE_ACL_PROBE")
+	if probe == "" {
+		t.Fatal("DEN_NATIVE_ACL_PROBE is required")
+	}
 	validationTimePathSwap(t, fixture,
-		[]string{"/bin/ls", "-lde"},
+		[]string{probe},
 		[]string{"/bin/chmod", "+a", "everyone allow read,readattr,readextattr,readsecurity"},
 	)
 }
@@ -84,48 +88,104 @@ func TestDarwinACLGrantRejected(t *testing.T) {
 	}
 }
 
-// TEMPORARY Task 4j diagnostic
-func TestDarwinACLProbeHandleDiagnostic(t *testing.T) {
+func TestDarwinACLProbeMatchesLs(t *testing.T) {
+	probe := os.Getenv("DEN_NATIVE_ACL_PROBE")
+	if probe == "" {
+		t.Skip("DEN_NATIVE_ACL_PROBE is unset")
+	}
 	state := filepath.Join(t.TempDir(), "acl-state")
 	if err := os.Mkdir(state, 0o700); err != nil {
-		fmt.Println("DIAG-ACL: create state:", err)
-		return
+		t.Fatal(err)
 	}
 	if output, err := exec.Command("/bin/chmod", "+a", "everyone allow read,readattr,readextattr,readsecurity", state).CombinedOutput(); err != nil {
-		fmt.Println("DIAG-ACL: apply ACL:", err)
-		printDiagnosticOutput("DIAG-ACL:", string(output))
-		return
+		t.Fatalf("apply real macOS ACL: %v\n%s", err, output)
 	}
-	fd, err := syscall.Open(state, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
-	if err != nil {
-		fmt.Println("DIAG-ACL: open directory handle:", err)
-		return
-	}
-	file := os.NewFile(uintptr(fd), state)
-	defer file.Close()
 
-	command := exec.Command("/bin/sh", "-c", `
-diag() {
-  printf 'DIAG-ACL: $'
-  printf ' %s' "$@"
-  printf '\n'
-  "$@" 2>&1 | sed 's/^/DIAG-ACL: /' || true
-}
-diag readlink /dev/fd/9
-diag /bin/ls -lde /dev/fd/9
-diag /bin/ls -lde /dev/fd/9/
-diag /bin/ls -lde "$DIAG_STATE"
-diag stat -f '%N type=%HT mode=%Sp owner=%Su:%Sg' /dev/fd/9
-diag stat -f '%N type=%HT mode=%Sp owner=%Su:%Sg' /dev/fd/9/
-diag stat -l -f '%N type=%HT mode=%Sp owner=%Su:%Sg' /dev/fd/9
-`)
-	command.ExtraFiles = []*os.File{file, file, file, file, file, file, file}
-	command.Env = append(os.Environ(), "DIAG_STATE="+state)
-	output, err := command.CombinedOutput()
+	helperOutput, err := runDarwinACLProbe(probe, state)
 	if err != nil {
-		fmt.Println("DIAG-ACL: probe command:", err)
+		t.Fatalf("fd-native ACL probe: %v\n%s", err, helperOutput)
 	}
-	printRawDiagnosticOutput(string(output))
+	lsOutput, err := exec.Command("/bin/ls", "-lde", state).CombinedOutput()
+	if err != nil {
+		t.Fatalf("inspect ACL with ls: %v\n%s", err, lsOutput)
+	}
+	helperEntries := darwinAllowEntries(helperOutput)
+	lsEntries := darwinAllowEntries(string(lsOutput))
+	if len(helperEntries) != 1 || len(lsEntries) != 1 {
+		t.Fatalf("expected one allow entry from helper and ls; helper=%q ls=%q", helperOutput, lsOutput)
+	}
+	if !strings.HasPrefix(helperEntries[0].principal, "group:") {
+		t.Fatalf("helper principal is not a group: %q", helperEntries[0].principal)
+	}
+	if !sameDarwinPermissions(helperEntries[0].permissions, lsEntries[0].permissions) {
+		t.Fatalf("helper permissions differ from ls; helper=%q ls=%q", helperOutput, lsOutput)
+	}
+	expectedPermissions := map[string]struct{}{
+		"list": {}, "readattr": {}, "readextattr": {}, "readsecurity": {},
+	}
+	if !sameDarwinPermissions(helperEntries[0].permissions, expectedPermissions) {
+		t.Fatalf("helper permissions do not match chmod grant: %q", helperOutput)
+	}
+
+	noACL := t.TempDir()
+	output, err := runDarwinACLProbe(probe, noACL)
+	if err != nil {
+		t.Fatalf("no-ACL probe failed: %v\n%s", err, output)
+	}
+	if output != "" {
+		t.Fatalf("no-ACL probe returned output: %q", output)
+	}
+}
+
+type darwinACLEntry struct {
+	principal   string
+	permissions map[string]struct{}
+}
+
+func runDarwinACLProbe(probe, path string) (string, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return "", err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	command := exec.Command(probe, "/dev/fd/9")
+	command.ExtraFiles = []*os.File{file, file, file, file, file, file, file}
+	output, err := command.CombinedOutput()
+	return string(output), err
+}
+
+func darwinAllowEntries(output string) []darwinACLEntry {
+	var entries []darwinACLEntry
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		for index, field := range fields {
+			if field != "allow" || index == 0 || index+1 >= len(fields) {
+				continue
+			}
+			permissions := make(map[string]struct{})
+			for _, permission := range strings.Split(strings.Join(fields[index+1:], ""), ",") {
+				if permission != "" {
+					permissions[permission] = struct{}{}
+				}
+			}
+			entries = append(entries, darwinACLEntry{principal: fields[index-1], permissions: permissions})
+			break
+		}
+	}
+	return entries
+}
+
+func sameDarwinPermissions(left, right map[string]struct{}) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for permission := range left {
+		if _, ok := right[permission]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // TEMPORARY Task 4j diagnostic

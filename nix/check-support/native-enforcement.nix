@@ -122,6 +122,7 @@ let
   '';
   mkAgentSandbox = import ../lib/mk-agent-sandbox.nix { inherit inputs pkgs; };
   launcher = import ../packages/den-launcher.nix { inherit pkgs; };
+  aclProbeDarwin = import ../packages/den-acl-probe.nix { inherit (pkgs) lib stdenv; };
   fixtureSandbox = mkAgentSandbox {
     configDir = null;
     extraPkgs = [ ];
@@ -226,6 +227,7 @@ pkgs.writeShellApplication {
       export DEN_NATIVE_CLAUDE_STARTUP=${claudeStartup}/bin/claude-startup
       export DEN_NATIVE_FENCE_CAPABILITIES=${fenceCapabilities}/bin/fence-capabilities
       export DEN_NATIVE_SANDBOX_EXEC=/usr/bin/sandbox-exec
+      export DEN_NATIVE_ACL_PROBE=${aclProbeDarwin}/bin/den-acl-probe
     ''}
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
       export DEN_NATIVE_ACL=${pkgs.acl}/bin/setfacl

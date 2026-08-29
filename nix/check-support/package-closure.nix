@@ -4,6 +4,10 @@ let
   fence = import ../lib/fence.nix { inherit pkgs; };
   repowolfClient = import ../packages/repowolf-client.nix { inherit inputs pkgs; };
   launcher = import ../packages/den-launcher.nix { inherit pkgs; };
+  aclProbeDarwin = if pkgs.stdenv.isDarwin
+    then import ../packages/den-acl-probe.nix { inherit (pkgs) lib stdenv; }
+    else null;
+  expectedACLProbe = if pkgs.stdenv.isDarwin then "${aclProbeDarwin}/bin/den-acl-probe" else "";
   packageClosure = pkgs.closureInfo { rootPaths = [ claude ]; };
   fenceCapabilityCheck = import ./fence-capabilities.nix {
     inherit pkgs;
@@ -47,11 +51,13 @@ pkgs.runCommand "package-closure"
     jq -e \
       --arg fence "${fence.package}/bin/fence" \
       --arg repowolf "${repowolfClient}" \
+      --arg aclProbe "${expectedACLProbe}" \
       --arg policy "${../../policy/fence.json}" '
         .version == 1 and
         .fenceExecutable == $fence and
         .repoWolfClientDir == $repowolf and
         .basePolicy == $policy and
+        (if .platform == "darwin" then .aclProbe == [$aclProbe] else true) and
         (.pathEntries[0] == ($repowolf + "/bin"))
       ' "$manifest"
 
@@ -62,6 +68,7 @@ pkgs.runCommand "package-closure"
       grep -Fqx "$required" "$closure"
     done
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''grep -Fqx "${pkgs.acl}" "$closure"''}
+    ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''grep -Fqx "${aclProbeDarwin}" "$closure"''}
 
     ${fence.package}/bin/fence --version > fence-version
     grep -Fq 'Version: 0.1.58' fence-version
