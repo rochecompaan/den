@@ -6,8 +6,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -253,8 +256,8 @@ true`,
 			fmt.Println("DIAG-HOOK: resolve fixture Bash:", err)
 		}
 		evidenceContext, cancelEvidence := context.WithTimeout(diagnosticContext, 5*time.Second)
-		psOutput := dumpDarwinHookProcesses(evidenceContext, fixtureBash, command.Process.Pid)
-		printDarwinHookObservation(evidenceContext, fixture, scenario, psOutput, hookEvidence, stdout, stderr)
+		processEvidence := dumpDarwinHookProcesses(evidenceContext, fixtureBash, command.Process.Pid)
+		printDarwinHookObservation(evidenceContext, fixture, scenario, processEvidence, hookEvidence, stdout, stderr)
 		cancelEvidence()
 	case <-diagnosticContext.Done():
 		fmt.Println("DIAG-HOOK: overall diagnostic deadline reached before evidence:", diagnosticContext.Err())
@@ -279,7 +282,17 @@ func resolveFixtureBash() (string, error) {
 	return filepath.EvalSymlinks(interpreter[0])
 }
 
-func dumpDarwinHookProcesses(diagnosticContext context.Context, fixtureBash string, processGroup int) string {
+type darwinHookProcessEvidence struct {
+	output      string
+	environment darwinHookEnvironmentSnapshot
+}
+
+type darwinHookProcess struct {
+	pid, ppid, pgid int
+	command         string
+}
+
+func dumpDarwinHookProcesses(diagnosticContext context.Context, fixtureBash string, processGroup int) darwinHookProcessEvidence {
 	psContext, cancel := context.WithTimeout(diagnosticContext, 2*time.Second)
 	ps := exec.CommandContext(psContext, "ps", "-Ao", "pid,ppid,pgid,stat,etime,command")
 	ps.WaitDelay = 2 * time.Second
@@ -287,13 +300,29 @@ func dumpDarwinHookProcesses(diagnosticContext context.Context, fixtureBash stri
 	cancel()
 	fmt.Println("DIAG-HOOK: ps:", err)
 	printDiagnosticOutput("DIAG-HOOK:", string(output))
+	evidence := darwinHookProcessEvidence{output: string(output), environment: darwinHookEnvironmentSnapshot{status: "unavailable"}}
 	if diagnosticContext.Err() != nil {
 		fmt.Println("DIAG-HOOK: overall diagnostic deadline reached before samples:", diagnosticContext.Err())
-		return string(output)
+		return evidence
 	}
+
+	claudePID, claudeCommand, selectionStatus := darwinHookClaudeProcess(diagnosticContext, string(output), processGroup)
+	var environmentDone <-chan darwinHookEnvironmentSnapshot
+	if selectionStatus != "available" {
+		evidence.environment.status = selectionStatus
+	} else {
+		captureContext, cancelCapture := context.WithTimeout(diagnosticContext, 3*time.Second)
+		done := make(chan darwinHookEnvironmentSnapshot, 1)
+		environmentDone = done
+		go func() {
+			defer cancelCapture()
+			done <- captureDarwinHookEnvironment(captureContext, claudePID, claudeCommand)
+		}()
+	}
+
 	if _, err := os.Stat("/usr/bin/sample"); err != nil {
 		fmt.Println("DIAG-HOOK: /usr/bin/sample unavailable:", err)
-		return string(output)
+		return waitForDarwinHookEnvironment(diagnosticContext, evidence, environmentDone)
 	}
 
 	sampleContext, cancel := context.WithTimeout(diagnosticContext, 3*time.Second)
@@ -340,12 +369,252 @@ func dumpDarwinHookProcesses(diagnosticContext context.Context, fixtureBash stri
 	case <-diagnosticContext.Done():
 		fmt.Println("DIAG-HOOK: overall diagnostic deadline reached while sampling:", diagnosticContext.Err())
 	}
-	return string(output)
+	return waitForDarwinHookEnvironment(diagnosticContext, evidence, environmentDone)
+}
+
+func waitForDarwinHookEnvironment(diagnosticContext context.Context, evidence darwinHookProcessEvidence, done <-chan darwinHookEnvironmentSnapshot) darwinHookProcessEvidence {
+	if done == nil {
+		return evidence
+	}
+	select {
+	case evidence.environment = <-done:
+	case <-diagnosticContext.Done():
+		evidence.environment.status = "unavailable"
+	}
+	return evidence
+}
+
+type darwinHookBinding struct {
+	FenceExecutable string `json:"fenceExecutable"`
+	Agent           struct {
+		Executable string `json:"executable"`
+	} `json:"agent"`
+}
+
+func darwinHookClaudeProcess(diagnosticContext context.Context, output string, processGroup int) (string, string, string) {
+	manifest, truncated, err := darwinHookManifestContents(diagnosticContext)
+	if err != nil || truncated {
+		return "", "", "unavailable"
+	}
+	return darwinHookClaudePIDFromBinding(diagnosticContext, output, processGroup, manifest, os.Getenv("DEN_NATIVE_FENCE"), readDarwinHookRegularFile, filepath.EvalSymlinks)
+}
+
+func darwinHookClaudePIDFromBinding(diagnosticContext context.Context, output string, processGroup int, manifest []byte, expectedFencePath string, read func(context.Context, string) ([]byte, bool, error), resolve func(string) (string, error)) (string, string, string) {
+	expectedFence, expectedWrapper, status := darwinHookBindingFromContents(manifest, expectedFencePath, resolve)
+	if status != "available" {
+		return "", "", status
+	}
+	processes := darwinHookProcesses(output, processGroup)
+	var fences []darwinHookProcess
+	for _, process := range processes {
+		if darwinHookFenceProcess(process.command, expectedFence) {
+			fences = append(fences, process)
+		}
+	}
+	if len(fences) == 0 {
+		return "", "", "unavailable"
+	}
+	if len(fences) != 1 {
+		return "", "", "conflicting"
+	}
+	wrapper, status := darwinHookFenceWrapper(fences[0].command)
+	if status != "available" {
+		return "", "", status
+	}
+	if wrapper != expectedWrapper {
+		return "", "", "unavailable"
+	}
+	expectedClaude, status := darwinHookClaudePathFromWrapper(diagnosticContext, expectedWrapper, read, resolve)
+	if status != "available" {
+		return "", "", status
+	}
+	return darwinHookClaudePID(processes, expectedFence, expectedClaude)
+}
+
+func darwinHookManifestContents(diagnosticContext context.Context) ([]byte, bool, error) {
+	manifestPath, ok := darwinHookCanonicalNixStorePath(os.Getenv("DEN_NATIVE_MANIFEST"), filepath.EvalSymlinks)
+	if !ok {
+		return nil, false, fmt.Errorf("invalid manifest path")
+	}
+	return readDarwinHookRegularFile(diagnosticContext, manifestPath)
+}
+
+func darwinHookBindingFromContents(contents []byte, expectedFencePath string, resolve func(string) (string, error)) (string, string, string) {
+	var binding darwinHookBinding
+	if err := json.Unmarshal(contents, &binding); err != nil {
+		return "", "", "unavailable"
+	}
+	fence, ok := darwinHookCanonicalNixStorePath(binding.FenceExecutable, resolve)
+	if !ok || !darwinHookNixStoreExecutable(fence, "fence") {
+		return "", "", "unavailable"
+	}
+	expectedFence, ok := darwinHookCanonicalNixStorePath(expectedFencePath, resolve)
+	if !ok || expectedFence != fence {
+		return "", "", "unavailable"
+	}
+	wrapper, ok := darwinHookCanonicalNixStorePath(binding.Agent.Executable, resolve)
+	if !ok {
+		return "", "", "unavailable"
+	}
+	return fence, wrapper, "available"
+}
+
+func darwinHookFenceWrapper(command string) (string, string) {
+	fields := strings.Fields(command)
+	separator := -1
+	for index, field := range fields {
+		if field != "--" {
+			continue
+		}
+		if separator != -1 || index+1 >= len(fields) {
+			return "", "conflicting"
+		}
+		separator = index
+	}
+	if separator == -1 {
+		return "", "unavailable"
+	}
+	return fields[separator+1], "available"
+}
+
+func darwinHookProcesses(output string, processGroup int) []darwinHookProcess {
+	var processes []darwinHookProcess
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 6 {
+			continue
+		}
+		pid, pidErr := strconv.Atoi(fields[0])
+		ppid, ppidErr := strconv.Atoi(fields[1])
+		pgid, pgidErr := strconv.Atoi(fields[2])
+		if pidErr != nil || ppidErr != nil || pgidErr != nil || pgid != processGroup {
+			continue
+		}
+		processes = append(processes, darwinHookProcess{pid: pid, ppid: ppid, pgid: pgid, command: strings.Join(fields[5:], " ")})
+	}
+	return processes
+}
+
+func darwinHookClaudePathFromWrapper(diagnosticContext context.Context, wrapper string, read func(context.Context, string) ([]byte, bool, error), resolve func(string) (string, error)) (string, string) {
+	contents, truncated, err := read(diagnosticContext, wrapper)
+	if err != nil || truncated {
+		return "", "unavailable"
+	}
+	var realClaude string
+	foundCAExport := false
+	for _, line := range strings.Split(string(contents), "\n") {
+		line = strings.TrimSpace(line)
+		if line == `export NODE_EXTRA_CA_CERTS="$REPOWOLF_CA_FILE"` {
+			foundCAExport = true
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) == 0 || parts[0] != "exec" {
+			continue
+		}
+		if len(parts) != 3 || parts[2] != `"$@"` || realClaude != "" {
+			return "", "conflicting"
+		}
+		candidate, ok := darwinHookCanonicalNixStorePath(parts[1], resolve)
+		if !ok || !darwinHookNixStoreExecutable(candidate, "claude") {
+			return "", "unavailable"
+		}
+		realClaude = candidate
+	}
+	if !foundCAExport || realClaude == "" {
+		return "", "unavailable"
+	}
+	return realClaude, "available"
+}
+
+func darwinHookClaudePID(processes []darwinHookProcess, expectedFence, expectedClaude string) (string, string, string) {
+	if !darwinHookNixStoreExecutable(expectedFence, "fence") || !darwinHookNixStoreExecutable(expectedClaude, "claude") {
+		return "", "", "unavailable"
+	}
+	var fences []darwinHookProcess
+	for _, process := range processes {
+		if darwinHookFenceProcess(process.command, expectedFence) {
+			fences = append(fences, process)
+		}
+	}
+	if len(fences) == 0 {
+		return "", "", "unavailable"
+	}
+	if len(fences) != 1 {
+		return "", "", "conflicting"
+	}
+	var claude []darwinHookProcess
+	for _, process := range processes {
+		fields := strings.Fields(process.command)
+		if process.ppid == fences[0].pid && len(fields) > 0 && fields[0] == expectedClaude {
+			claude = append(claude, process)
+		}
+	}
+	if len(claude) == 0 {
+		return "", "", "unavailable"
+	}
+	if len(claude) != 1 {
+		return "", "", "conflicting"
+	}
+	return strconv.Itoa(claude[0].pid), claude[0].command, "available"
+}
+
+func darwinHookFenceProcess(command, expectedFence string) bool {
+	fields := strings.Fields(command)
+	if len(fields) == 0 || fields[0] != expectedFence {
+		return false
+	}
+	for index, field := range fields[:len(fields)-1] {
+		if field == "--settings" && fields[index+1] != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func darwinHookCanonicalNixStorePath(path string, resolve func(string) (string, error)) (string, bool) {
+	if !darwinHookNixStorePath(path) {
+		return "", false
+	}
+	resolved, err := resolve(path)
+	if err != nil || resolved != path || !darwinHookNixStorePath(resolved) {
+		return "", false
+	}
+	return resolved, true
+}
+
+func darwinHookNixStorePath(path string) bool {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || !strings.HasPrefix(path, "/nix/store/") {
+		return false
+	}
+	relative, err := filepath.Rel("/nix/store", path)
+	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
+}
+
+func darwinHookNixStoreExecutable(path, name string) bool {
+	return darwinHookNixStorePath(path) && strings.HasSuffix(path, "/bin/"+name)
+}
+
+func captureDarwinHookEnvironment(diagnosticContext context.Context, pid, command string) darwinHookEnvironmentSnapshot {
+	output := &lockedBuffer{limit: darwinHookObservationLimit}
+	ps := exec.CommandContext(diagnosticContext, "/bin/ps", "eww", "-p", pid, "-o", "command=")
+	ps.WaitDelay = 2 * time.Second
+	ps.Stdout, ps.Stderr = output, output
+	err := ps.Run()
+	contents, truncated, available := output.Snapshot(diagnosticContext, darwinHookObservationLimit)
+	if !available || err != nil {
+		return darwinHookEnvironmentSnapshot{status: "unavailable"}
+	}
+	if truncated {
+		return darwinHookEnvironmentSnapshot{status: "truncated"}
+	}
+	return parseDarwinHookEnvironment(command, contents)
 }
 
 const darwinHookObservationLimit = 64 * 1024
 
-func printDarwinHookObservation(diagnosticContext context.Context, fixture *nativeFixture, scenario *claudeScenario, psOutput, hookEvidence string, stdout, stderr *lockedBuffer) {
+func printDarwinHookObservation(diagnosticContext context.Context, fixture *nativeFixture, scenario *claudeScenario, processEvidence darwinHookProcessEvidence, hookEvidence string, stdout, stderr *lockedBuffer) {
+	psOutput := processEvidence.output
 	if !darwinHookEvidenceActive(diagnosticContext) {
 		return
 	}
@@ -385,7 +654,11 @@ func printDarwinHookObservation(diagnosticContext context.Context, fixture *nati
 	if !darwinHookEvidenceActive(diagnosticContext) {
 		return
 	}
-	fmt.Println("DIAG-HOOK: egress summary requests=" + strconv.Itoa(requests) + " providerMessageRequests=" + strconv.Itoa(providerMessageRequests) + " dnsNames=" + strconv.Itoa(len(dnsNames)) + " policyContent=" + policyContent + " lsof=" + lsof)
+	printDarwinHookEnvironment(diagnosticContext, processEvidence.environment, lsof)
+	if !darwinHookEvidenceActive(diagnosticContext) {
+		return
+	}
+	fmt.Println("DIAG-HOOK: egress summary requests=" + strconv.Itoa(requests) + " providerMessageRequests=" + strconv.Itoa(providerMessageRequests) + " dnsNames=" + strconv.Itoa(len(dnsNames)) + " policyContent=" + policyContent + " lsof=" + lsof.status)
 	if !darwinHookEvidenceActive(diagnosticContext) {
 		return
 	}
@@ -473,14 +746,19 @@ func printDarwinHookPolicyContent(diagnosticContext context.Context, policyPath 
 	return "printed"
 }
 
-func printDarwinHookLsof(diagnosticContext context.Context, psOutput string) string {
+type darwinHookLsofEvidence struct {
+	status string
+	output string
+}
+
+func printDarwinHookLsof(diagnosticContext context.Context, psOutput string) darwinHookLsofEvidence {
 	pids := darwinHookProcessGroupPIDs(diagnosticContext, psOutput)
 	if !darwinHookEvidenceActive(diagnosticContext) {
-		return "error"
+		return darwinHookLsofEvidence{status: "error"}
 	}
 	if len(pids) == 0 {
 		fmt.Println("DIAG-HOOK: lsof unavailable (no launched process-group pids)")
-		return "error"
+		return darwinHookLsofEvidence{status: "error"}
 	}
 	lsofContext, cancel := context.WithTimeout(diagnosticContext, 2*time.Second)
 	output := &lockedBuffer{limit: darwinHookObservationLimit}
@@ -493,18 +771,408 @@ func printDarwinHookLsof(diagnosticContext context.Context, psOutput string) str
 	contents, truncated, available := output.Snapshot(diagnosticContext, darwinHookObservationLimit)
 	if !available {
 		fmt.Println("DIAG-HOOK: lsof output unavailable before observation deadline")
-		return "error"
+		return darwinHookLsofEvidence{status: "error"}
 	}
 	if truncated {
 		fmt.Println("DIAG-HOOK: lsof output truncated at", darwinHookObservationLimit, "bytes")
 	}
 	if !printDarwinHookOutput(diagnosticContext, "DIAG-HOOK:", contents) {
-		return "error"
+		return darwinHookLsofEvidence{status: "error"}
 	}
 	if err != nil || truncated {
-		return "error"
+		return darwinHookLsofEvidence{status: "error"}
 	}
-	return "ok"
+	return darwinHookLsofEvidence{status: "ok", output: contents}
+}
+
+type darwinHookEnvironmentSnapshot struct {
+	status string
+	values map[string]string
+}
+
+var darwinHookEnvironmentNames = []string{
+	"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+	"http_proxy", "https_proxy", "all_proxy",
+	"NO_PROXY", "no_proxy",
+	"LC_ALL", "LC_CTYPE", "LANG",
+	"NODE_EXTRA_CA_CERTS", "REPOWOLF_CA_FILE", "FENCE_SANDBOX",
+}
+
+func parseDarwinHookEnvironment(command, output string) darwinHookEnvironmentSnapshot {
+	line, remainder, hasMoreLines := strings.Cut(strings.TrimSuffix(output, "\n"), "\n")
+	if hasMoreLines || !strings.HasPrefix(line, command) {
+		return darwinHookEnvironmentSnapshot{status: "conflicting"}
+	}
+	remainder = strings.TrimPrefix(line, command)
+	if remainder != "" && (remainder[0] != ' ' && remainder[0] != '\t') {
+		return darwinHookEnvironmentSnapshot{status: "conflicting"}
+	}
+	if strings.TrimSpace(remainder) == "" {
+		return darwinHookEnvironmentSnapshot{status: "available", values: map[string]string{}}
+	}
+	// ps eww separates entries with whitespace, which is also valid inside an
+	// environment value. Its text format cannot prove any non-empty entry
+	// boundary, so no value may be inferred from it.
+	return darwinHookEnvironmentSnapshot{status: "conflicting"}
+}
+
+func printDarwinHookEnvironment(diagnosticContext context.Context, snapshot darwinHookEnvironmentSnapshot, lsof darwinHookLsofEvidence) {
+	for _, summary := range darwinHookEnvironmentSummary(snapshot, darwinHookFenceListeners(lsof)) {
+		if !darwinHookEvidenceActive(diagnosticContext) {
+			return
+		}
+		fmt.Println("DIAG-HOOK: Claude environment", summary)
+	}
+}
+
+func darwinHookEnvironmentSummary(snapshot darwinHookEnvironmentSnapshot, listeners map[string]struct{}) []string {
+	summaries := []string{"snapshot=" + snapshot.status}
+	if snapshot.status != "available" {
+		return summaries
+	}
+	for _, name := range darwinHookEnvironmentNames {
+		presence := "absent"
+		if _, ok := snapshot.values[name]; ok {
+			presence = "present"
+		}
+		summaries = append(summaries, name+"="+presence)
+	}
+	for _, pair := range [][2]string{{"HTTP_PROXY", "http_proxy"}, {"HTTPS_PROXY", "https_proxy"}, {"ALL_PROXY", "all_proxy"}, {"NODE_EXTRA_CA_CERTS", "REPOWOLF_CA_FILE"}} {
+		summaries = append(summaries, pair[0]+"/"+pair[1]+"="+darwinHookEnvironmentEquality(snapshot.values, pair[0], pair[1]))
+	}
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		summaries = append(summaries, name+" endpoint="+darwinHookProxyClass(snapshot.values, name, listeners))
+	}
+	for _, name := range []string{"NO_PROXY", "no_proxy"} {
+		summaries = append(summaries, name+"="+darwinHookNoProxyClass(snapshot.values, name))
+	}
+	for _, name := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		summaries = append(summaries, name+"="+darwinHookLocaleClass(snapshot.values, name))
+	}
+	for _, name := range []string{"NODE_EXTRA_CA_CERTS", "REPOWOLF_CA_FILE"} {
+		summaries = append(summaries, name+"="+darwinHookPathClass(snapshot.values, name))
+	}
+	summaries = append(summaries, "FENCE_SANDBOX="+darwinHookFenceMarkerClass(snapshot.values))
+	return summaries
+}
+
+func darwinHookEnvironmentEquality(values map[string]string, left, right string) string {
+	leftValue, leftPresent := values[left]
+	rightValue, rightPresent := values[right]
+	if !leftPresent || !rightPresent {
+		return "missing"
+	}
+	if leftValue == rightValue {
+		return "equal"
+	}
+	return "different"
+}
+
+func darwinHookProxyClass(values map[string]string, name string, listeners map[string]struct{}) string {
+	value, present := values[name]
+	if !present {
+		return "absent"
+	}
+	if value == "" {
+		return "empty"
+	}
+	endpoint, err := url.ParseRequestURI(value)
+	if err != nil || endpoint.Hostname() == "" {
+		return "malformed"
+	}
+	address := net.ParseIP(endpoint.Hostname())
+	if address == nil || !address.IsLoopback() {
+		return "non-loopback"
+	}
+	if listeners == nil {
+		return "loopback-listener-unavailable"
+	}
+	if _, found := listeners[net.JoinHostPort(address.String(), endpoint.Port())]; found {
+		return "loopback-live-fence-listener"
+	}
+	return "loopback-no-matching-listener"
+}
+
+func darwinHookNoProxyClass(values map[string]string, name string) string {
+	value, present := values[name]
+	if !present {
+		return "absent"
+	}
+	if value == "" {
+		return "empty"
+	}
+	return "nonempty"
+}
+
+func darwinHookLocaleClass(values map[string]string, name string) string {
+	value, present := values[name]
+	if !present {
+		return "absent"
+	}
+	switch value {
+	case "C", "POSIX":
+		return "C-or-POSIX"
+	case "en_US.UTF-8":
+		return "en_US.UTF-8"
+	}
+	if strings.Contains(strings.ToLower(value), "utf-8") || strings.Contains(strings.ToLower(value), "utf8") {
+		return "other-UTF-8"
+	}
+	return "other-or-invalid"
+}
+
+func darwinHookPathClass(values map[string]string, name string) string {
+	value, present := values[name]
+	if !present {
+		return "absent"
+	}
+	if value == "" {
+		return "empty"
+	}
+	if strings.HasPrefix(value, "/nix/store/") {
+		return "Nix-store"
+	}
+	if strings.HasPrefix(value, "/tmp/") || strings.HasPrefix(value, "/private/tmp/") {
+		return "temporary-absolute-path"
+	}
+	if filepath.IsAbs(value) {
+		return "other-absolute-path"
+	}
+	return "relative-path"
+}
+
+func darwinHookFenceMarkerClass(values map[string]string) string {
+	value, present := values["FENCE_SANDBOX"]
+	if !present {
+		return "absent"
+	}
+	if value == "" {
+		return "empty"
+	}
+	if value == "1" || value == "true" {
+		return "enabled-marker"
+	}
+	return "other-marker"
+}
+
+func darwinHookFenceListeners(lsof darwinHookLsofEvidence) map[string]struct{} {
+	if lsof.status != "ok" {
+		return nil
+	}
+	listeners := make(map[string]struct{})
+	for _, line := range strings.Split(lsof.output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "fence" {
+			continue
+		}
+		for index, field := range fields {
+			if field != "TCP" || index+2 >= len(fields) || fields[index+2] != "(LISTEN)" {
+				continue
+			}
+			host, port, err := net.SplitHostPort(fields[index+1])
+			if err != nil {
+				continue
+			}
+			address := net.ParseIP(host)
+			if address != nil && address.IsLoopback() {
+				listeners[net.JoinHostPort(address.String(), port)] = struct{}{}
+			}
+		}
+	}
+	return listeners
+}
+
+func TestDarwinHookEnvironmentSummarySanitizesValues(t *testing.T) {
+	const secret = "https://token.example.invalid/hidden"
+	snapshot := darwinHookEnvironmentSnapshot{status: "available", values: map[string]string{
+		"HTTP_PROXY":          "http://127.0.0.1:4567",
+		"http_proxy":          "http://127.0.0.1:4567",
+		"NO_PROXY":            "internal.example.invalid",
+		"LC_ALL":              "en_US.UTF-8",
+		"NODE_EXTRA_CA_CERTS": "/private/tmp/ca.pem",
+		"REPOWOLF_CA_FILE":    "/private/tmp/ca.pem",
+		"FENCE_SANDBOX":       "1",
+		"UNLISTED":            secret,
+	}}
+	summary := strings.Join(darwinHookEnvironmentSummary(snapshot, map[string]struct{}{net.JoinHostPort("127.0.0.1", "4567"): {}}), "\n")
+	if strings.Contains(summary, secret) || strings.Contains(summary, "internal.example.invalid") || strings.Contains(summary, "/private/tmp/ca.pem") {
+		t.Fatalf("summary disclosed a raw environment value: %q", summary)
+	}
+	for _, expected := range []string{"HTTP_PROXY endpoint=loopback-live-fence-listener", "HTTP_PROXY/http_proxy=equal", "LC_ALL=en_US.UTF-8", "NODE_EXTRA_CA_CERTS=temporary-absolute-path", "FENCE_SANDBOX=enabled-marker"} {
+		if !strings.Contains(summary, expected) {
+			t.Fatalf("summary missing %q: %q", expected, summary)
+		}
+	}
+}
+
+func TestParseDarwinHookEnvironmentRejectsAmbiguity(t *testing.T) {
+	command := "/nix/store/hash-claude-code-2.1.158/bin/claude"
+	if snapshot := parseDarwinHookEnvironment(command, command); snapshot.status != "available" || len(snapshot.values) != 0 {
+		t.Fatalf("empty environment snapshot = %#v", snapshot)
+	}
+	for _, output := range []string{
+		command + " HTTP_PROXY=http://127.0.0.1:1",
+		command + " HTTP_PROXY=http://127.0.0.1:1 HTTP_PROXY=http://127.0.0.1:2",
+		command + "x HTTP_PROXY=http://127.0.0.1:1",
+		command + " HTTP_PROXY=http://127.0.0.1:1\nsecond line",
+		command + " UNLISTED=prefix HTTP_PROXY=http://127.0.0.1:4567",
+	} {
+		if snapshot := parseDarwinHookEnvironment(command, output); snapshot.status != "conflicting" {
+			t.Fatalf("ambiguous output status = %q", snapshot.status)
+		}
+	}
+}
+
+func TestDarwinHookClaudePIDRequiresExactBoundPaths(t *testing.T) {
+	const (
+		fence  = "/nix/store/hash-fence-0.1.58/bin/fence"
+		claude = "/nix/store/hash-claude-code-2.1.158/bin/claude"
+	)
+	processes := func(fencePath, claudePath string, extra ...darwinHookProcess) []darwinHookProcess {
+		result := []darwinHookProcess{
+			{pid: 10, pgid: 1, command: fencePath + " --settings policy -- wrapper"},
+			{pid: 11, ppid: 10, pgid: 1, command: claudePath + " --flag"},
+		}
+		return append(result, extra...)
+	}
+	for _, test := range []struct {
+		name           string
+		processes      []darwinHookProcess
+		expectedFence  string
+		expectedClaude string
+		status         string
+	}{
+		{name: "exact paths", processes: processes(fence, claude), status: "available"},
+		{name: "non-store Claude lookalike", processes: processes(fence, "/tmp/not-claude-code-helper/bin/claude"), status: "unavailable"},
+		{name: "wrong Fence path", processes: processes("/tmp/fence/bin/fence", claude), status: "unavailable"},
+		{name: "traversal Fence path", processes: processes("/nix/store/../../tmp/fence/bin/fence", claude), status: "unavailable"},
+		{name: "traversal Claude path", processes: processes(fence, "/nix/store/../../tmp/claude/bin/claude"), status: "unavailable"},
+		{name: "traversal expected binding paths", processes: processes("/nix/store/../../tmp/fence/bin/fence", "/nix/store/../../tmp/claude/bin/claude"), expectedFence: "/nix/store/../../tmp/fence/bin/fence", expectedClaude: "/nix/store/../../tmp/claude/bin/claude", status: "unavailable"},
+		{name: "zero Claude candidates", processes: []darwinHookProcess{{pid: 10, pgid: 1, command: fence + " --settings policy -- wrapper"}}, status: "unavailable"},
+		{name: "multiple Claude candidates", processes: processes(fence, claude, darwinHookProcess{pid: 12, ppid: 10, pgid: 1, command: claude + " --other"}), status: "conflicting"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expectedFence, expectedClaude := test.expectedFence, test.expectedClaude
+			if expectedFence == "" {
+				expectedFence = fence
+			}
+			if expectedClaude == "" {
+				expectedClaude = claude
+			}
+			pid, _, status := darwinHookClaudePID(test.processes, expectedFence, expectedClaude)
+			if status != test.status {
+				t.Fatalf("status = %q, want %q", status, test.status)
+			}
+			if status == "available" && pid != "11" {
+				t.Fatalf("pid = %q, want 11", pid)
+			}
+		})
+	}
+}
+
+func TestDarwinHookClaudePIDFromBindingRejectsWrapperEscapes(t *testing.T) {
+	const (
+		fence   = "/nix/store/hash-fence-0.1.58/bin/fence"
+		claude  = "/nix/store/hash-claude-code-2.1.158/bin/claude"
+		wrapper = "/nix/store/hash-den-claude-agent/bin/den-claude-agent"
+	)
+	manifest := func(wrapperPath string) []byte {
+		return []byte(`{"fenceExecutable":"` + fence + `","agent":{"executable":"` + wrapperPath + `"}}`)
+	}
+	for _, test := range []struct {
+		name     string
+		wrapper  string
+		resolve  func(string) (string, error)
+		status   string
+		pid      string
+		wantRead bool
+	}{
+		{name: "canonical selector", wrapper: wrapper, resolve: func(path string) (string, error) { return path, nil }, status: "available", pid: "11", wantRead: true},
+		{name: "traversal wrapper", wrapper: "/nix/store/../outside-store/wrapper", resolve: func(path string) (string, error) { return path, nil }, status: "unavailable"},
+		{name: "symlinked wrapper identity", wrapper: wrapper, resolve: func(path string) (string, error) {
+			if path == wrapper {
+				return "/nix/store/different-den-claude-agent/bin/den-claude-agent", nil
+			}
+			return path, nil
+		}, status: "unavailable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			processes := "10 1 7 S 00:01 " + fence + " --settings policy -- " + test.wrapper + "\n" +
+				"11 10 7 S 00:01 " + claude + " --flag\n"
+			readCalled := false
+			pid, _, status := darwinHookClaudePIDFromBinding(
+				context.Background(), processes, 7, manifest(test.wrapper), fence,
+				func(context.Context, string) ([]byte, bool, error) {
+					readCalled = true
+					return []byte("export NODE_EXTRA_CA_CERTS=\"$REPOWOLF_CA_FILE\"\nexec " + claude + " \"$@\"\n"), false, nil
+				},
+				test.resolve,
+			)
+			if status != test.status || pid != test.pid {
+				t.Fatalf("selector = pid %q, status %q; want pid %q, status %q", pid, status, test.pid, test.status)
+			}
+			if readCalled != test.wantRead {
+				t.Fatalf("wrapper read = %t, want %t", readCalled, test.wantRead)
+			}
+		})
+	}
+}
+
+func TestDarwinHookBindingRejectsEscapes(t *testing.T) {
+	const (
+		fence   = "/nix/store/hash-fence-0.1.58/bin/fence"
+		wrapper = "/nix/store/hash-den-claude-agent"
+	)
+	manifest := func(fencePath, wrapperPath string) []byte {
+		return []byte(`{"fenceExecutable":"` + fencePath + `","agent":{"executable":"` + wrapperPath + `"}}`)
+	}
+	for _, test := range []struct {
+		name     string
+		contents []byte
+		expected string
+		resolve  func(string) (string, error)
+		status   string
+	}{
+		{name: "exact binding", contents: manifest(fence, wrapper), expected: fence, resolve: func(path string) (string, error) { return path, nil }, status: "available"},
+		{name: "traversal wrapper", contents: manifest(fence, "/nix/store/../../tmp/wrapper"), expected: fence, resolve: func(path string) (string, error) { return path, nil }, status: "unavailable"},
+		{name: "symlink wrapper", contents: manifest(fence, wrapper), expected: fence, resolve: func(path string) (string, error) {
+			if path == wrapper {
+				return "/tmp/wrapper", nil
+			}
+			return path, nil
+		}, status: "unavailable"},
+		{name: "manifest fence disagrees with input", contents: manifest(fence, wrapper), expected: "/nix/store/other-fence/bin/fence", resolve: func(path string) (string, error) { return path, nil }, status: "unavailable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, status := darwinHookBindingFromContents(test.contents, test.expected, test.resolve)
+			if status != test.status {
+				t.Fatalf("status = %q, want %q", status, test.status)
+			}
+		})
+	}
+}
+
+func TestDarwinHookCanonicalNixStorePathRejectsEscapes(t *testing.T) {
+	const clean = "/nix/store/hash-claude-code-2.1.158/bin/claude"
+	for _, test := range []struct {
+		name     string
+		path     string
+		resolved string
+		want     bool
+	}{
+		{name: "clean canonical store path", path: clean, resolved: clean, want: true},
+		{name: "traversal", path: "/nix/store/../../tmp/claude", resolved: "/tmp/claude"},
+		{name: "nested traversal", path: "/nix/store/hash/../other/bin/claude", resolved: "/nix/store/other/bin/claude"},
+		{name: "symlink outside store", path: clean, resolved: "/tmp/claude"},
+		{name: "symlink to another store path", path: clean, resolved: "/nix/store/other-claude/bin/claude"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, got := darwinHookCanonicalNixStorePath(test.path, func(string) (string, error) { return test.resolved, nil })
+			if got != test.want {
+				t.Fatalf("canonical status = %t, want %t", got, test.want)
+			}
+		})
+	}
 }
 
 func darwinHookProcessGroupPIDs(diagnosticContext context.Context, output string) []string {
