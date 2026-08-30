@@ -300,16 +300,17 @@ func dumpDarwinHookProcesses(diagnosticContext context.Context, fixtureBash stri
 	cancel()
 	fmt.Println("DIAG-HOOK: ps:", err)
 	printDiagnosticOutput("DIAG-HOOK:", string(output))
-	evidence := darwinHookProcessEvidence{output: string(output), environment: darwinHookEnvironmentSnapshot{status: "unavailable"}}
-	if diagnosticContext.Err() != nil {
+	evidence := darwinHookProcessEvidence{output: string(output), environment: darwinHookEnvironmentSnapshot{status: "unavailable", reason: darwinHookReasonPIDUnavailable}}
+	if snapshot, failed := darwinHookPreselectionFailure(diagnosticContext); failed {
+		evidence.environment = snapshot
 		fmt.Println("DIAG-HOOK: overall diagnostic deadline reached before samples:", diagnosticContext.Err())
 		return evidence
 	}
 
-	claudePID, claudeCommand, selectionStatus := darwinHookClaudeProcess(diagnosticContext, string(output), processGroup)
+	claudePID, claudeCommand, selection := darwinHookClaudeProcess(diagnosticContext, string(output), processGroup)
 	var environmentDone <-chan darwinHookEnvironmentSnapshot
-	if selectionStatus != "available" {
-		evidence.environment.status = selectionStatus
+	if selection.status != "available" {
+		evidence.environment = selection
 	} else {
 		captureContext, cancelCapture := context.WithTimeout(diagnosticContext, 3*time.Second)
 		done := make(chan darwinHookEnvironmentSnapshot, 1)
@@ -379,7 +380,7 @@ func waitForDarwinHookEnvironment(diagnosticContext context.Context, evidence da
 	select {
 	case evidence.environment = <-done:
 	case <-diagnosticContext.Done():
-		evidence.environment.status = "unavailable"
+		evidence.environment = darwinHookEnvironmentSnapshot{status: "unavailable", reason: darwinHookReasonCaptureFailed}
 	}
 	return evidence
 }
@@ -391,18 +392,32 @@ type darwinHookBinding struct {
 	} `json:"agent"`
 }
 
-func darwinHookClaudeProcess(diagnosticContext context.Context, output string, processGroup int) (string, string, string) {
+func darwinHookPreselectionFailure(diagnosticContext context.Context) (darwinHookEnvironmentSnapshot, bool) {
+	if diagnosticContext.Err() == nil {
+		return darwinHookEnvironmentSnapshot{}, false
+	}
+	return darwinHookEnvironmentSnapshot{status: "unavailable", reason: darwinHookReasonPIDUnavailable}, true
+}
+
+func darwinHookManifestFailure(truncated bool, err error) (darwinHookEnvironmentSnapshot, bool) {
+	if err == nil && !truncated {
+		return darwinHookEnvironmentSnapshot{}, false
+	}
+	return darwinHookEnvironmentSnapshot{status: "unavailable", reason: darwinHookReasonIdentityMismatch}, true
+}
+
+func darwinHookClaudeProcess(diagnosticContext context.Context, output string, processGroup int) (string, string, darwinHookEnvironmentSnapshot) {
 	manifest, truncated, err := darwinHookManifestContents(diagnosticContext)
-	if err != nil || truncated {
-		return "", "", "unavailable"
+	if snapshot, failed := darwinHookManifestFailure(truncated, err); failed {
+		return "", "", snapshot
 	}
 	return darwinHookClaudePIDFromBinding(diagnosticContext, output, processGroup, manifest, os.Getenv("DEN_NATIVE_FENCE"), readDarwinHookRegularFile, filepath.EvalSymlinks)
 }
 
-func darwinHookClaudePIDFromBinding(diagnosticContext context.Context, output string, processGroup int, manifest []byte, expectedFencePath string, read func(context.Context, string) ([]byte, bool, error), resolve func(string) (string, error)) (string, string, string) {
+func darwinHookClaudePIDFromBinding(diagnosticContext context.Context, output string, processGroup int, manifest []byte, expectedFencePath string, read func(context.Context, string) ([]byte, bool, error), resolve func(string) (string, error)) (string, string, darwinHookEnvironmentSnapshot) {
 	expectedFence, expectedWrapper, status := darwinHookBindingFromContents(manifest, expectedFencePath, resolve)
 	if status != "available" {
-		return "", "", status
+		return "", "", darwinHookEnvironmentSnapshot{status: status, reason: darwinHookReasonIdentityMismatch}
 	}
 	processes := darwinHookProcesses(output, processGroup)
 	var fences []darwinHookProcess
@@ -412,21 +427,21 @@ func darwinHookClaudePIDFromBinding(diagnosticContext context.Context, output st
 		}
 	}
 	if len(fences) == 0 {
-		return "", "", "unavailable"
+		return "", "", darwinHookEnvironmentSnapshot{status: "unavailable", reason: darwinHookReasonPIDUnavailable}
 	}
 	if len(fences) != 1 {
-		return "", "", "conflicting"
+		return "", "", darwinHookEnvironmentSnapshot{status: "conflicting", reason: darwinHookReasonPIDUnavailable}
 	}
 	wrapper, status := darwinHookFenceWrapper(fences[0].command)
 	if status != "available" {
-		return "", "", status
+		return "", "", darwinHookEnvironmentSnapshot{status: status, reason: darwinHookReasonIdentityMismatch}
 	}
 	if wrapper != expectedWrapper {
-		return "", "", "unavailable"
+		return "", "", darwinHookEnvironmentSnapshot{status: "unavailable", reason: darwinHookReasonIdentityMismatch}
 	}
 	expectedClaude, status := darwinHookClaudePathFromWrapper(diagnosticContext, expectedWrapper, read, resolve)
 	if status != "available" {
-		return "", "", status
+		return "", "", darwinHookEnvironmentSnapshot{status: status, reason: darwinHookReasonIdentityMismatch}
 	}
 	return darwinHookClaudePID(processes, expectedFence, expectedClaude)
 }
@@ -527,9 +542,9 @@ func darwinHookClaudePathFromWrapper(diagnosticContext context.Context, wrapper 
 	return realClaude, "available"
 }
 
-func darwinHookClaudePID(processes []darwinHookProcess, expectedFence, expectedClaude string) (string, string, string) {
+func darwinHookClaudePID(processes []darwinHookProcess, expectedFence, expectedClaude string) (string, string, darwinHookEnvironmentSnapshot) {
 	if !darwinHookNixStoreExecutable(expectedFence, "fence") || !darwinHookNixStoreExecutable(expectedClaude, "claude") {
-		return "", "", "unavailable"
+		return "", "", darwinHookEnvironmentSnapshot{status: "unavailable", reason: darwinHookReasonIdentityMismatch}
 	}
 	var fences []darwinHookProcess
 	for _, process := range processes {
@@ -538,10 +553,10 @@ func darwinHookClaudePID(processes []darwinHookProcess, expectedFence, expectedC
 		}
 	}
 	if len(fences) == 0 {
-		return "", "", "unavailable"
+		return "", "", darwinHookEnvironmentSnapshot{status: "unavailable", reason: darwinHookReasonPIDUnavailable}
 	}
 	if len(fences) != 1 {
-		return "", "", "conflicting"
+		return "", "", darwinHookEnvironmentSnapshot{status: "conflicting", reason: darwinHookReasonPIDUnavailable}
 	}
 	var claude []darwinHookProcess
 	for _, process := range processes {
@@ -551,12 +566,12 @@ func darwinHookClaudePID(processes []darwinHookProcess, expectedFence, expectedC
 		}
 	}
 	if len(claude) == 0 {
-		return "", "", "unavailable"
+		return "", "", darwinHookEnvironmentSnapshot{status: "unavailable", reason: darwinHookReasonPIDUnavailable}
 	}
 	if len(claude) != 1 {
-		return "", "", "conflicting"
+		return "", "", darwinHookEnvironmentSnapshot{status: "conflicting", reason: darwinHookReasonPIDUnavailable}
 	}
-	return strconv.Itoa(claude[0].pid), claude[0].command, "available"
+	return strconv.Itoa(claude[0].pid), claude[0].command, darwinHookEnvironmentSnapshot{status: "available"}
 }
 
 func darwinHookFenceProcess(command, expectedFence string) bool {
@@ -602,11 +617,15 @@ func captureDarwinHookEnvironment(diagnosticContext context.Context, pid, comman
 	ps.Stdout, ps.Stderr = output, output
 	err := ps.Run()
 	contents, truncated, available := output.Snapshot(diagnosticContext, darwinHookObservationLimit)
+	return classifyDarwinHookEnvironmentCapture(command, contents, truncated, available, err)
+}
+
+func classifyDarwinHookEnvironmentCapture(command, contents string, truncated, available bool, err error) darwinHookEnvironmentSnapshot {
 	if !available || err != nil {
-		return darwinHookEnvironmentSnapshot{status: "unavailable"}
+		return darwinHookEnvironmentSnapshot{status: "unavailable", reason: darwinHookReasonCaptureFailed}
 	}
 	if truncated {
-		return darwinHookEnvironmentSnapshot{status: "truncated"}
+		return darwinHookEnvironmentSnapshot{status: "truncated", reason: darwinHookReasonCaptureFailed}
 	}
 	return parseDarwinHookEnvironment(command, contents)
 }
@@ -785,8 +804,34 @@ func printDarwinHookLsof(diagnosticContext context.Context, psOutput string) dar
 	return darwinHookLsofEvidence{status: "ok", output: contents}
 }
 
+type darwinHookEnvironmentReason uint8
+
+const (
+	darwinHookReasonNone darwinHookEnvironmentReason = iota
+	darwinHookReasonIdentityMismatch
+	darwinHookReasonPIDUnavailable
+	darwinHookReasonCaptureFailed
+	darwinHookReasonParseAmbiguous
+)
+
+func (reason darwinHookEnvironmentReason) fixedCode() string {
+	switch reason {
+	case darwinHookReasonIdentityMismatch:
+		return "identity-mismatch"
+	case darwinHookReasonPIDUnavailable:
+		return "pid-unavailable"
+	case darwinHookReasonCaptureFailed:
+		return "capture-failed"
+	case darwinHookReasonParseAmbiguous:
+		return "parse-ambiguous"
+	default:
+		return "capture-failed"
+	}
+}
+
 type darwinHookEnvironmentSnapshot struct {
 	status string
+	reason darwinHookEnvironmentReason
 	values map[string]string
 }
 
@@ -801,11 +846,11 @@ var darwinHookEnvironmentNames = []string{
 func parseDarwinHookEnvironment(command, output string) darwinHookEnvironmentSnapshot {
 	line, remainder, hasMoreLines := strings.Cut(strings.TrimSuffix(output, "\n"), "\n")
 	if hasMoreLines || !strings.HasPrefix(line, command) {
-		return darwinHookEnvironmentSnapshot{status: "conflicting"}
+		return darwinHookEnvironmentSnapshot{status: "conflicting", reason: darwinHookReasonParseAmbiguous}
 	}
 	remainder = strings.TrimPrefix(line, command)
 	if remainder != "" && (remainder[0] != ' ' && remainder[0] != '\t') {
-		return darwinHookEnvironmentSnapshot{status: "conflicting"}
+		return darwinHookEnvironmentSnapshot{status: "conflicting", reason: darwinHookReasonParseAmbiguous}
 	}
 	if strings.TrimSpace(remainder) == "" {
 		return darwinHookEnvironmentSnapshot{status: "available", values: map[string]string{}}
@@ -813,7 +858,7 @@ func parseDarwinHookEnvironment(command, output string) darwinHookEnvironmentSna
 	// ps eww separates entries with whitespace, which is also valid inside an
 	// environment value. Its text format cannot prove any non-empty entry
 	// boundary, so no value may be inferred from it.
-	return darwinHookEnvironmentSnapshot{status: "conflicting"}
+	return darwinHookEnvironmentSnapshot{status: "conflicting", reason: darwinHookReasonParseAmbiguous}
 }
 
 func printDarwinHookEnvironment(diagnosticContext context.Context, snapshot darwinHookEnvironmentSnapshot, lsof darwinHookLsofEvidence) {
@@ -826,10 +871,11 @@ func printDarwinHookEnvironment(diagnosticContext context.Context, snapshot darw
 }
 
 func darwinHookEnvironmentSummary(snapshot darwinHookEnvironmentSnapshot, listeners map[string]struct{}) []string {
-	summaries := []string{"snapshot=" + snapshot.status}
+	summary := "snapshot=" + snapshot.status
 	if snapshot.status != "available" {
-		return summaries
+		return []string{summary + " reason=" + snapshot.reason.fixedCode()}
 	}
+	summaries := []string{summary}
 	for _, name := range darwinHookEnvironmentNames {
 		presence := "absent"
 		if _, ok := snapshot.values[name]; ok {
@@ -1005,9 +1051,53 @@ func TestDarwinHookEnvironmentSummarySanitizesValues(t *testing.T) {
 	}
 }
 
+const darwinHookHostileDiagnostic = `error="permission denied" command="/bin/ps eww -p 42" path="/private/tmp/secret" value="TOKEN=secret" count=42 credential="secret" url="https://host.example.invalid" host="host.example.invalid"`
+
+func TestDarwinHookEnvironmentReasonOutputContract(t *testing.T) {
+	tests := []struct {
+		name     string
+		snapshot darwinHookEnvironmentSnapshot
+		want     string
+	}{
+		{name: "available omits reason", snapshot: darwinHookEnvironmentSnapshot{status: "available", reason: darwinHookReasonIdentityMismatch}, want: "snapshot=available"},
+		{name: "identity mismatch", snapshot: darwinHookEnvironmentSnapshot{status: "unavailable", reason: darwinHookReasonIdentityMismatch}, want: "snapshot=unavailable reason=identity-mismatch"},
+		{name: "PID unavailable", snapshot: darwinHookEnvironmentSnapshot{status: "conflicting", reason: darwinHookReasonPIDUnavailable}, want: "snapshot=conflicting reason=pid-unavailable"},
+		{name: "capture failed", snapshot: darwinHookEnvironmentSnapshot{status: "truncated", reason: darwinHookReasonCaptureFailed}, want: "snapshot=truncated reason=capture-failed"},
+		{name: "parse ambiguous", snapshot: darwinHookEnvironmentSnapshot{status: "conflicting", reason: darwinHookReasonParseAmbiguous}, want: "snapshot=conflicting reason=parse-ambiguous"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			summaries := darwinHookEnvironmentSummary(test.snapshot, nil)
+			got := strings.Join(summaries, "\n")
+			if test.snapshot.status == "available" {
+				if summaries[0] != test.want || strings.Contains(got, "reason=") || !strings.Contains(got, "HTTP_PROXY=absent") {
+					t.Fatalf("available summary = %q, want status %q without a reason and with sanitized summaries", got, test.want)
+				}
+				return
+			}
+			if got != test.want {
+				t.Fatalf("summary = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestDarwinHookEnvironmentReasonOutputSanitizesData(t *testing.T) {
+	snapshot := darwinHookEnvironmentSnapshot{
+		status: "unavailable",
+		reason: darwinHookEnvironmentReason(255),
+		values: map[string]string{"UNLISTED": darwinHookHostileDiagnostic},
+	}
+	got := strings.Join(darwinHookEnvironmentSummary(snapshot, nil), "\n")
+	const want = "snapshot=unavailable reason=capture-failed"
+	if got != want {
+		t.Fatalf("summary = %q, want %q", got, want)
+	}
+}
+
 func TestParseDarwinHookEnvironmentRejectsAmbiguity(t *testing.T) {
 	command := "/nix/store/hash-claude-code-2.1.158/bin/claude"
-	if snapshot := parseDarwinHookEnvironment(command, command); snapshot.status != "available" || len(snapshot.values) != 0 {
+	if snapshot := parseDarwinHookEnvironment(command, command); snapshot.status != "available" || snapshot.reason != darwinHookReasonNone || len(snapshot.values) != 0 {
 		t.Fatalf("empty environment snapshot = %#v", snapshot)
 	}
 	for _, output := range []string{
@@ -1017,9 +1107,161 @@ func TestParseDarwinHookEnvironmentRejectsAmbiguity(t *testing.T) {
 		command + " HTTP_PROXY=http://127.0.0.1:1\nsecond line",
 		command + " UNLISTED=prefix HTTP_PROXY=http://127.0.0.1:4567",
 	} {
-		if snapshot := parseDarwinHookEnvironment(command, output); snapshot.status != "conflicting" {
-			t.Fatalf("ambiguous output status = %q", snapshot.status)
+		if snapshot := parseDarwinHookEnvironment(command, output); snapshot.status != "conflicting" || snapshot.reason != darwinHookReasonParseAmbiguous {
+			t.Fatalf("ambiguous output snapshot = %#v", snapshot)
 		}
+	}
+}
+
+func TestDarwinHookEnvironmentCaptureReasons(t *testing.T) {
+	const command = "/nix/store/hash-claude-code-2.1.158/bin/claude"
+	tests := []struct {
+		name      string
+		command   string
+		contents  string
+		truncated bool
+		available bool
+		err       error
+		status    string
+		reason    darwinHookEnvironmentReason
+	}{
+		{name: "snapshot unavailable", command: command, available: false, status: "unavailable", reason: darwinHookReasonCaptureFailed},
+		{name: "command error", command: command, contents: darwinHookHostileDiagnostic, available: true, err: fmt.Errorf("%s", darwinHookHostileDiagnostic), status: "unavailable", reason: darwinHookReasonCaptureFailed},
+		{name: "error precedes overflow", command: darwinHookHostileDiagnostic, contents: darwinHookHostileDiagnostic, truncated: true, available: true, err: fmt.Errorf("%s", darwinHookHostileDiagnostic), status: "unavailable", reason: darwinHookReasonCaptureFailed},
+		{name: "overflow", command: command, truncated: true, available: true, status: "truncated", reason: darwinHookReasonCaptureFailed},
+		{name: "empty capture", command: command, available: true, status: "conflicting", reason: darwinHookReasonParseAmbiguous},
+		{name: "ambiguous environment bytes", command: command, contents: command + " HTTP_PROXY=http://127.0.0.1:1", available: true, status: "conflicting", reason: darwinHookReasonParseAmbiguous},
+		{name: "proven empty environment", command: command, contents: command, available: true, status: "available", reason: darwinHookReasonNone},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := classifyDarwinHookEnvironmentCapture(test.command, test.contents, test.truncated, test.available, test.err)
+			requireDarwinHookEnvironmentResult(t, got, test.status, test.reason)
+			if test.err != nil {
+				if summary := strings.Join(darwinHookEnvironmentSummary(got, nil), "\n"); summary != "snapshot=unavailable reason=capture-failed" {
+					t.Fatalf("error summary = %q", summary)
+				}
+			}
+		})
+	}
+
+	t.Run("complete 64 KiB capture", func(t *testing.T) {
+		command := strings.Repeat("c", darwinHookObservationLimit)
+		output := &lockedBuffer{limit: darwinHookObservationLimit}
+		_, _ = output.Write([]byte(command))
+		contents, truncated, available := output.Snapshot(context.Background(), darwinHookObservationLimit)
+		if truncated {
+			t.Fatal("complete 64 KiB capture was truncated")
+		}
+		requireDarwinHookEnvironmentResult(t, classifyDarwinHookEnvironmentCapture(command, contents, truncated, available, nil), "available", darwinHookReasonNone)
+	})
+	t.Run("overflow capture", func(t *testing.T) {
+		command := strings.Repeat("c", darwinHookObservationLimit)
+		output := &lockedBuffer{limit: darwinHookObservationLimit}
+		_, _ = output.Write([]byte(command + "c"))
+		contents, truncated, available := output.Snapshot(context.Background(), darwinHookObservationLimit)
+		if !truncated {
+			t.Fatal("over-limit capture was not truncated")
+		}
+		requireDarwinHookEnvironmentResult(t, classifyDarwinHookEnvironmentCapture(command, contents, truncated, available, nil), "truncated", darwinHookReasonCaptureFailed)
+	})
+	t.Run("caller wait deadline", func(t *testing.T) {
+		diagnosticContext, cancel := context.WithCancel(context.Background())
+		cancel()
+		done := make(chan darwinHookEnvironmentSnapshot)
+		evidence := waitForDarwinHookEnvironment(diagnosticContext, darwinHookProcessEvidence{}, done)
+		requireDarwinHookEnvironmentResult(t, evidence.environment, "unavailable", darwinHookReasonCaptureFailed)
+	})
+}
+
+func requireDarwinHookEnvironmentResult(t *testing.T, got darwinHookEnvironmentSnapshot, wantStatus string, wantReason darwinHookEnvironmentReason) {
+	t.Helper()
+	if got.status != wantStatus || got.reason != wantReason {
+		t.Fatalf("snapshot = status %q, reason %d; want status %q, reason %d", got.status, got.reason, wantStatus, wantReason)
+	}
+}
+
+func TestDarwinHookEnvironmentSelectionReasons(t *testing.T) {
+	const (
+		fence   = "/nix/store/hash-fence-0.1.58/bin/fence"
+		wrapper = "/nix/store/hash-den-claude-agent/bin/den-claude-agent"
+		claude  = "/nix/store/hash-claude-code-2.1.158/bin/claude"
+	)
+	manifest := []byte(`{"fenceExecutable":"` + fence + `","agent":{"executable":"` + wrapper + `"}}`)
+	wrapperContents := []byte("export NODE_EXTRA_CA_CERTS=\"$REPOWOLF_CA_FILE\"\nexec " + claude + " \"$@\"\n")
+	resolveIdentity := func(path string) (string, error) { return path, nil }
+	processOutput := func(commands ...string) string {
+		var lines []string
+		for index, command := range commands {
+			lines = append(lines, fmt.Sprintf("%d 1 7 S 00:01 %s", index+10, command))
+		}
+		return strings.Join(lines, "\n")
+	}
+	matchingFence := fence + " --settings policy -- " + wrapper
+
+	t.Run("pre-selector deadline", func(t *testing.T) {
+		diagnosticContext, cancel := context.WithCancel(context.Background())
+		cancel()
+		got, failed := darwinHookPreselectionFailure(diagnosticContext)
+		if !failed {
+			t.Fatal("pre-selector deadline was not classified")
+		}
+		requireDarwinHookEnvironmentResult(t, got, "unavailable", darwinHookReasonPIDUnavailable)
+	})
+	t.Run("manifest deadline", func(t *testing.T) {
+		got, failed := darwinHookManifestFailure(false, context.DeadlineExceeded)
+		if !failed {
+			t.Fatal("manifest deadline was not classified")
+		}
+		requireDarwinHookEnvironmentResult(t, got, "unavailable", darwinHookReasonIdentityMismatch)
+	})
+
+	for _, test := range []struct {
+		name    string
+		output  string
+		binding []byte
+		read    func(context.Context, string) ([]byte, bool, error)
+		status  string
+		reason  darwinHookEnvironmentReason
+	}{
+		{name: "invalid manifest", binding: []byte("not JSON"), status: "unavailable", reason: darwinHookReasonIdentityMismatch},
+		{name: "no Fence match", output: processOutput("/other --settings policy"), binding: manifest, status: "unavailable", reason: darwinHookReasonPIDUnavailable},
+		{name: "multiple Fence matches", output: processOutput(matchingFence, matchingFence), binding: manifest, status: "conflicting", reason: darwinHookReasonPIDUnavailable},
+		{name: "missing wrapper separator", output: processOutput(fence + " --settings policy"), binding: manifest, status: "unavailable", reason: darwinHookReasonIdentityMismatch},
+		{name: "multiple wrapper separators", output: processOutput(matchingFence + " -- second"), binding: manifest, status: "conflicting", reason: darwinHookReasonIdentityMismatch},
+		{name: "wrapper differs from manifest", output: processOutput(fence + " --settings policy -- /nix/store/other-agent/bin/den-claude-agent"), binding: manifest, status: "unavailable", reason: darwinHookReasonIdentityMismatch},
+		{name: "wrapper read unavailable", output: processOutput(matchingFence), binding: manifest, read: func(context.Context, string) ([]byte, bool, error) { return nil, false, context.DeadlineExceeded }, status: "unavailable", reason: darwinHookReasonIdentityMismatch},
+		{name: "wrapper lacks exact identity", output: processOutput(matchingFence), binding: manifest, read: func(context.Context, string) ([]byte, bool, error) {
+			return []byte("exec " + claude + " \"$@\"\n"), false, nil
+		}, status: "unavailable", reason: darwinHookReasonIdentityMismatch},
+		{name: "wrapper has two exec lines", output: processOutput(matchingFence), binding: manifest, read: func(context.Context, string) ([]byte, bool, error) {
+			return append(wrapperContents, []byte("exec "+claude+" \"$@\"\n")...), false, nil
+		}, status: "conflicting", reason: darwinHookReasonIdentityMismatch},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			read := test.read
+			if read == nil {
+				read = func(context.Context, string) ([]byte, bool, error) { return wrapperContents, false, nil }
+			}
+			_, _, got := darwinHookClaudePIDFromBinding(context.Background(), test.output, 7, test.binding, fence, read, resolveIdentity)
+			requireDarwinHookEnvironmentResult(t, got, test.status, test.reason)
+		})
+	}
+
+	for _, test := range []struct {
+		name    string
+		process []darwinHookProcess
+		status  string
+		reason  darwinHookEnvironmentReason
+	}{
+		{name: "no Claude child", process: []darwinHookProcess{{pid: 10, pgid: 7, command: matchingFence}}, status: "unavailable", reason: darwinHookReasonPIDUnavailable},
+		{name: "multiple Claude children", process: []darwinHookProcess{{pid: 10, pgid: 7, command: matchingFence}, {pid: 11, ppid: 10, pgid: 7, command: claude}, {pid: 12, ppid: 10, pgid: 7, command: claude}}, status: "conflicting", reason: darwinHookReasonPIDUnavailable},
+		{name: "one Claude child", process: []darwinHookProcess{{pid: 10, pgid: 7, command: matchingFence}, {pid: 11, ppid: 10, pgid: 7, command: claude}}, status: "available", reason: darwinHookReasonNone},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, got := darwinHookClaudePID(test.process, fence, claude)
+			requireDarwinHookEnvironmentResult(t, got, test.status, test.reason)
+		})
 	}
 }
 
@@ -1041,15 +1283,16 @@ func TestDarwinHookClaudePIDRequiresExactBoundPaths(t *testing.T) {
 		expectedFence  string
 		expectedClaude string
 		status         string
+		reason         darwinHookEnvironmentReason
 	}{
-		{name: "exact paths", processes: processes(fence, claude), status: "available"},
-		{name: "non-store Claude lookalike", processes: processes(fence, "/tmp/not-claude-code-helper/bin/claude"), status: "unavailable"},
-		{name: "wrong Fence path", processes: processes("/tmp/fence/bin/fence", claude), status: "unavailable"},
-		{name: "traversal Fence path", processes: processes("/nix/store/../../tmp/fence/bin/fence", claude), status: "unavailable"},
-		{name: "traversal Claude path", processes: processes(fence, "/nix/store/../../tmp/claude/bin/claude"), status: "unavailable"},
-		{name: "traversal expected binding paths", processes: processes("/nix/store/../../tmp/fence/bin/fence", "/nix/store/../../tmp/claude/bin/claude"), expectedFence: "/nix/store/../../tmp/fence/bin/fence", expectedClaude: "/nix/store/../../tmp/claude/bin/claude", status: "unavailable"},
-		{name: "zero Claude candidates", processes: []darwinHookProcess{{pid: 10, pgid: 1, command: fence + " --settings policy -- wrapper"}}, status: "unavailable"},
-		{name: "multiple Claude candidates", processes: processes(fence, claude, darwinHookProcess{pid: 12, ppid: 10, pgid: 1, command: claude + " --other"}), status: "conflicting"},
+		{name: "exact paths", processes: processes(fence, claude), status: "available", reason: darwinHookReasonNone},
+		{name: "non-store Claude lookalike", processes: processes(fence, "/tmp/not-claude-code-helper/bin/claude"), status: "unavailable", reason: darwinHookReasonPIDUnavailable},
+		{name: "wrong Fence path", processes: processes("/tmp/fence/bin/fence", claude), status: "unavailable", reason: darwinHookReasonPIDUnavailable},
+		{name: "traversal Fence path", processes: processes("/nix/store/../../tmp/fence/bin/fence", claude), status: "unavailable", reason: darwinHookReasonPIDUnavailable},
+		{name: "traversal Claude path", processes: processes(fence, "/nix/store/../../tmp/claude/bin/claude"), status: "unavailable", reason: darwinHookReasonPIDUnavailable},
+		{name: "traversal expected binding paths", processes: processes("/nix/store/../../tmp/fence/bin/fence", "/nix/store/../../tmp/claude/bin/claude"), expectedFence: "/nix/store/../../tmp/fence/bin/fence", expectedClaude: "/nix/store/../../tmp/claude/bin/claude", status: "unavailable", reason: darwinHookReasonIdentityMismatch},
+		{name: "zero Claude candidates", processes: []darwinHookProcess{{pid: 10, pgid: 1, command: fence + " --settings policy -- wrapper"}}, status: "unavailable", reason: darwinHookReasonPIDUnavailable},
+		{name: "multiple Claude candidates", processes: processes(fence, claude, darwinHookProcess{pid: 12, ppid: 10, pgid: 1, command: claude + " --other"}), status: "conflicting", reason: darwinHookReasonPIDUnavailable},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			expectedFence, expectedClaude := test.expectedFence, test.expectedClaude
@@ -1059,11 +1302,9 @@ func TestDarwinHookClaudePIDRequiresExactBoundPaths(t *testing.T) {
 			if expectedClaude == "" {
 				expectedClaude = claude
 			}
-			pid, _, status := darwinHookClaudePID(test.processes, expectedFence, expectedClaude)
-			if status != test.status {
-				t.Fatalf("status = %q, want %q", status, test.status)
-			}
-			if status == "available" && pid != "11" {
+			pid, _, snapshot := darwinHookClaudePID(test.processes, expectedFence, expectedClaude)
+			requireDarwinHookEnvironmentResult(t, snapshot, test.status, test.reason)
+			if snapshot.status == "available" && pid != "11" {
 				t.Fatalf("pid = %q, want 11", pid)
 			}
 		})
@@ -1084,23 +1325,24 @@ func TestDarwinHookClaudePIDFromBindingRejectsWrapperEscapes(t *testing.T) {
 		wrapper  string
 		resolve  func(string) (string, error)
 		status   string
+		reason   darwinHookEnvironmentReason
 		pid      string
 		wantRead bool
 	}{
-		{name: "canonical selector", wrapper: wrapper, resolve: func(path string) (string, error) { return path, nil }, status: "available", pid: "11", wantRead: true},
-		{name: "traversal wrapper", wrapper: "/nix/store/../outside-store/wrapper", resolve: func(path string) (string, error) { return path, nil }, status: "unavailable"},
+		{name: "canonical selector", wrapper: wrapper, resolve: func(path string) (string, error) { return path, nil }, status: "available", reason: darwinHookReasonNone, pid: "11", wantRead: true},
+		{name: "traversal wrapper", wrapper: "/nix/store/../outside-store/wrapper", resolve: func(path string) (string, error) { return path, nil }, status: "unavailable", reason: darwinHookReasonIdentityMismatch},
 		{name: "symlinked wrapper identity", wrapper: wrapper, resolve: func(path string) (string, error) {
 			if path == wrapper {
 				return "/nix/store/different-den-claude-agent/bin/den-claude-agent", nil
 			}
 			return path, nil
-		}, status: "unavailable"},
+		}, status: "unavailable", reason: darwinHookReasonIdentityMismatch},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			processes := "10 1 7 S 00:01 " + fence + " --settings policy -- " + test.wrapper + "\n" +
 				"11 10 7 S 00:01 " + claude + " --flag\n"
 			readCalled := false
-			pid, _, status := darwinHookClaudePIDFromBinding(
+			pid, _, snapshot := darwinHookClaudePIDFromBinding(
 				context.Background(), processes, 7, manifest(test.wrapper), fence,
 				func(context.Context, string) ([]byte, bool, error) {
 					readCalled = true
@@ -1108,9 +1350,10 @@ func TestDarwinHookClaudePIDFromBindingRejectsWrapperEscapes(t *testing.T) {
 				},
 				test.resolve,
 			)
-			if status != test.status || pid != test.pid {
-				t.Fatalf("selector = pid %q, status %q; want pid %q, status %q", pid, status, test.pid, test.status)
+			if pid != test.pid {
+				t.Fatalf("selector pid = %q, want %q", pid, test.pid)
 			}
+			requireDarwinHookEnvironmentResult(t, snapshot, test.status, test.reason)
 			if readCalled != test.wantRead {
 				t.Fatalf("wrapper read = %t, want %t", readCalled, test.wantRead)
 			}
