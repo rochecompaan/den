@@ -182,8 +182,11 @@ func (provider *claudeProvider) matchScenarioLocked(document []byte) *claudeScen
 func (provider *claudeProvider) nextContentLocked(scenario *claudeScenario) (map[string]any, string) {
 	index := len(scenario.results)
 	if scenario.scratch && index == 1 {
-		for provider.scratchReadyLocked() < 2 {
+		for provider.scratchReadyLocked() < 2 && !provider.scratchFailedLocked() {
 			provider.ready.Wait()
+		}
+		if provider.scratchFailedLocked() {
+			return map[string]any{"type": "text", "text": "fixture scratch barrier failed"}, "end_turn"
 		}
 		own := scratchPath(scenario.results[0])
 		peer := provider.peerScratchPathLocked(scenario)
@@ -215,6 +218,15 @@ func (provider *claudeProvider) scratchReadyLocked() int {
 		}
 	}
 	return count
+}
+
+func (provider *claudeProvider) scratchFailedLocked() bool {
+	for _, scenario := range provider.scenarios {
+		if scenario.scratch && len(scenario.results) > 0 && scratchPath(scenario.results[0]) == "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (provider *claudeProvider) peerScratchPathLocked(current *claudeScenario) string {
