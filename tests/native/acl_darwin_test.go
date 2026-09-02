@@ -1939,5 +1939,10 @@ func (fixture *nativeFixture) launchClaudeWithArguments(scenario *claudeScenario
 	}
 	providerEnvironment = append(providerEnvironment, extraEnvironment...)
 	command.Env = fixture.launchEnvironment(providerEnvironment)
+	reportDarwinDiskTelemetry("before-claude-execution",
+		darwinTelemetryPath{label: "fixture-worktree", path: fixture.worktree},
+		darwinTelemetryPath{label: "private-tmp", path: "/private/tmp"},
+		darwinTelemetryPath{label: "nix-store", path: "/nix/store"},
+	)
 	return runCommand(command)
 }

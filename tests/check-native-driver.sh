@@ -18,8 +18,27 @@ printf '#!%s\n' "$BASH" > "$fake_runner/bin/native-enforcement"
 cat >> "$fake_runner/bin/native-enforcement" <<'FAKE_RUNNER'
 set -euo pipefail
 printf '%s\n' 'execute native-runner' >> "$DEN_FAKE_EVENT_LOG"
+printf '%s\n' 'event execute native-runner' >&2
 FAKE_RUNNER
 chmod +x "$fake_runner/bin/native-enforcement"
+
+cat > "$root/bin/df" <<'FAKE_DF'
+#!/usr/bin/env bash
+if [[ ${DEN_FAKE_DF_STATUS:-0} -ne 0 ]]; then
+  exit "$DEN_FAKE_DF_STATUS"
+fi
+printf '%s\n' 'Filesystem 1024-blocks Used Available Capacity Mounted on'
+printf '%s\n' '/dev/fake 100000 90000 10000 90% /'
+FAKE_DF
+
+cat > "$root/bin/du" <<'FAKE_DU'
+#!/usr/bin/env bash
+if [[ ${DEN_FAKE_DU_STATUS:-0} -ne 0 ]]; then
+  exit "$DEN_FAKE_DU_STATUS"
+fi
+printf '1\t%s\n' "${*: -1}"
+FAKE_DU
+chmod +x "$root/bin/df" "$root/bin/du"
 
 printf '#!%s\n' "$BASH" > "$root/bin/nix"
 cat >> "$root/bin/nix" <<'FAKE_NIX'
@@ -50,6 +69,7 @@ if [[ $1 == derivation && $2 == show ]]; then
 fi
 if [[ $1 == build && $* == *packages.*.claude* ]]; then
   printf '%s\n' 'build claude' >> "$DEN_FAKE_EVENT_LOG"
+  printf '%s\n' 'event build claude' >&2
   exit
 fi
 if [[ $1 == build && $* == *checks.*.claude-startup* ]]; then
@@ -62,6 +82,7 @@ if [[ $1 == build && $* == *checks.*.launcher-unit* ]]; then
 fi
 if [[ $1 == build && $* == *native-enforcement* ]]; then
   printf '%s\n' 'build native-runner' >> "$DEN_FAKE_EVENT_LOG"
+  printf '%s\n' 'event build native-runner' >&2
   printf '%s\n' "$DEN_FAKE_RUNNER"
   exit
 fi
@@ -106,6 +127,24 @@ if [[ $status -eq 0 ]]; then
   exit 1
 fi
 ! grep -Fq 'checks.x86_64-linux.native-enforcement' "$DEN_FAKE_NIX_LOG"
+
+home_was_set=${HOME+x}
+home_value=${HOME-}
+unset HOME
+export DEN_CI_DISK_TELEMETRY=1 DEN_FAKE_DF_STATUS=47 DEN_FAKE_DU_STATUS=48
+run_driver darwin-telemetry aarch64-darwin 0 $'claude-startup\nlauncher-unit'
+unset DEN_CI_DISK_TELEMETRY DEN_FAKE_DF_STATUS DEN_FAKE_DU_STATUS
+if [[ -n $home_was_set ]]; then
+  export HOME=$home_value
+fi
+if [[ $status -ne 0 ]]; then
+  cat "$root/darwin-telemetry.stderr" >&2
+  exit 1
+fi
+expected=$'darwin disk telemetry phase=before-builds\nevent build claude\ndarwin disk telemetry phase=after-claude-build\nevent build native-runner\ndarwin disk telemetry phase=before-native-runner-execution\nevent execute native-runner'
+actual=$(grep -E '^(darwin disk telemetry phase=|event (build|execute))' \
+  "$root/darwin-telemetry.stderr")
+[[ $actual == "$expected" ]]
 
 for system in x86_64-linux aarch64-linux x86_64-darwin aarch64-darwin; do
   label=${system//_/-}

@@ -60,6 +60,7 @@ jobs:
         shell: bash
         env:
           DEN_CI_SYSTEM: ${{ matrix.system }}
+          DEN_CI_DISK_TELEMETRY: "1"
         run: |
           set -euo pipefail
           mkdir -p ci-logs

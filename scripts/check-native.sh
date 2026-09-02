@@ -15,10 +15,41 @@ if [[ $system != "$current_system" ]]; then
   exit 2
 fi
 
+report_darwin_disk_telemetry() {
+  local phase=$1 path
+  local home=${HOME:-}
+  local -a filesystem_paths=("$repo_root" /private/tmp /nix/store)
+  local -a usage_paths=(/nix/store "$repo_root")
+  if [[ $system != *-darwin || ${DEN_CI_DISK_TELEMETRY:-0} != 1 ]]; then
+    return
+  fi
+
+  if [[ -n $home ]]; then
+    filesystem_paths+=("$home")
+    usage_paths+=("$home/Library/Caches/nix" "${XDG_CACHE_HOME:-$home/.cache}/nix")
+  fi
+  if [[ -n ${RUNNER_TEMP:-} ]]; then
+    usage_paths+=("$RUNNER_TEMP")
+  fi
+
+  printf 'darwin disk telemetry phase=%s\n' "$phase" >&2
+  if ! df -Pk "${filesystem_paths[@]}" >&2; then
+    printf 'darwin disk telemetry df unavailable\n' >&2
+  fi
+  for path in "${usage_paths[@]}"; do
+    [[ -e $path ]] || continue
+    if ! du -sk "$path" >&2; then
+      printf 'darwin disk telemetry du unavailable for %s\n' "$path" >&2
+    fi
+  done
+}
+
+report_darwin_disk_telemetry before-builds
 printf 'evaluating flake for %s\n' "$system"
 nix flake check --no-build
 printf 'building Claude for %s\n' "$system"
 nix build ".#packages.$system.claude" --no-link --print-build-logs
+report_darwin_disk_telemetry after-claude-build
 
 normal_checks=$(nix eval --raw ".#checks.$system" --apply '
   checks:
@@ -62,6 +93,7 @@ if [[ ! -x $runner/bin/native-enforcement ]]; then
   printf 'native runner is not executable: %s\n' "$runner/bin/native-enforcement" >&2
   exit 1
 fi
+report_darwin_disk_telemetry before-native-runner-execution
 printf 'executing native runner as the invoking host user\n'
 "$runner/bin/native-enforcement"
 
