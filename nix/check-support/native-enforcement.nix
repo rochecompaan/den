@@ -26,6 +26,7 @@ let
     runtimeInputs = [ pkgs.bash pkgs.coreutils pkgs.curl pkgs.gitMinimal pkgs.gnugrep ];
     text = ''
       set -eu
+      export GIT_SSH_COMMAND="$REPOWOLF_CLIENT_DIR/bin/repowolf-git-ssh"
       scenario="''${1:?native fixture scenario is required}"
       shift
       case "$scenario" in
@@ -101,6 +102,9 @@ let
           ;;
         repowolf)
           gh issue list --repo alpha/repo >/dev/null 2>&1 || true
+          printf 'effective GIT_SSH_COMMAND=%s\n' "$GIT_SSH_COMMAND" >&2
+          printf 'controlled core.sshCommand=%s\n' "$GIT_CONFIG_VALUE_2" >&2
+          git config --get core.sshCommand >&2
           exec git ls-remote git@github.com:alpha/repo.git
           ;;
         marker)

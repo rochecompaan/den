@@ -390,5 +390,5 @@ func brokerHostname() string {
 	if runtime.GOOS == "linux" {
 		return "broker.den.invalid"
 	}
-	return "broker.localhost"
+	return "registry.npmjs.org"
 }

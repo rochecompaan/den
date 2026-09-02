@@ -1765,35 +1765,58 @@ func printRawDiagnosticOutput(output string) {
 	}
 }
 
+func darwinPolicyMutationDiagnostic(name, mutation string) string {
+	return fmt.Sprintf(`set +e
+mutation_stderr="$DEN_FENCE_TMPDIR/mutation-stderr"
+2>"$mutation_stderr" %s
+operation_status=$?
+set -e
+printf 'operation=%%s status=%%s\n' %s "$operation_status"
+if policy_state=$(stat -f 'size=%%z mode=%%Mp%%Lp perms=%%Sp' "$DEN_FENCE_POLICY_FILE" 2>&1); then
+  printf 'policy=exists %%s\n' "$policy_state"
+else
+  policy_status=$?
+  printf 'policy=missing-or-unreadable status=%%s detail=%%s\n' "$policy_status" "$policy_state"
+fi
+if test -s "$mutation_stderr"; then
+  printf 'seatbelt-evidence-begin\n'
+  cat "$mutation_stderr"
+  printf 'seatbelt-evidence-end\n'
+fi
+true`, mutation, strconv.Quote(name))
+}
+
 func TestDarwinBashHook(t *testing.T) {
 	fixture := newNativeFixture(t)
+	fixture.startDNS(t)
 	fixture.installClaudeContextHook(t)
 	replacement := filepath.Join(fixture.worktree, "replacement-policy")
 	if err := os.WriteFile(replacement, []byte("replacement\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mutations := map[string]string{
-		"truncate": `: > "$DEN_FENCE_POLICY_FILE" 2>/dev/null || true`,
-		"replace":  `cp "$DEN_NATIVE_REPLACEMENT" "$DEN_FENCE_POLICY_FILE" 2>/dev/null || true`,
-		"rename":   `mv "$DEN_FENCE_POLICY_FILE" "$DEN_FENCE_POLICY_FILE.old" 2>/dev/null || true`,
-		"chmod":    `chmod u+w "$DEN_FENCE_POLICY_FILE" 2>/dev/null || true`,
-		"append":   `printf mutation >> "$DEN_FENCE_POLICY_FILE" 2>/dev/null || true`,
+		"truncate": `: > "$DEN_FENCE_POLICY_FILE"`,
+		"replace":  `cp "$DEN_NATIVE_REPLACEMENT" "$DEN_FENCE_POLICY_FILE"`,
+		"rename":   `mv "$DEN_FENCE_POLICY_FILE" "$DEN_FENCE_POLICY_FILE.old"`,
+		"chmod":    `chmod u+w "$DEN_FENCE_POLICY_FILE"`,
+		"append":   `printf mutation >> "$DEN_FENCE_POLICY_FILE"`,
 	}
 	for name, mutation := range mutations {
 		t.Run(name, func(t *testing.T) {
 			marker := filepath.Join(fixture.worktree, "blocked-"+name)
 			blocked := `gh repo create forbidden; printf escaped > "$DEN_NATIVE_BLOCKED_MARKER"`
-			scenario := fixture.provider.register(mutation, blocked)
+			scenario := fixture.provider.register(darwinPolicyMutationDiagnostic(name, mutation), blocked)
+			requestsBefore := fixture.provider.messageRequestCount()
+			traceBefore := len(fixture.provider.requestTraceSnapshot())
 			result := fixture.launchClaude(scenario, []string{
 				"DEN_NATIVE_REPLACEMENT=" + replacement,
 				"DEN_NATIVE_BLOCKED_MARKER=" + marker,
 			})
-			requireSuccess(t, result)
-			if fileExists(marker) {
-				t.Fatal("later Bash tool escaped the mandatory hook after policy mutation")
-			}
-			if len(fixture.provider.scenarioResults(scenario)) != 2 {
-				t.Fatal("Claude did not complete both mutation and later blocked Bash calls")
+			toolResults := fixture.provider.scenarioResults(scenario)
+			requestCount := fixture.provider.messageRequestCount() - requestsBefore
+			requestTrace := fixture.provider.requestTraceSnapshot()[traceBefore:]
+			if result.err != nil || fileExists(marker) || len(toolResults) != 2 {
+				t.Fatalf("policy mutation %s scenario=%s: launch=%v marker=%t provider requests=%d trace=%v DNS=%v tool results=%#v\nstdout:\n%s\nstderr:\n%s", name, scenario.id, result.err, fileExists(marker), requestCount, requestTrace, fixture.dns.names(), toolResults, result.stdout, result.stderr)
 			}
 		})
 	}
@@ -1815,6 +1838,7 @@ printf 'scratch:%%s\n' "$DEN_FENCE_TMPDIR"`, strconv.Quote(allowedMarker))
 
 func TestDarwinHookCannotBeSuppressed(t *testing.T) {
 	fixture := newNativeFixture(t)
+	fixture.startDNS(t)
 	for _, argument := range []string{"--bare", "--bare=value"} {
 		t.Run(argument, func(t *testing.T) {
 			marker := filepath.Join(fixture.worktree, "bare-escaped")
@@ -1840,6 +1864,7 @@ func TestDarwinHookCannotBeSuppressed(t *testing.T) {
 
 func TestDarwinTemporaryDirectories(t *testing.T) {
 	fixture := newNativeFixture(t)
+	fixture.startDNS(t)
 	fixture.installClaudeContextHook(t)
 	probePaths := outsideFencePositiveControls(t)
 	const launches = 2

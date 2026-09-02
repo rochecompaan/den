@@ -62,6 +62,8 @@ let
   fakeClaude = (pkgs.writeShellScriptBin "claude" ''
     mkdir -p "$CLAUDE_CAPTURE_DIR"
     printf '%s' "$NODE_EXTRA_CA_CERTS" > "$CLAUDE_CAPTURE_DIR/node-extra-ca-certs"
+    printf '%s' "$CLAUDE_CODE_TMPDIR" > "$CLAUDE_CAPTURE_DIR/claude-code-tmpdir"
+    printf '%s' "$GIT_SSH_COMMAND" > "$CLAUDE_CAPTURE_DIR/git-ssh-command"
     printf '%s\0' "$@" > "$CLAUDE_CAPTURE_DIR/args"
     exit 73
   '').overrideAttrs (_: { version = "2.1.158"; });
@@ -267,6 +269,10 @@ pkgs.runCommand "package-api"
     capture="$TMPDIR/claude-capture"
     set +e
     CLAUDE_CAPTURE_DIR="$capture" \
+      CLAUDE_CODE_TMPDIR="/hostile/inherited-claude-tmp" \
+      DEN_FENCE_TMPDIR="/canonical/fence-tmp" \
+      GIT_SSH_COMMAND="ssh -o hostile" \
+      REPOWOLF_CLIENT_DIR="/canonical/repowolf-client" \
       NODE_EXTRA_CA_CERTS="/hostile/inherited-ca.pem" \
       REPOWOLF_CA_FILE="/canonical/launcher-prepared-ca.pem" \
       "$fakeExecutable" "space argument" 'semi;$(not-executed)'
@@ -274,6 +280,8 @@ pkgs.runCommand "package-api"
     set -e
     test "$status" = 73
     test "$(cat "$capture/node-extra-ca-certs")" = "/canonical/launcher-prepared-ca.pem"
+    test "$(cat "$capture/claude-code-tmpdir")" = "/canonical/fence-tmp"
+    test "$(cat "$capture/git-ssh-command")" = "/canonical/repowolf-client/bin/repowolf-git-ssh"
     printf '%s\0' "space argument" 'semi;$(not-executed)' > expected-args
     cmp expected-args "$capture/args"
     touch "$out"

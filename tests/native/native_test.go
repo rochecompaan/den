@@ -159,7 +159,8 @@ func TestNetworkEnforcement(t *testing.T) {
 	}
 	if fixture.dns != nil {
 		for _, name := range fixture.dns.names() {
-			if name != brokerHostname() && name != "registry.npmjs.org" {
+			if name != brokerHostname() && name != "registry.npmjs.org" &&
+				!(runtime.GOOS == "darwin" && name == "_dns.resolver.arpa") {
 				t.Fatalf("fixture attempted non-local DNS path %q", name)
 			}
 		}
@@ -456,4 +457,25 @@ func outsideFenceWritableFile(t *testing.T, parent string) string {
 func fileExists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil
+}
+
+func TestLatestRegisteredClaudeScenarioID(t *testing.T) {
+	tests := []struct {
+		name       string
+		document   string
+		candidates []string
+		want       string
+	}{
+		{name: "most recent conversation", document: `{"messages":[{"content":"den-native-3"},{"content":"execute den-native-4"}]}`, candidates: []string{"den-native-3", "den-native-4"}, want: "den-native-4"},
+		{name: "complete numeric suffix", document: `{"content":"den-native-1 then den-native-10"}`, candidates: []string{"den-native-1", "den-native-10"}, want: "den-native-10"},
+		{name: "later unregistered fixture path", document: `{"content":"execute den-native-4","cwd":"/tmp/den-native-3952797745/worktree"}`, candidates: []string{"den-native-3", "den-native-4"}, want: "den-native-4"},
+		{name: "no registered scenario", document: `{"content":"den-native-99"}`, candidates: []string{"den-native-1"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := latestRegisteredClaudeScenarioID([]byte(test.document), test.candidates); got != test.want {
+				t.Fatalf("latestRegisteredClaudeScenarioID() = %q, want %q", got, test.want)
+			}
+		})
+	}
 }

@@ -8,6 +8,8 @@ let
   claude = pkgs.claude-code;
   claudeExecutable = pkgs.writeShellScript "den-claude-agent" ''
     export NODE_EXTRA_CA_CERTS="$REPOWOLF_CA_FILE"
+    export CLAUDE_CODE_TMPDIR="$DEN_FENCE_TMPDIR"
+    export GIT_SSH_COMMAND="$REPOWOLF_CLIENT_DIR/bin/repowolf-git-ssh"
     exec ${claude}/bin/claude "$@"
   '';
   settings = pkgs.writeText "den-claude-settings.json" (builtins.toJSON {

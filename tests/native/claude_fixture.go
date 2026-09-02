@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +27,7 @@ type claudeProvider struct {
 	next            int
 	messageRequests int
 	scenarios       map[string]*claudeScenario
+	requestTrace    []string
 }
 
 func newClaudeProvider() *claudeProvider {
@@ -65,6 +67,12 @@ func (provider *claudeProvider) messageRequestCount() int {
 	return provider.messageRequests
 }
 
+func (provider *claudeProvider) requestTraceSnapshot() []string {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	return append([]string(nil), provider.requestTrace...)
+}
+
 func (provider *claudeProvider) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	provider.mu.Lock()
 	provider.messageRequests++
@@ -83,11 +91,14 @@ func (provider *claudeProvider) serveHTTP(writer http.ResponseWriter, request *h
 	provider.mu.Lock()
 	scenario := provider.matchScenarioLocked(encoded)
 	if scenario == nil {
+		provider.requestTrace = append(provider.requestTrace, "matched=none")
 		provider.mu.Unlock()
 		http.Error(writer, "unknown local messages session", http.StatusBadRequest)
 		return
 	}
 	results := toolResults(document)
+	matches := provider.matchingScenarioIDsLocked(encoded)
+	provider.requestTrace = append(provider.requestTrace, fmt.Sprintf("matched=%s matches=%v prior-results=%d request-results=%d", scenario.id, matches, len(scenario.results), len(results)))
 	if len(results) > len(scenario.results) {
 		scenario.results = append([]string(nil), results...)
 		provider.ready.Broadcast()
@@ -102,13 +113,54 @@ func (provider *claudeProvider) serveHTTP(writer http.ResponseWriter, request *h
 	_, _ = writer.Write(payload)
 }
 
-func (provider *claudeProvider) matchScenarioLocked(document []byte) *claudeScenario {
-	for id, scenario := range provider.scenarios {
+func (provider *claudeProvider) matchingScenarioIDsLocked(document []byte) []string {
+	var matches []string
+	for id := range provider.scenarios {
 		if strings.Contains(string(document), id) {
-			return scenario
+			matches = append(matches, id)
 		}
 	}
-	return nil
+	sort.Strings(matches)
+	return matches
+}
+
+func latestRegisteredClaudeScenarioID(document []byte, candidates []string) string {
+	text := string(document)
+	latest := ""
+	latestIndex := -1
+	for _, candidate := range candidates {
+		index := lastExactClaudeScenarioIndex(text, candidate)
+		if index > latestIndex {
+			latest = candidate
+			latestIndex = index
+		}
+	}
+	return latest
+}
+
+func lastExactClaudeScenarioIndex(document, candidate string) int {
+	latest := -1
+	for offset := 0; offset < len(document); {
+		relative := strings.Index(document[offset:], candidate)
+		if relative == -1 {
+			break
+		}
+		start := offset + relative
+		end := start + len(candidate)
+		if end == len(document) || document[end] < '0' || document[end] > '9' {
+			latest = start
+		}
+		offset = start + len(candidate)
+	}
+	return latest
+}
+
+func (provider *claudeProvider) matchScenarioLocked(document []byte) *claudeScenario {
+	ids := make([]string, 0, len(provider.scenarios))
+	for id := range provider.scenarios {
+		ids = append(ids, id)
+	}
+	return provider.scenarios[latestRegisteredClaudeScenarioID(document, ids)]
 }
 
 func (provider *claudeProvider) nextContentLocked(scenario *claudeScenario) (map[string]any, string) {

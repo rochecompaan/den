@@ -53,6 +53,7 @@ func controlledEntries(controlled Controlled) []string {
 		"REPOWOLF_ENDPOINT=" + controlled.Endpoint,
 		"REPOWOLF_TOKEN=" + controlled.Token,
 		"REPOWOLF_CA_FILE=" + controlled.CAFile,
+		"REPOWOLF_CLIENT_DIR=" + controlled.ClientDir,
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_SSH_COMMAND=" + gitSSH,
 		"GIT_CONFIG_COUNT=3",

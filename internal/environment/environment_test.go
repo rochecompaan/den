@@ -32,6 +32,7 @@ func TestBuildScrubsCredentialsAndRestoresOnlyControlledRepoWolfValues(t *testin
 		"REPOWOLF_ENDPOINT=https://unvalidated.example.test",
 		"REPOWOLF_TOKEN=unvalidated-token",
 		"REPOWOLF_CA_FILE=/unvalidated/ca.pem",
+		"REPOWOLF_CLIENT_DIR=/unvalidated/client",
 		"REPOWOLF_SERVER_NAME=unvalidated-server",
 		"REPOWOLF_FUTURE_OVERRIDE=unvalidated-value",
 	}
@@ -53,6 +54,7 @@ func TestBuildScrubsCredentialsAndRestoresOnlyControlledRepoWolfValues(t *testin
 		"REPOWOLF_ENDPOINT":       controlled.Endpoint,
 		"REPOWOLF_TOKEN":          controlled.Token,
 		"REPOWOLF_CA_FILE":        controlled.CAFile,
+		"REPOWOLF_CLIENT_DIR":     controlled.ClientDir,
 		"GIT_TERMINAL_PROMPT":     "0",
 		"GIT_SSH_COMMAND":         "/nix/store/repowolf-client/bin/repowolf-git-ssh",
 		"GIT_CONFIG_COUNT":        "3",
