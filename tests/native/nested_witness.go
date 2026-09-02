@@ -23,3 +23,14 @@ func nestedFenceWitnessCommand() string {
  "$DEN_NATIVE_CONTEXT_CURL" --silent --show-error --max-time 2 --output /dev/null --proxy "$HTTP_PROXY" http://den-native-witness.invalid/ || exit 1
  printf 'nested-proxy:%s\n' "$HTTP_PROXY"`
 }
+
+func temporaryDirectoryContainmentWitnessCommand() string {
+	return `
+ den_fence_tmpdir_real=$(cd "$DEN_FENCE_TMPDIR" && pwd -P) || exit 1
+ den_claude_tmpdir_real=$(cd "$TMPDIR" && pwd -P) || exit 1
+ case "$den_claude_tmpdir_real" in
+   "$den_fence_tmpdir_real"|"$den_fence_tmpdir_real"/*) ;;
+   *) exit 1 ;;
+ esac
+ unset den_fence_tmpdir_real den_claude_tmpdir_real`
+}

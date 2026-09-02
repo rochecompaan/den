@@ -11,6 +11,43 @@ import (
 	"testing"
 )
 
+func TestTemporaryDirectoryContainmentWitness(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "claude-501")
+	if err := os.Mkdir(child, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sibling := t.TempDir()
+	prefixCollision := root + "-other"
+	if err := os.Mkdir(prefixCollision, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		root     string
+		tmpdir   string
+		accepted bool
+	}{
+		{name: "exact root", root: root, tmpdir: root, accepted: true},
+		{name: "descendant", root: root, tmpdir: child, accepted: true},
+		{name: "sibling", root: root, tmpdir: sibling},
+		{name: "prefix collision", root: root, tmpdir: prefixCollision},
+		{name: "parent traversal", root: root, tmpdir: root + "/../" + filepath.Base(sibling)},
+		{name: "root with trailing slash", root: root + "/", tmpdir: child, accepted: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			command := exec.Command("sh", "-c", "set -eu"+temporaryDirectoryContainmentWitnessCommand())
+			command.Env = []string{"DEN_FENCE_TMPDIR=" + test.root, "TMPDIR=" + test.tmpdir}
+			err := command.Run()
+			if (err == nil) != test.accepted {
+				t.Fatalf("containment witness success = %v, want %v", err == nil, test.accepted)
+			}
+		})
+	}
+}
+
 func TestNestedFenceWitness(t *testing.T) {
 	proxy := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusForbidden)

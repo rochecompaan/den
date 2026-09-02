@@ -1871,8 +1871,7 @@ func TestDarwinTemporaryDirectories(t *testing.T) {
 	scenarios := make([]*claudeScenario, launches)
 	results := make([]commandResult, launches)
 	for index := range scenarios {
-		first := nestedFenceWitnessCommand() + `
- test "$TMPDIR" = "$DEN_FENCE_TMPDIR"
+		first := nestedFenceWitnessCommand() + temporaryDirectoryContainmentWitnessCommand() + `
  printf own > "$DEN_FENCE_TMPDIR/marker"
  printf 'scratch:%s\n' "$DEN_FENCE_TMPDIR"`
 		scenarios[index] = fixture.provider.registerScratch(first)

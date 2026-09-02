@@ -190,24 +190,33 @@ func (provider *claudeProvider) nextContentLocked(scenario *claudeScenario) (map
 		}
 		own := scratchPath(scenario.results[0])
 		peer := provider.peerScratchPathLocked(scenario)
-		command := nestedFenceWitnessCommand() + fmt.Sprintf(`
- test "$TMPDIR" = %q
- test "$DEN_FENCE_TMPDIR" = %q
- test -r %q/marker
- ! cat %q/marker
- if mkdir -p "$(dirname "$DEN_NATIVE_TMP_PROBE")" 2>/dev/null; then
-   ! sh -c 'printf denied > "$1"' den "$DEN_NATIVE_TMP_PROBE"
- fi
- if mkdir -p "$(dirname "$DEN_NATIVE_PRIVATE_TMP_PROBE")" 2>/dev/null; then
-   ! sh -c 'printf denied > "$1"' den "$DEN_NATIVE_PRIVATE_TMP_PROBE"
- fi
- printf 'scratch:%%s\ncomplete\n' "$DEN_FENCE_TMPDIR"`, own, own, own, peer)
+		command := nestedFenceWitnessCommand() + scratchIsolationWitnessCommand(own, peer)
 		return toolUse(scenario, index, command), "tool_use"
 	}
 	if index < len(scenario.commands) {
 		return toolUse(scenario, index, scenario.commands[index]), "tool_use"
 	}
 	return map[string]any{"type": "text", "text": "fixture complete"}, "end_turn"
+}
+
+func scratchIsolationWitnessCommand(own, peer string) string {
+	return fmt.Sprintf(`
+ test "$DEN_FENCE_TMPDIR" = %q || exit 1`, own) + temporaryDirectoryContainmentWitnessCommand() + fmt.Sprintf(`
+ test -r %q/marker || exit 1
+ if cat %q/marker >/dev/null 2>&1; then
+   exit 1
+ fi
+ if mkdir -p "$(dirname "$DEN_NATIVE_TMP_PROBE")" 2>/dev/null; then
+   if sh -c 'printf denied > "$1"' den "$DEN_NATIVE_TMP_PROBE"; then
+     exit 1
+   fi
+ fi
+ if mkdir -p "$(dirname "$DEN_NATIVE_PRIVATE_TMP_PROBE")" 2>/dev/null; then
+   if sh -c 'printf denied > "$1"' den "$DEN_NATIVE_PRIVATE_TMP_PROBE"; then
+     exit 1
+   fi
+ fi
+ printf 'scratch:%%s\ncomplete\n' "$DEN_FENCE_TMPDIR"`, own, peer)
 }
 
 func (provider *claudeProvider) scratchReadyLocked() int {
