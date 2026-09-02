@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -21,27 +22,38 @@ func TestNestedFenceWitness(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		outerParent int
-		outerProxy  string
-		innerProxy  string
-		wantSuccess bool
+		name           string
+		outerParent    int
+		outerProxy     string
+		innerProxy     string
+		outerSandbox   string
+		disableErrexit bool
+		wantSuccess    bool
 	}{
 		{name: "nested context", outerParent: 1, outerProxy: "http://127.0.0.1:1", innerProxy: proxy.URL, wantSuccess: true},
-		{name: "bypassed direct child", outerParent: os.Getpid(), outerProxy: proxy.URL, innerProxy: proxy.URL},
-		{name: "equal proxy", outerParent: 1, outerProxy: proxy.URL, innerProxy: proxy.URL},
+		{name: "shared parent and proxy", outerParent: os.Getpid(), outerProxy: proxy.URL, innerProxy: proxy.URL, wantSuccess: true},
+		{name: "shared active proxy", outerParent: 1, outerProxy: proxy.URL, innerProxy: proxy.URL, wantSuccess: true},
 		{name: "equal parent with nested proxy", outerParent: os.Getpid(), outerProxy: "http://127.0.0.1:1", innerProxy: proxy.URL, wantSuccess: true},
-		{name: "inactive nested proxy", outerParent: 1, outerProxy: "http://127.0.0.1:1", innerProxy: "http://127.0.0.1:2"},
+		{name: "inactive nested proxy", outerParent: 1, outerProxy: "http://127.0.0.1:1", innerProxy: "http://127.0.0.1:2", disableErrexit: true},
+		{name: "invalid outer sandbox without errexit", outerParent: 1, outerProxy: "http://127.0.0.1:1", innerProxy: proxy.URL, outerSandbox: "0", disableErrexit: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			directory := t.TempDir()
 			record := filepath.Join(directory, ".den-native-outer-context")
-			contents := fmt.Sprintf("%d\n%s\n1\n", test.outerParent, test.outerProxy)
+			outerSandbox := test.outerSandbox
+			if outerSandbox == "" {
+				outerSandbox = "1"
+			}
+			contents := fmt.Sprintf("%d\n%s\n%s\n", test.outerParent, test.outerProxy, outerSandbox)
 			if err := os.WriteFile(record, []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			command := exec.Command("sh", "-c", nestedFenceWitnessCommand())
+			script := nestedFenceWitnessCommand()
+			if test.disableErrexit {
+				script = strings.Replace(script, "\n", "\nset +e\n", 1)
+			}
+			command := exec.Command("sh", "-c", script)
 			command.Env = []string{
 				"DEN_FENCE_TMPDIR=" + directory,
 				"DEN_NATIVE_CONTEXT_CURL=" + curl,
