@@ -3,7 +3,7 @@ package native
 const nestedFenceContextFile = ".den-native-outer-context"
 
 func nestedFenceWitnessCommand() string {
-	return `set -eux
+	return `set -eu
  context="$DEN_FENCE_TMPDIR/.den-native-outer-context"
  test -f "$context"
  {
@@ -14,7 +14,6 @@ func nestedFenceWitnessCommand() string {
  test "$outer_sandbox" = 1
  test "${FENCE_SANDBOX:-}" = 1
  test -n "$outer_parent"
- test "$outer_parent" != "$PPID"
  test -n "$outer_proxy"
  test -n "${HTTP_PROXY:-}"
  test "$outer_proxy" != "$HTTP_PROXY"

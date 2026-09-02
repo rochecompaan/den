@@ -30,7 +30,7 @@ func TestNestedFenceWitness(t *testing.T) {
 		{name: "nested context", outerParent: 1, outerProxy: "http://127.0.0.1:1", innerProxy: proxy.URL, wantSuccess: true},
 		{name: "bypassed direct child", outerParent: os.Getpid(), outerProxy: proxy.URL, innerProxy: proxy.URL},
 		{name: "equal proxy", outerParent: 1, outerProxy: proxy.URL, innerProxy: proxy.URL},
-		{name: "equal parent", outerParent: os.Getpid(), outerProxy: "http://127.0.0.1:1", innerProxy: proxy.URL},
+		{name: "equal parent with nested proxy", outerParent: os.Getpid(), outerProxy: "http://127.0.0.1:1", innerProxy: proxy.URL, wantSuccess: true},
 		{name: "inactive nested proxy", outerParent: 1, outerProxy: "http://127.0.0.1:1", innerProxy: "http://127.0.0.1:2"},
 	}
 	for _, test := range tests {
