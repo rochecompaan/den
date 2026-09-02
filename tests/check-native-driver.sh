@@ -56,6 +56,10 @@ if [[ $1 == build && $* == *checks.*.claude-startup* ]]; then
   printf '%s\n' 'build claude-startup' >> "$DEN_FAKE_EVENT_LOG"
   exit
 fi
+if [[ $1 == build && $* == *checks.*.launcher-unit* ]]; then
+  printf '%s\n' 'build launcher-unit' >> "$DEN_FAKE_EVENT_LOG"
+  exit
+fi
 if [[ $1 == build && $* == *native-enforcement* ]]; then
   printf '%s\n' 'build native-runner' >> "$DEN_FAKE_EVENT_LOG"
   printf '%s\n' "$DEN_FAKE_RUNNER"
@@ -110,8 +114,8 @@ for system in x86_64-linux aarch64-linux x86_64-darwin aarch64-darwin; do
     cat "$root/$label.stderr" >&2
     exit 1
   fi
-  expected=$'build claude\nbuild claude-startup\nbuild native-runner\nexecute native-runner'
-  actual=$(grep -E '^(build claude|build claude-startup|build native-runner|execute native-runner)$' \
+  expected=$'build claude\nbuild native-runner\nexecute native-runner\nbuild claude-startup\nbuild launcher-unit'
+  actual=$(grep -E '^(build claude|build claude-startup|build launcher-unit|build native-runner|execute native-runner)$' \
     "$DEN_FAKE_EVENT_LOG")
   [[ $actual == "$expected" ]]
   ! grep -Fq 'config show allowed-impure-host-deps' "$DEN_FAKE_NIX_LOG"

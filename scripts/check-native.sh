@@ -35,8 +35,6 @@ while IFS= read -r check; do
   if [[ $check == claude-startup ]]; then
     claude_startup_seen=1
   fi
-  printf 'building non-native check %s for %s\n' "$check" "$system"
-  nix build ".#checks.$system.$check" --no-link --print-build-logs
 done <<< "$normal_checks"
 
 if [[ $claude_startup_seen -ne 1 ]]; then
@@ -66,3 +64,9 @@ if [[ ! -x $runner/bin/native-enforcement ]]; then
 fi
 printf 'executing native runner as the invoking host user\n'
 "$runner/bin/native-enforcement"
+
+while IFS= read -r check; do
+  [[ -n $check ]] || continue
+  printf 'building non-native check %s for %s\n' "$check" "$system"
+  nix build ".#checks.$system.$check" --no-link --print-build-logs
+done <<< "$normal_checks"
