@@ -28,11 +28,20 @@ type claudeProvider struct {
 	messageRequests int
 	scenarios       map[string]*claudeScenario
 	requestTrace    []string
+	telemetry       chan string
 }
 
 func newClaudeProvider() *claudeProvider {
 	provider := &claudeProvider{scenarios: make(map[string]*claudeScenario)}
 	provider.ready = sync.NewCond(&provider.mu)
+	if os.Getenv("DEN_CI_DISK_TELEMETRY") == "1" {
+		provider.telemetry = make(chan string, 64)
+		go func() {
+			for trace := range provider.telemetry {
+				fmt.Fprintf(os.Stderr, "darwin Claude provider telemetry %s\n", trace)
+			}
+		}()
+	}
 	return provider
 }
 
@@ -98,7 +107,14 @@ func (provider *claudeProvider) serveHTTP(writer http.ResponseWriter, request *h
 	}
 	results := toolResults(document)
 	matches := provider.matchingScenarioIDsLocked(encoded)
-	provider.requestTrace = append(provider.requestTrace, fmt.Sprintf("matched=%s matches=%v prior-results=%d request-results=%d", scenario.id, matches, len(scenario.results), len(results)))
+	trace := fmt.Sprintf("matched=%s matches=%v prior-results=%d request-results=%d", scenario.id, matches, len(scenario.results), len(results))
+	provider.requestTrace = append(provider.requestTrace, trace)
+	if provider.telemetry != nil {
+		select {
+		case provider.telemetry <- trace:
+		default:
+		}
+	}
 	if len(results) > len(scenario.results) {
 		scenario.results = append([]string(nil), results...)
 		provider.ready.Broadcast()
