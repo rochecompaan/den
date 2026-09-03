@@ -1,0 +1,106 @@
+{
+  "allowPty": true,
+  "network": {
+    "allowedDomains": [
+      "api.anthropic.com",
+      "*.anthropic.com",
+      "claude.ai",
+      "*.claude.ai",
+      "registry.npmjs.org",
+      "*.npmjs.org",
+      "registry.yarnpkg.com",
+      "pypi.org",
+      "files.pythonhosted.org",
+      "crates.io",
+      "static.crates.io",
+      "index.crates.io",
+      "proxy.golang.org",
+      "sum.golang.org",
+      "formulae.brew.sh"
+    ],
+    "deniedDomains": [
+      "github.com",
+      "*.github.com",
+      "githubusercontent.com",
+      "*.githubusercontent.com",
+      "gitlab.com",
+      "*.gitlab.com",
+      "bitbucket.org",
+      "*.bitbucket.org",
+      "169.254.169.254",
+      "metadata.google.internal",
+      "instance-data.ec2.internal",
+      "statsig.anthropic.com"
+    ]
+  },
+  "filesystem": {
+    "defaultDenyRead": true,
+    "strictDenyRead": true,
+    "allowGitConfig": true,
+    "allowRead": [],
+    "allowExecute": [],
+    "allowWrite": [],
+    "denyRead": [
+      "~/.ssh/id_*",
+      "~/.ssh/config",
+      "~/.ssh/*.pem",
+      "~/.gnupg/**",
+      "~/.aws/**",
+      "~/.config/gcloud/**",
+      "~/.kube/**",
+      "~/.docker/**",
+      "~/.pypirc",
+      "~/.netrc",
+      "~/.git-credentials",
+      "~/.cargo/credentials",
+      "~/.cargo/credentials.toml",
+      "~/.gitconfig",
+      "~/.config/git/**"
+    ],
+    "denyWrite": [
+      "**/.env",
+      "**/.env.*",
+      "**/*.key",
+      "**/*.pem",
+      "**/*.p12",
+      "**/*.pfx",
+      "~/.npm/_logs",
+      "~/.fence/debug",
+      "/tmp/fence",
+      "/tmp/fence/**",
+      "/private/tmp/fence",
+      "/private/tmp/fence/**"
+    ]
+  },
+  "command": {
+    "deny": [
+      "git reset",
+      "git clean",
+      "git checkout --",
+      "npm publish",
+      "pnpm publish",
+      "yarn publish",
+      "cargo publish",
+      "twine upload",
+      "gem push",
+      "sudo",
+      "gh pr merge",
+      "gh release delete",
+      "gh repo create",
+      "gh repo fork",
+      "gh repo delete",
+      "gh gist create",
+      "gh workflow run",
+      "gh auth login",
+      "gh secret set",
+      "gh secret delete",
+      "gh variable set",
+      "gh variable delete"
+    ],
+    "useDefaults": true,
+    "acceptSharedBinaryCannotRuntimeDeny": [
+      "chroot"
+    ],
+    "runtimeExecPolicy": "argv"
+  }
+}

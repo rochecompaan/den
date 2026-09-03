@@ -1,0 +1,113 @@
+--- a/internal/sandbox/utils.go
++++ b/internal/sandbox/utils.go
+@@ -13,0 +14,2 @@
++	denFenceTMPDIREnv     = "DEN_FENCE_TMPDIR"
++	denFenceTMPDIRInvalid = "/dev/null/den-fence-invalid-tmpdir"
+@@ -147,0 +150,3 @@
++	if denTMPDIR, present := os.LookupEnv(denFenceTMPDIREnv); present {
++		return validateDenFenceTMPDIR(denTMPDIR)
++	}
+@@ -148,0 +154,13 @@
++}
++
++// validateDenFenceTMPDIR accepts only Den's already-created private scratch
++// directory. Invalid values fail closed instead of falling back to shared /tmp.
++func validateDenFenceTMPDIR(tmpDir string) string {
++	if !filepath.IsAbs(tmpDir) || filepath.Clean(tmpDir) != tmpDir {
++		return denFenceTMPDIRInvalid
++	}
++	info, err := os.Lstat(tmpDir)
++	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
++		return denFenceTMPDIRInvalid
++	}
++	return tmpDir
+--- a/internal/sandbox/utils_test.go
++++ b/internal/sandbox/utils_test.go
+@@ -331,0 +332,58 @@
++
++func TestEnsureSandboxTMPDIRHonorsDenFenceTMPDIR(t *testing.T) {
++	t.Run("absent preserves upstream behavior", func(t *testing.T) {
++		t.Setenv(denFenceTMPDIREnv, "ignored")
++		if err := os.Unsetenv(denFenceTMPDIREnv); err != nil {
++			t.Fatal(err)
++		}
++		want := ensureSandboxTMPDIRPath(sandboxTMPDIR, sandboxTMPDIRFallback)
++		if got := ensureSandboxTMPDIR(); got != want {
++			t.Fatalf("ensureSandboxTMPDIR() = %q, want upstream %q", got, want)
++		}
++	})
++
++	t.Run("valid existing directory", func(t *testing.T) {
++		dir := t.TempDir()
++		t.Setenv(denFenceTMPDIREnv, dir)
++		if got := ensureSandboxTMPDIR(); got != dir {
++			t.Fatalf("ensureSandboxTMPDIR() = %q, want %q", got, dir)
++		}
++		if got := GenerateProxyEnvVars(0, 0); !containsString(got, "TMPDIR="+dir) {
++			t.Fatalf("GenerateProxyEnvVars() = %#v, want validated TMPDIR", got)
++		}
++	})
++
++	root := t.TempDir()
++	file := filepath.Join(root, "file")
++	if err := os.WriteFile(file, nil, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	link := filepath.Join(root, "link")
++	if err := os.Symlink(root, link); err != nil {
++		t.Fatal(err)
++	}
++	for name, value := range map[string]string{
++		"empty":         "",
++		"relative":      "relative/tmp",
++		"unclean":       root + "/.",
++		"missing":       filepath.Join(root, "missing"),
++		"non-directory": file,
++		"symbolic":      link,
++	} {
++		t.Run(name, func(t *testing.T) {
++			t.Setenv(denFenceTMPDIREnv, value)
++			if got := ensureSandboxTMPDIR(); got != denFenceTMPDIRInvalid {
++				t.Fatalf("ensureSandboxTMPDIR() = %q, want fail-closed %q", got, denFenceTMPDIRInvalid)
++			}
++		})
++	}
++}
++
++func containsString(values []string, want string) bool {
++	for _, value := range values {
++		if value == want {
++			return true
++		}
++	}
++	return false
++}
+--- a/internal/sandbox/macos.go
++++ b/internal/sandbox/macos.go
+@@ -773,1 +773,1 @@
+-	parts = append(parts, "sandbox-exec", "-p", profile, shellPath, shellFlag, command)
++	parts = append(parts, "/usr/bin/sandbox-exec", "-p", profile, shellPath, shellFlag, command)
+--- a/internal/sandbox/macos_test.go
++++ b/internal/sandbox/macos_test.go
+@@ -849,0 +850,21 @@
++
++// TestWrapCommandMacOS_PinsSandboxExecAbsolutePath verifies that the wrapper
++// invokes sandbox-exec by its stable absolute path, never via PATH lookup.
++// Den's controlled agent PATH is store-paths-only, so a bare "sandbox-exec"
++// fails to resolve at launch (exit 127). Pinning is also strictly safer:
++// a PATH-resolved sandbox entrypoint is hijackable.
++func TestWrapCommandMacOS_PinsSandboxExecAbsolutePath(t *testing.T) {
++	cfg := &config.Config{}
++
++	cmd, err := WrapCommandMacOS(cfg, "true", "", 8080, 1080, nil, nil, false, ShellModeDefault, false)
++	if err != nil {
++		t.Fatalf("WrapCommandMacOS: %v", err)
++	}
++
++	if !strings.Contains(cmd, "/usr/bin/sandbox-exec") {
++		t.Errorf("wrapper must pin /usr/bin/sandbox-exec, got:\n%s", cmd)
++	}
++	if strings.Contains(cmd, " sandbox-exec ") || strings.HasPrefix(cmd, "sandbox-exec ") {
++		t.Errorf("wrapper must not invoke a bare PATH-resolved sandbox-exec, got:\n%s", cmd)
++	}
++}

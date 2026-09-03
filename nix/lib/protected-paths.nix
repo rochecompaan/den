@@ -1,0 +1,17 @@
+[
+  "~/.ssh/id_*"
+  "~/.ssh/config"
+  "~/.ssh/*.pem"
+  "~/.gnupg/**"
+  "~/.aws/**"
+  "~/.config/gcloud/**"
+  "~/.kube/**"
+  "~/.docker/**"
+  "~/.pypirc"
+  "~/.netrc"
+  "~/.git-credentials"
+  "~/.cargo/credentials"
+  "~/.cargo/credentials.toml"
+  "~/.gitconfig"
+  "~/.config/git/**"
+]

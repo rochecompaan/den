@@ -1,0 +1,87 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native checks (${{ matrix.system }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+            nix_sandbox: "true"
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+            nix_sandbox: "true"
+          - system: x86_64-darwin
+            runner: macos-15-intel
+            nix_sandbox: relaxed
+          - system: aarch64-darwin
+            runner: macos-15
+            nix_sandbox: relaxed
+
+    steps:
+      - name: Check out full source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Enable Linux user namespaces
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          if sysctl -n kernel.unprivileged_userns_clone >/dev/null 2>&1; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          unshare --user --map-root-user true
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@21a544727d0c62386e78b4befe52d19ad12692e3 # v17
+        with:
+          extra-conf: |
+            sandbox = ${{ matrix.nix_sandbox }}
+
+      - name: Evaluate and run native checks
+        shell: bash
+        env:
+          DEN_CI_SYSTEM: ${{ matrix.system }}
+          DEN_CI_DISK_TELEMETRY: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          system=$DEN_CI_SYSTEM
+          log="ci-logs/native-$system.log"
+          {
+            current_system=$(nix eval --impure --raw --expr builtins.currentSystem)
+            if [[ $current_system != "$system" ]]; then
+              printf 'runner system mismatch: expected %s, got %s\n' "$system" "$current_system" >&2
+              exit 1
+            fi
+            printf 'runner system verified: %s\n' "$system"
+            nix flake check --no-build
+            scripts/check-native.sh "$system"
+          } 2>&1 | tee "$log"
+
+      - name: Upload failure log
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-checks-${{ matrix.system }}
+          path: ci-logs/native-${{ matrix.system }}.log
+          if-no-files-found: error
+          retention-days: 3
