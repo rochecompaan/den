@@ -116,6 +116,8 @@ let
 in
 assert builtins.attrNames den.packages == [ "claude" "default" ];
 assert builtins.attrNames den.lib == [ "mkClaude" ];
+assert claude.name == "claude";
+assert claude.denManifest.name == "claude-manifest.json";
 assert default.outPath == claude.outPath;
 assert (mkClaude { }).outPath == claude.outPath;
 assert darwinPackages.x86_64.default.outPath == darwinPackages.x86_64.claude.outPath;

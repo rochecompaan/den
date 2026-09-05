@@ -33,6 +33,12 @@ assert lib.assertMsg (claude.version == "2.1.158")
 mkAgentSandbox {
   inherit (options) configDir extraPkgs docker podman;
   adapter = {
+    output = {
+      packageName = "claude";
+      commandName = "claude";
+      manifestName = "claude-manifest.json";
+      mainProgram = "claude";
+    };
     runtimePackages = [ claude ];
     closureOnlyPackages = [ claudeExecutable ]
       ++ lib.optionals isDarwin [ settings ];

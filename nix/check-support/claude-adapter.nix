@@ -22,6 +22,7 @@ pkgs.runCommand "claude-adapter"
     set -eu
     printf '%s\n' "$adapter" > adapter.json
     jq -e --arg executable "$claudeExecutable" --arg claudeBinary "$claudeBinary" '
+      .output == {packageName: "claude", commandName: "claude", manifestName: "claude-manifest.json", mainProgram: "claude"} and
       .agent.name == "claude" and
       .agent.executable == $executable and
       .agent.executable != $claudeBinary and

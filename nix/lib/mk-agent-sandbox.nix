@@ -26,6 +26,9 @@ let
     ++ lib.optional pkgs.stdenv.isDarwin "aclProbeDarwin";
   adapterRuntimePackages = adapter.runtimePackages or [ ];
   adapterClosureOnlyPackages = adapter.closureOnlyPackages or [ ];
+  output = adapter.output;
+  safeBasename = name: builtins.isString name && name != "" && name != "." && name != ".."
+    && !(lib.hasInfix "/" name) && !(lib.hasInfix "\n" name) && !(lib.hasInfix "\r" name);
   dockerPackages = lib.optionals options.docker.enable [
     options.docker.package
     options.docker.composePackage
@@ -56,7 +59,7 @@ let
     ++ map (package: "${package}/bin") dockerPackages
     ++ map (package: "${package}/bin") podmanPackages
     ++ map (package: "${package}/bin") options.extraPkgs;
-  manifest = pkgs.writeText "claude-manifest.json" (builtins.toJSON {
+  manifest = pkgs.writeText output.manifestName (builtins.toJSON {
     version = 1;
     platform = if pkgs.stdenv.isDarwin then "darwin" else "linux";
     fenceExecutable = "${deps.fence}/bin/fence";
@@ -80,15 +83,22 @@ let
   });
 in
 assert lib.assertMsg (builtins.isAttrs adapter && adapter ? agent) "adapter must provide an agent";
+assert lib.assertMsg (builtins.isAttrs output) "adapter must provide output";
+assert lib.assertMsg (safeBasename output.packageName) "output.packageName must be a safe basename";
+assert lib.assertMsg (safeBasename output.commandName) "output.commandName must be a safe basename";
+assert lib.assertMsg (safeBasename output.manifestName && lib.hasSuffix ".json" output.manifestName)
+  "output.manifestName must be a safe .json basename";
+assert lib.assertMsg (safeBasename output.mainProgram) "output.mainProgram must be a safe basename";
 assert lib.assertMsg (builtins.isList adapterRuntimePackages && lib.all lib.isDerivation adapterRuntimePackages)
   "adapter.runtimePackages must be a list of packages";
 assert lib.assertMsg (builtins.isList adapterClosureOnlyPackages && lib.all lib.isDerivation adapterClosureOnlyPackages)
   "adapter.closureOnlyPackages must be a list of packages";
 assert lib.assertMsg (lib.all (name: builtins.hasAttr name deps && lib.isDerivation deps.${name}) requiredDependencies)
   "mkAgentSandbox dependencies are incomplete";
-pkgs.runCommand "claude"
+pkgs.runCommand output.packageName
   {
-    meta.mainProgram = "claude";
+    commandName = output.commandName;
+    meta.mainProgram = output.mainProgram;
     passthru = {
       denManifest = manifest;
       denOptions = options;
@@ -106,9 +116,9 @@ pkgs.runCommand "claude"
       fi
     done
     mkdir -p "$out/bin"
-    cat > "$out/bin/claude" <<'EOF'
+    cat > "$out/bin/$commandName" <<'EOF'
     #!${deps.bash}/bin/bash
     exec ${deps.launcher}/bin/den-launcher --manifest ${manifest} -- "$@"
     EOF
-    chmod 0555 "$out/bin/claude"
+    chmod 0555 "$out/bin/$commandName"
   ''
