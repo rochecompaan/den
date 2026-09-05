@@ -77,8 +77,8 @@ exec "$@"
 		Platform: "darwin", FenceExecutable: fence, BasePolicy: base, ClosurePathsFile: closures, ScratchRoot: "/test-only", PathEntries: []string{filepath.Dir(stat)},
 		Agent: manifest.Agent{Name: "test", Executable: agent, MandatoryArgs: []string{"--mandatory"}},
 	}, []string{"--user=value"}, os.LookupEnv, os.Lstat, os.Environ, environment.Build, os.Stderr,
-		func(ctx context.Context, launcherManifest manifest.Manifest, arguments []string, config repowolf.Config, selection configdir.Selection, revalidate func() error, childEnvironment []string, docker, podman container.Socket, stderr io.Writer) int {
-			return runFenceWithTemporary(ctx, launcherManifest, arguments, config, selection, revalidate, childEnvironment, docker, podman, stderr,
+		func(ctx context.Context, launcherManifest manifest.Manifest, arguments []string, config repowolf.Config, handles []*configdir.Handle, state StateInputs, revalidate func() error, childEnvironment []string, docker, podman container.Socket, stderr io.Writer) int {
+			return runFenceWithTemporary(ctx, launcherManifest, arguments, config, handles, state, revalidate, childEnvironment, docker, podman, stderr,
 				func(string, int, time.Duration) error { return nil }, testTemporaryPair(root))
 		},
 	)
@@ -129,10 +129,10 @@ func TestLifecycleCommitControlsCustomConfigurationRollback(t *testing.T) {
 	for name, commit := range map[string]bool{"pre-start failure rolls back": false, "started Fence commits": true} {
 		t.Run(name, func(t *testing.T) {
 			_ = os.RemoveAll(configPath)
-			code := runWithLifecycle(context.Background(), manifest.Manifest{ExplicitConfigDir: &configPath, ACLProbe: []string{probe}}, nil, lookup(values), os.Lstat, os.Environ, environment.Build, &bytes.Buffer{},
-				func(_ context.Context, _ manifest.Manifest, _ []string, _ repowolf.Config, selection configdir.Selection, _ func() error, _ []string, _, _ container.Socket, _ io.Writer) int {
+			code := runWithLifecycle(context.Background(), manifest.Manifest{StateBindings: claudeBinding(&configPath), ACLProbe: []string{probe}}, nil, lookup(values), os.Lstat, os.Environ, environment.Build, &bytes.Buffer{},
+				func(_ context.Context, _ manifest.Manifest, _ []string, _ repowolf.Config, handles []*configdir.Handle, _ StateInputs, _ func() error, _ []string, _, _ container.Socket, _ io.Writer) int {
 					if commit {
-						selection.Commit()
+						commitStateHandles(handles)
 						return 17
 					}
 					return 1
@@ -181,7 +181,7 @@ func TestRunFencePreservesChildStatusWhenTemporaryCleanupFails(t *testing.T) {
 	code := runFenceWithTemporary(context.Background(), manifest.Manifest{
 		Platform: "darwin", FenceExecutable: fence, BasePolicy: base, ClosurePathsFile: closures, ScratchRoot: "/unused", PathEntries: []string{filepath.Dir(fence)},
 		Agent: manifest.Agent{Executable: agent},
-	}, nil, repowolf.Config{Hostname: "broker.example.test", CAFile: ca}, configdir.Selection{}, nil,
+	}, nil, repowolf.Config{Hostname: "broker.example.test", CAFile: ca}, nil, StateInputs{}, nil,
 		[]string{"PATH=" + filepath.Dir(fence)}, container.Socket{}, container.Socket{}, &bytes.Buffer{},
 		func(string, int, time.Duration) error { return nil },
 		func(string) (string, string, func() error, error) {

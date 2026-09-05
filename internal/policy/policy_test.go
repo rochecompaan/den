@@ -94,8 +94,8 @@ func TestGenerateDynamicPolicyByPlatform(t *testing.T) {
 				Platform: platform, RepoWolfHostname: "broker.example.test", CAFile: paths.ca,
 				ClosurePaths: []string{paths.closureRead, paths.closureExec},
 				Worktree:     paths.worktree, ScratchDir: paths.scratch, StatePaths: []string{paths.state + string(os.PathSeparator)},
-				DefaultStatePaths: []string{paths.defaultState + string(os.PathSeparator)}, CustomMode: true,
-				UnixSockets: []string{paths.socket}, HostPorts: []uint16{6379, 5432, 6379}, PolicyFile: paths.policy,
+				DeniedWritePaths: []string{paths.defaultState + string(os.PathSeparator)},
+				UnixSockets:      []string{paths.socket}, HostPorts: []uint16{6379, 5432, 6379}, PolicyFile: paths.policy,
 			}
 			encoded, err := Generate(base, dynamic)
 			if err != nil {
@@ -168,6 +168,72 @@ func TestGenerateDynamicPolicyByPlatform(t *testing.T) {
 						t.Errorf("Darwin operational read missing %q", path)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestMixedStatePolicyDeniesOnlyUnselectedDefaults(t *testing.T) {
+	root := t.TempDir()
+	paths := makePaths(t, root)
+	selected := filepath.Join(root, "selected")
+	unselected := filepath.Join(root, "unselected")
+	if err := os.Mkdir(selected, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(unselected, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := Generate(Base(readBase(t)), Dynamic{
+		Platform: "darwin", RepoWolfHostname: "broker.example.test", CAFile: paths.ca,
+		Worktree: paths.worktree, ScratchDir: paths.scratch, PolicyFile: paths.policy,
+		StatePaths: []string{selected + string(os.PathSeparator)}, DeniedWritePaths: []string{unselected + string(os.PathSeparator)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got document
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(got.Filesystem.AllowWrite, selected) || !contains(got.Filesystem.DenyWrite, unselected) {
+		t.Fatalf("state policy = %#v", got.Filesystem)
+	}
+	if contains(got.Filesystem.DenyRead, unselected) {
+		t.Fatalf("unselected default was denied for reads: %#v", got.Filesystem.DenyRead)
+	}
+}
+
+func TestClaudeStatePolicyParity(t *testing.T) {
+	root := t.TempDir()
+	paths := makePaths(t, root)
+	defaultPath := filepath.Join(root, "claude-default")
+	customPath := filepath.Join(root, "claude-custom")
+	for _, path := range []string{defaultPath, customPath} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, dynamic := range map[string]Dynamic{
+		"default": {StatePaths: []string{defaultPath + string(os.PathSeparator)}},
+		"custom":  {StatePaths: []string{customPath + string(os.PathSeparator)}, DeniedWritePaths: []string{defaultPath + string(os.PathSeparator)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dynamic.Platform, dynamic.RepoWolfHostname, dynamic.CAFile = "darwin", "broker.example.test", paths.ca
+			dynamic.Worktree, dynamic.ScratchDir, dynamic.PolicyFile = paths.worktree, paths.scratch, paths.policy
+			encoded, err := Generate(Base(readBase(t)), dynamic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got document
+			if err := json.Unmarshal(encoded, &got); err != nil {
+				t.Fatal(err)
+			}
+			if name == "default" && contains(got.Filesystem.DenyWrite, defaultPath) {
+				t.Fatal("default state was denied")
+			}
+			if name == "custom" && (!contains(got.Filesystem.DenyWrite, defaultPath) || contains(got.Filesystem.DenyRead, defaultPath)) {
+				t.Fatalf("custom Claude policy = %#v", got.Filesystem)
 			}
 		})
 	}

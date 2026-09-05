@@ -23,7 +23,7 @@ import (
 type environmentBuilder func([]string, environment.Controlled) []string
 type accountHomeResolver func() (string, error)
 
-type lifecycleRunner func(context.Context, manifest.Manifest, []string, repowolf.Config, configdir.Selection, func() error, []string, container.Socket, container.Socket, io.Writer) int
+type lifecycleRunner func(context.Context, manifest.Manifest, []string, repowolf.Config, []*configdir.Handle, StateInputs, func() error, []string, container.Socket, container.Socket, io.Writer) int
 
 // Run executes one validated launcher manifest.
 func Run(ctx context.Context, launcherManifest manifest.Manifest, arguments []string) int {
@@ -34,7 +34,7 @@ func Run(ctx context.Context, launcherManifest manifest.Manifest, arguments []st
 // Run, which injects the mandatory Fence lifecycle above.
 func run(ctx context.Context, launcherManifest manifest.Manifest, arguments []string, lookup func(string) (string, bool), lstat func(string) (fs.FileInfo, error), environ func() []string, build environmentBuilder, stderr io.Writer) int {
 	home, _ := lookup("HOME")
-	return runWithLifecycleAndHome(ctx, launcherManifest, arguments, lookup, lstat, environ, build, stderr, func(context.Context, manifest.Manifest, []string, repowolf.Config, configdir.Selection, func() error, []string, container.Socket, container.Socket, io.Writer) int {
+	return runWithLifecycleAndHome(ctx, launcherManifest, arguments, lookup, lstat, environ, build, stderr, func(context.Context, manifest.Manifest, []string, repowolf.Config, []*configdir.Handle, StateInputs, func() error, []string, container.Socket, container.Socket, io.Writer) int {
 		return 0
 	}, func() (string, error) { return home, nil })
 }
@@ -88,29 +88,31 @@ func runWithLifecycleAndHome(
 		fmt.Fprintln(stderr, "invoking account home is unavailable")
 		return 1
 	}
-	var inherited *string
-	if launcherManifest.Agent.ConfigEnvironment != "" {
-		if value, ok := lookup(launcherManifest.Agent.ConfigEnvironment); ok {
-			inherited = &value
+	inherited := make(map[string]string, len(launcherManifest.StateBindings))
+	for _, binding := range launcherManifest.StateBindings {
+		if value, ok := lookup(binding.InheritedEnvironment); ok {
+			inherited[binding.InheritedEnvironment] = value
 		}
 	}
-	selection, err := configdir.Select(
-		launcherManifest.ExplicitConfigDir,
-		inherited,
-		home,
-		launcherManifest.ProtectedPathPatterns,
-		configdir.Dependencies{ACLProbe: launcherManifest.ACLProbe, ProtectedHomes: []string{accountHome, home}},
-	)
+	plan, err := configdir.PlanBindings(launcherManifest.StateBindings, inherited, home)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	handles, err := plan.Open(launcherManifest.Platform, configdir.ACLValidator{
+		ACLProbe: launcherManifest.ACLProbe, ProtectedHomes: []string{accountHome, home}, ProtectedPathPatterns: launcherManifest.ProtectedPathPatterns,
+	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	defer func() {
-		if err := selection.Rollback(); err != nil {
+		if err := closeStateHandles(handles); err != nil {
 			fmt.Fprintln(stderr, "configuration directory rollback failed")
 			exitCode = 1
 		}
 	}()
+	state := StateInputsFrom(handles)
 	var revalidateDarwinSettings func() error
 	if launcherManifest.Agent.Name == "claude" && launcherManifest.Platform == "darwin" {
 		workingDirectory, err := os.Getwd()
@@ -118,9 +120,12 @@ func runWithLifecycleAndHome(
 			fmt.Fprintln(stderr, "cannot determine working directory for Claude settings validation")
 			return 1
 		}
-		configDirectory := selection.CanonicalPath
-		if selection.Mode == configdir.Default {
-			configDirectory = filepath.Join(home, ".claude")
+		configDirectory := filepath.Join(home, ".claude")
+		for _, handle := range handles {
+			if handle.CanonicalPath != "" && handle.Exports()[0].Name == "CLAUDE_CONFIG_DIR" {
+				configDirectory = handle.CanonicalPath
+				break
+			}
 		}
 		scopes := claude.DarwinScopes(configDirectory, workingDirectory)
 		if err := claude.ValidateDarwinSettings(scopes); err != nil {
@@ -162,10 +167,11 @@ func runWithLifecycleAndHome(
 		ContainerHost: podmanSocket.Endpoint,
 		XDGRuntimeDir: podmanSocket.XDGRuntimeDir,
 	})
-	if selection.Mode == configdir.Custom {
-		childEnvironment = setEnvironment(childEnvironment, launcherManifest.Agent.ConfigEnvironment, selection.CanonicalPath)
+	for name, value := range state.Environment {
+		childEnvironment = setEnvironment(childEnvironment, name, value)
 	}
-	return lifecycle(ctx, launcherManifest, arguments, config, selection, revalidateDarwinSettings, childEnvironment, dockerSocket, podmanSocket, stderr)
+	arguments = append(append([]string(nil), state.Arguments...), arguments...)
+	return lifecycle(ctx, launcherManifest, arguments, config, handles, state, revalidateDarwinSettings, childEnvironment, dockerSocket, podmanSocket, stderr)
 }
 
 func invokingAccountHome() (string, error) {

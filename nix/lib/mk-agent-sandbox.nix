@@ -26,7 +26,37 @@ let
     ++ lib.optional pkgs.stdenv.isDarwin "aclProbeDarwin";
   adapterRuntimePackages = adapter.runtimePackages or [ ];
   adapterClosureOnlyPackages = adapter.closureOnlyPackages or [ ];
-  output = adapter.output;
+  # Retain compatibility for focused launcher fixtures that predate adapter
+  # outputs. Production adapters provide output explicitly.
+  output = adapter.output or {
+    packageName = adapter.agent.name;
+    commandName = adapter.agent.name;
+    manifestName = "${adapter.agent.name}-manifest.json";
+    mainProgram = adapter.agent.name;
+  };
+  legacySettings = adapter.agent.darwinSettings or "";
+  agent = {
+    inherit (adapter.agent) name executable mandatoryArgs reservedFlags;
+    commandName = output.commandName;
+    argumentPolicy = adapter.agent.argumentPolicy or "legacy";
+    resourceArgs = adapter.agent.resourceArgs or [ ];
+    reservedCommands = adapter.agent.reservedCommands or [ ];
+    environment = adapter.agent.environment or { scrub = [ ]; set = { }; };
+    packageDirectory = adapter.agent.packageDirectory or null;
+    securityAdapter = adapter.agent.securityAdapter or (if legacySettings != "" then {
+      kind = "legacy-settings";
+      path = legacySettings;
+      arguments = [ "--settings" legacySettings ];
+    } else null);
+  };
+  stateBindings = adapter.stateBindings or (lib.optional (adapter.agent ? configEnvironment) {
+    name = "config";
+    explicitPath = options.configDir;
+    inheritedEnvironment = adapter.agent.configEnvironment;
+    defaultPath = "";
+    defaultWritablePaths = [ ];
+    exports = [{ kind = "environment"; name = adapter.agent.configEnvironment; exportDefault = false; }];
+  });
   safeBasename = name: builtins.isString name && name != "" && name != "." && name != ".."
     && !(lib.hasInfix "/" name) && !(lib.hasInfix "\n" name) && !(lib.hasInfix "\r" name);
   dockerPackages = lib.optionals options.docker.enable [
@@ -60,7 +90,7 @@ let
     ++ map (package: "${package}/bin") podmanPackages
     ++ map (package: "${package}/bin") options.extraPkgs;
   manifest = pkgs.writeText output.manifestName (builtins.toJSON {
-    version = 1;
+    version = 2;
     platform = if pkgs.stdenv.isDarwin then "darwin" else "linux";
     fenceExecutable = "${deps.fence}/bin/fence";
     repoWolfClientDir = "${deps.repoWolfClient}";
@@ -70,8 +100,8 @@ let
     aclProbe = if pkgs.stdenv.isDarwin then [ "${deps.aclProbeDarwin}/bin/den-acl-probe" ] else [ "${deps.acl}/bin/getfacl" ];
     protectedPathPatterns = import ./protected-paths.nix;
     inherit pathEntries;
-    explicitConfigDir = options.configDir;
-    agent = adapter.agent;
+    inherit stateBindings;
+    agent = agent;
     docker = {
       inherit (options.docker) enable socketPath hostPorts;
       clientPrograms = dockerClientPrograms;
