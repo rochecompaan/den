@@ -24,39 +24,11 @@ let
   requiredDependencies = [ "fence" "repoWolfClient" "launcher" "git" "bash" "coreutils" ]
     ++ lib.optional pkgs.stdenv.isLinux "acl"
     ++ lib.optional pkgs.stdenv.isDarwin "aclProbeDarwin";
-  adapterRuntimePackages = adapter.runtimePackages or [ ];
-  adapterClosureOnlyPackages = adapter.closureOnlyPackages or [ ];
-  # Retain compatibility for focused launcher fixtures that predate adapter
-  # outputs. Production adapters provide output explicitly.
-  output = adapter.output or {
-    packageName = adapter.agent.name;
-    commandName = adapter.agent.name;
-    manifestName = "${adapter.agent.name}-manifest.json";
-    mainProgram = adapter.agent.name;
-  };
-  legacySettings = adapter.agent.darwinSettings or "";
-  agent = {
-    inherit (adapter.agent) name executable mandatoryArgs reservedFlags;
-    commandName = output.commandName;
-    argumentPolicy = adapter.agent.argumentPolicy or "legacy";
-    resourceArgs = adapter.agent.resourceArgs or [ ];
-    reservedCommands = adapter.agent.reservedCommands or [ ];
-    environment = adapter.agent.environment or { scrub = [ ]; set = { }; };
-    packageDirectory = adapter.agent.packageDirectory or null;
-    securityAdapter = adapter.agent.securityAdapter or (if legacySettings != "" then {
-      kind = "legacy-settings";
-      path = legacySettings;
-      arguments = [ "--settings" legacySettings ];
-    } else null);
-  };
-  stateBindings = adapter.stateBindings or (lib.optional (adapter.agent ? configEnvironment) {
-    name = "config";
-    explicitPath = options.configDir;
-    inheritedEnvironment = adapter.agent.configEnvironment;
-    defaultPath = "";
-    defaultWritablePaths = [ ];
-    exports = [{ kind = "environment"; name = adapter.agent.configEnvironment; exportDefault = false; }];
-  });
+  adapterRuntimePackages = adapter.runtimePackages;
+  adapterClosureOnlyPackages = adapter.closureOnlyPackages;
+  output = adapter.output;
+  agent = adapter.agent // { commandName = output.commandName; };
+  stateBindings = adapter.stateBindings;
   safeBasename = name: builtins.isString name && name != "" && name != "." && name != ".."
     && !(lib.hasInfix "/" name) && !(lib.hasInfix "\n" name) && !(lib.hasInfix "\r" name);
   dockerPackages = lib.optionals options.docker.enable [

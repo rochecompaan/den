@@ -49,6 +49,53 @@ func TestPlanBindingsDefaultAndCustomDenySets(t *testing.T) {
 	}
 }
 
+func TestPlanBindingsResolvesRelativeDefaultAndRejectsEmptyInherited(t *testing.T) {
+	root := t.TempDir()
+	home := privateDir(t, root, "home")
+	spec := manifest.StateBinding{
+		Name: "agent", InheritedEnvironment: "PI_CODING_AGENT_DIR",
+		DefaultPath: ".local/state/den/pi/agent",
+		Exports:     []manifest.StateExport{{Kind: "environment", Name: "PI_CODING_AGENT_DIR", ExportDefault: true}},
+	}
+	plan, err := PlanBindings([]manifest.StateBinding{spec}, nil, home)
+	if err != nil {
+		t.Fatalf("PlanBindings() error = %v", err)
+	}
+	want := filepath.Join(home, ".local/state/den/pi/agent")
+	if got := plan.WritablePaths(); !sameStrings(got, []string{want + string(os.PathSeparator)}) {
+		t.Fatalf("WritablePaths() = %#v, want %q", got, want+string(os.PathSeparator))
+	}
+	if _, err := PlanBindings([]manifest.StateBinding{spec}, map[string]string{"PI_CODING_AGENT_DIR": ""}, home); err == nil {
+		t.Fatal("PlanBindings() accepted an empty inherited directory")
+	}
+}
+
+func TestPlanBindingsMixedDefaultsAndCustomsInEitherOrder(t *testing.T) {
+	root := t.TempDir()
+	home := privateDir(t, root, "home")
+	agentDefault := filepath.Join(home, ".agent")
+	sessionDefault := filepath.Join(home, ".sessions")
+	agentCustom := filepath.Join(root, "agent-custom")
+	sessionCustom := filepath.Join(root, "session-custom")
+	binding := func(name, defaultPath string, custom *string) manifest.StateBinding {
+		return manifest.StateBinding{Name: name, ExplicitPath: custom, DefaultPath: defaultPath, DefaultWritablePaths: []string{defaultPath + string(os.PathSeparator)}, Exports: []manifest.StateExport{{Kind: "environment", Name: "STATE", ExportDefault: true}}}
+	}
+	for _, specs := range [][]manifest.StateBinding{
+		{binding("agent", agentDefault, nil), binding("sessions", sessionDefault, &sessionCustom)},
+		{binding("sessions", sessionDefault, &sessionCustom), binding("agent", agentDefault, nil)},
+		{binding("agent", agentDefault, &agentCustom), binding("sessions", sessionDefault, nil)},
+		{binding("sessions", sessionDefault, nil), binding("agent", agentDefault, &agentCustom)},
+	} {
+		plan, err := PlanBindings(specs, nil, home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(plan.WritablePaths()) != 1 || len(plan.DeniedWritePaths()) != 1 {
+			t.Fatalf("mixed plan grants=%#v denies=%#v", plan.WritablePaths(), plan.DeniedWritePaths())
+		}
+	}
+}
+
 func TestBindingPlanDefaultRetainsProtectedPaths(t *testing.T) {
 	root := t.TempDir()
 	home := privateDir(t, root, "home")
@@ -67,6 +114,36 @@ func TestBindingPlanDefaultRetainsProtectedPaths(t *testing.T) {
 	}
 	if got, want := handles[0].ProtectedPaths, []string{filepath.Join(home, ".ssh", "id_*")}; !sameStrings(got, want) {
 		t.Fatalf("ProtectedPaths = %#v, want %#v", got, want)
+	}
+}
+
+func TestBindingPlanRollsBackEveryCreatedDirectoryOnLaterFailure(t *testing.T) {
+	root := t.TempDir()
+	home := privateDir(t, root, "home")
+	first, second, invalid := filepath.Join(root, "first"), filepath.Join(root, "second"), filepath.Join(root, "invalid")
+	if err := os.WriteFile(invalid, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	specs := []manifest.StateBinding{
+		{Name: "first", ExplicitPath: &first, Exports: []manifest.StateExport{{Kind: "environment", Name: "FIRST"}}},
+		{Name: "second", ExplicitPath: &second, Exports: []manifest.StateExport{{Kind: "environment", Name: "SECOND"}}},
+		{Name: "invalid", ExplicitPath: &invalid, Exports: []manifest.StateExport{{Kind: "environment", Name: "INVALID"}}},
+	}
+	plan, err := PlanBindings(specs, nil, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := filepath.Join(t.TempDir(), "acl-probe")
+	if err := os.WriteFile(probe, []byte("#!/bin/sh\nprintf 'user::rwx\\ngroup::---\\nother::---\\n'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plan.Open("linux", ACLValidator{ACLProbe: []string{probe}}); err == nil {
+		t.Fatal("Open() accepted non-directory binding")
+	}
+	for _, path := range []string{first, second} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("created directory %q remains after rollback: %v", path, err)
+		}
 	}
 }
 

@@ -229,10 +229,17 @@ func TestClaudeStatePolicyParity(t *testing.T) {
 			if err := json.Unmarshal(encoded, &got); err != nil {
 				t.Fatal(err)
 			}
-			if name == "default" && contains(got.Filesystem.DenyWrite, defaultPath) {
-				t.Fatal("default state was denied")
+			selected := defaultPath
+			if name == "custom" {
+				selected = customPath
 			}
-			if name == "custom" && (!contains(got.Filesystem.DenyWrite, defaultPath) || contains(got.Filesystem.DenyRead, defaultPath)) {
+			if !contains(got.Filesystem.AllowRead, selected) || !contains(got.Filesystem.AllowWrite, selected) {
+				t.Fatalf("%s Claude grants = %#v", name, got.Filesystem)
+			}
+			if name == "default" && (contains(got.Filesystem.DenyRead, defaultPath) || contains(got.Filesystem.DenyWrite, defaultPath)) {
+				t.Fatalf("default Claude denials = %#v", got.Filesystem)
+			}
+			if name == "custom" && (!contains(got.Filesystem.DenyWrite, defaultPath) || contains(got.Filesystem.DenyRead, defaultPath) || contains(got.Filesystem.DenyWrite, customPath)) {
 				t.Fatalf("custom Claude policy = %#v", got.Filesystem)
 			}
 		})

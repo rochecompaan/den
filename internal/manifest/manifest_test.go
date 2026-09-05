@@ -31,6 +31,17 @@ func TestLoadVersion2RejectsVersionOneAndUnknown(t *testing.T) {
 	}
 }
 
+func TestLoadVersion2RequiresBindingAndAllowsRelativeDefault(t *testing.T) {
+	withoutBindings := strings.Replace(validManifest, `"stateBindings":[{"name":"config","explicitPath":null,"inheritedEnvironment":"CLAUDE_CONFIG_DIR","defaultPath":"","defaultWritablePaths":[],"exports":[{"kind":"environment","name":"CLAUDE_CONFIG_DIR","exportDefault":false}]}],`, `"stateBindings":[],`, 1)
+	if _, err := Load(writeManifest(t, withoutBindings)); err == nil {
+		t.Fatal("Load() accepted empty stateBindings")
+	}
+	relativeDefault := strings.Replace(validManifest, `"defaultPath":""`, `"defaultPath":".local/state/den/pi/agent"`, 1)
+	if _, err := Load(writeManifest(t, relativeDefault)); err != nil {
+		t.Fatalf("Load() rejected relative default: %v", err)
+	}
+}
+
 func TestValidateStateBinding(t *testing.T) {
 	cases := []struct{ name, old, new, field string }{
 		{"duplicate names", `"stateBindings":[{`, `"stateBindings":[{"name":"config","explicitPath":null,"inheritedEnvironment":"OTHER","defaultPath":"","defaultWritablePaths":[],"exports":[{"kind":"environment","name":"OTHER","exportDefault":false}]},{`, "stateBindings"},
@@ -39,6 +50,12 @@ func TestValidateStateBinding(t *testing.T) {
 		{"unsafe export name", `"CLAUDE_CONFIG_DIR"`, `"BAD-NAME"`, "stateBindings"},
 		{"newline path", `"/nix/store/policy.json"`, `"/nix/store/policy\n.json"`, "basePolicy"},
 		{"relative explicit", `"explicitPath":null`, `"explicitPath":"relative"`, "explicitPath"},
+		{"unsafe inherited name", `"CLAUDE_CONFIG_DIR"`, `"CLAUDE-CONFIG"`, "stateBindings"},
+		{"unsafe default path", `"defaultPath":""`, `"defaultPath":"../escape"`, "defaultPath"},
+		{"newline default path", `"defaultPath":""`, `"defaultPath":"bad\npath"`, "defaultPath"},
+	}
+	if _, err := Load(writeManifest(t, strings.Replace(validManifest, `"version":2`, `"version":2,"unexpected":true`, 1))); err == nil {
+		t.Fatal("Load accepted unknown field")
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

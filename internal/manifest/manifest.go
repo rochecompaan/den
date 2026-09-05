@@ -140,6 +140,9 @@ func (m Manifest) validate() error {
 	if err := m.Agent.validate(); err != nil {
 		return err
 	}
+	if len(m.StateBindings) == 0 {
+		return errors.New("manifest field stateBindings is required")
+	}
 	seen := make(map[string]struct{}, len(m.StateBindings))
 	for _, binding := range m.StateBindings {
 		if _, ok := seen[binding.Name]; ok {
@@ -207,7 +210,7 @@ func (s StateBinding) validate() error {
 	if s.ExplicitPath != nil && !safePath(*s.ExplicitPath) {
 		return errors.New("manifest field stateBindings.explicitPath is invalid")
 	}
-	if s.DefaultPath != "" && !safePath(s.DefaultPath) {
+	if s.DefaultPath != "" && !safeDefaultPath(s.DefaultPath) {
 		return errors.New("manifest field stateBindings.defaultPath is invalid")
 	}
 	if err := validateAbsolutePaths("stateBindings.defaultWritablePaths", s.DefaultWritablePaths, false); err != nil {
@@ -248,6 +251,12 @@ func validateAbsolute(field, path string) error {
 }
 func safePath(path string) bool {
 	return path != "" && strings.IndexByte(path, 0) < 0 && !strings.ContainsAny(path, "\r\n") && filepath.IsAbs(path) && filepath.Clean(path) == path
+}
+func safeDefaultPath(path string) bool {
+	if path == "" || strings.IndexByte(path, 0) >= 0 || strings.ContainsAny(path, "\r\n") || filepath.Clean(path) != path {
+		return false
+	}
+	return filepath.IsAbs(path) || (path != "." && path != ".." && !strings.HasPrefix(path, ".."+string(filepath.Separator)))
 }
 func validateArguments(field string, values []string) error {
 	for _, value := range values {

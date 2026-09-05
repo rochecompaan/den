@@ -35,6 +35,24 @@ func TestLaunchStateBindingsPreservesBindingAndExportOrder(t *testing.T) {
 	}
 }
 
+func TestLaunchStateBindingsDoesNotExportClaudeDefault(t *testing.T) {
+	root := t.TempDir()
+	plan, err := configdir.PlanBindings([]manifest.StateBinding{{
+		Name: "config", Exports: []manifest.StateExport{{Kind: "environment", Name: "CLAUDE_CONFIG_DIR", ExportDefault: false}},
+	}}, nil, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handles, err := plan.Open("linux", configdir.ACLValidator{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestStateHandles(handles)
+	if got := StateInputsFrom(handles).Environment; len(got) != 0 {
+		t.Fatalf("default Claude environment = %#v", got)
+	}
+}
+
 func privateState(t *testing.T, root, name string) string {
 	t.Helper()
 	path := filepath.Join(root, name)

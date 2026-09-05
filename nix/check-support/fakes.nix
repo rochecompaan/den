@@ -32,15 +32,36 @@ let
       adapter = {
         runtimePackages = [ fakeClaude ];
         closureOnlyPackages = pkgs.lib.optionals pkgs.stdenv.isDarwin [ darwinSettings ];
+        output = {
+          packageName = "claude";
+          commandName = "claude";
+          manifestName = "claude-manifest.json";
+          mainProgram = "claude";
+        };
         agent = {
           name = "claude";
           executable = "${fakeClaude}/bin/claude";
-          mandatoryArgs = [ "--dangerously-skip-permissions" ]
-            ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ "--settings" darwinSettings ];
+          argumentPolicy = "claude";
+          mandatoryArgs = [ "--dangerously-skip-permissions" ];
+          resourceArgs = [ ];
           reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" ];
-          configEnvironment = "CLAUDE_CONFIG_DIR";
-          darwinSettings = pkgs.lib.optionalString pkgs.stdenv.isDarwin darwinSettings;
+          reservedCommands = [ ];
+          environment = { scrub = [ ]; set = { }; };
+          packageDirectory = null;
+          securityAdapter = if pkgs.stdenv.isDarwin then {
+            kind = "claude-settings";
+            path = darwinSettings;
+            arguments = [ "--settings" darwinSettings ];
+          } else null;
         };
+        stateBindings = [{
+          name = "config";
+          explicitPath = configDir;
+          inheritedEnvironment = "CLAUDE_CONFIG_DIR";
+          defaultPath = "";
+          defaultWritablePaths = [ ];
+          exports = [{ kind = "environment"; name = "CLAUDE_CONFIG_DIR"; exportDefault = false; }];
+        }];
       };
     };
   overrideManifest = { name, package, filter }:

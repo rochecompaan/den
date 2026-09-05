@@ -151,6 +151,36 @@ func TestLifecycleCommitControlsCustomConfigurationRollback(t *testing.T) {
 	}
 }
 
+func TestLifecycleCommitsEveryStateDirectoryAfterChildStart(t *testing.T) {
+	root := t.TempDir()
+	first, second := filepath.Join(root, "first"), filepath.Join(root, "second")
+	ca, probe := filepath.Join(root, "ca.pem"), filepath.Join(root, "acl-probe")
+	if err := os.WriteFile(ca, []byte("certificate"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(probe, []byte("#!/bin/sh\nprintf 'user::rwx\\ngroup::---\\nother::---\\n'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{"REPOWOLF_ENDPOINT": "https://broker.example.test/", "REPOWOLF_TOKEN": "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "REPOWOLF_CA_FILE": ca, "HOME": root}
+	bindings := []manifest.StateBinding{
+		{Name: "first", ExplicitPath: &first, Exports: []manifest.StateExport{{Kind: "environment", Name: "FIRST"}}},
+		{Name: "second", ExplicitPath: &second, Exports: []manifest.StateExport{{Kind: "environment", Name: "SECOND"}}},
+	}
+	code := runWithLifecycle(context.Background(), manifest.Manifest{StateBindings: bindings, ACLProbe: []string{probe}}, nil, lookup(values), os.Lstat, os.Environ, environment.Build, &bytes.Buffer{},
+		func(_ context.Context, _ manifest.Manifest, _ []string, _ repowolf.Config, handles []*configdir.Handle, _ StateInputs, _ func() error, _ []string, _, _ container.Socket, _ io.Writer) int {
+			commitStateHandles(handles)
+			return 17
+		})
+	if code != 17 {
+		t.Fatalf("runWithLifecycle() = %d, want 17", code)
+	}
+	for _, path := range []string{first, second} {
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("committed directory %q missing: %v", path, err)
+		}
+	}
+}
+
 func TestRunFencePreservesChildStatusWhenTemporaryCleanupFails(t *testing.T) {
 	root := t.TempDir()
 	ca := filepath.Join(root, "ca.pem")

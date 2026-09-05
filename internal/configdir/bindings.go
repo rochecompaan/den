@@ -77,10 +77,12 @@ func selectBindingPath(spec manifest.StateBinding, inherited map[string]string, 
 		}
 	}
 	if source == defaultSource {
-		value = spec.DefaultPath
-	}
-	if value == "" {
-		return "", source, nil
+		if spec.DefaultPath == "" {
+			return "", source, nil
+		}
+		value = resolvedDefaultPath(spec.DefaultPath, home)
+	} else if value == "" {
+		return "", source, errInvalid
 	}
 	if !filepath.IsAbs(value) || filepath.Clean(value) != value {
 		return "", source, errInvalid
@@ -106,7 +108,14 @@ func bindingDefaults(spec manifest.StateBinding, home string) []string {
 	if spec.DefaultPath == "" {
 		return claudeDefaultPaths(home)
 	}
-	return []string{directoryPolicyPath(spec.DefaultPath)}
+	return []string{directoryPolicyPath(resolvedDefaultPath(spec.DefaultPath, home))}
+}
+
+func resolvedDefaultPath(path, home string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(home, path)
 }
 
 // Open securely opens every selected concrete directory. On a later error it
