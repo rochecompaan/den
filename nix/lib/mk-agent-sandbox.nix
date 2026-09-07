@@ -70,7 +70,7 @@ let
     closurePathsFile = "${closure}/store-paths";
     scratchRoot = if pkgs.stdenv.isDarwin then "/private/tmp" else "/tmp";
     aclProbe = if pkgs.stdenv.isDarwin then [ "${deps.aclProbeDarwin}/bin/den-acl-probe" ] else [ "${deps.acl}/bin/getfacl" ];
-    protectedPathPatterns = import ./protected-paths.nix;
+    protectedPathPatterns = lib.unique ((import ./protected-paths.nix) ++ (adapter.protectedPathPatterns or [ ]));
     inherit pathEntries;
     inherit stateBindings;
     agent = agent;
@@ -104,7 +104,7 @@ pkgs.runCommand output.packageName
     passthru = {
       denManifest = manifest;
       denOptions = options;
-    };
+    } // (adapter.passthru or { });
   }
   ''
     for program in ${lib.escapeShellArgs requiredPrograms}; do
