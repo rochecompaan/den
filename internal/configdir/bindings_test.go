@@ -146,38 +146,92 @@ func TestPlanBindingsPrefersExplicitThenInheritedThenDefault(t *testing.T) {
 }
 
 func TestPlanBindingsMixedDefaultsAndCustomsInEitherOrder(t *testing.T) {
-	// Catches aggregation regressions that grant an unselected binding's default
-	// or deny the selected binding's default after the binding order changes.
+	// Catches aggregation regressions that grant an unselected binding's default,
+	// omit a selected custom grant, or change either result with binding order.
 	root := t.TempDir()
 	home := privateDir(t, root, "home")
 	agentDefault := filepath.Join(home, ".agent")
 	sessionDefault := filepath.Join(home, ".sessions")
 	agentCustom := filepath.Join(root, "agent-custom")
 	sessionCustom := filepath.Join(root, "session-custom")
+	separator := string(os.PathSeparator)
+	probe := filepath.Join(root, "acl-probe")
+	if err := os.WriteFile(probe, []byte("#!/bin/sh\nprintf 'user::rwx\\ngroup::---\\nother::---\\n'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	binding := func(name, defaultPath string, custom *string) manifest.StateBinding {
-		return manifest.StateBinding{Name: name, ExplicitPath: custom, DefaultPath: defaultPath, DefaultWritablePaths: []string{defaultPath + string(os.PathSeparator)}, Exports: []manifest.StateExport{{Kind: "environment", Name: "STATE", ExportDefault: true}}}
+		return manifest.StateBinding{Name: name, ExplicitPath: custom, DefaultPath: defaultPath, DefaultWritablePaths: []string{defaultPath + separator}, Exports: []manifest.StateExport{{Kind: "environment", Name: "STATE", ExportDefault: true}}}
 	}
 	for _, test := range []struct {
-		name, writable, denied string
-		specs                  []manifest.StateBinding
+		name         string
+		specs        []manifest.StateBinding
+		planWritable []string
+		writable     []string
+		denied       []string
 	}{
-		{"default agent custom sessions", agentDefault, sessionDefault, []manifest.StateBinding{binding("agent", agentDefault, nil), binding("sessions", sessionDefault, &sessionCustom)}},
-		{"custom sessions default agent reversed", agentDefault, sessionDefault, []manifest.StateBinding{binding("sessions", sessionDefault, &sessionCustom), binding("agent", agentDefault, nil)}},
-		{"custom agent default sessions", sessionDefault, agentDefault, []manifest.StateBinding{binding("agent", agentDefault, &agentCustom), binding("sessions", sessionDefault, nil)}},
-		{"default sessions custom agent reversed", sessionDefault, agentDefault, []manifest.StateBinding{binding("sessions", sessionDefault, nil), binding("agent", agentDefault, &agentCustom)}},
+		{
+			"default agent custom sessions",
+			[]manifest.StateBinding{binding("agent", agentDefault, nil), binding("sessions", sessionDefault, &sessionCustom)},
+			[]string{agentDefault + separator},
+			[]string{agentDefault + separator, sessionCustom + separator},
+			[]string{sessionDefault + separator},
+		},
+		{
+			"custom sessions default agent reversed",
+			[]manifest.StateBinding{binding("sessions", sessionDefault, &sessionCustom), binding("agent", agentDefault, nil)},
+			[]string{agentDefault + separator},
+			[]string{sessionCustom + separator, agentDefault + separator},
+			[]string{sessionDefault + separator},
+		},
+		{
+			"custom agent default sessions",
+			[]manifest.StateBinding{binding("agent", agentDefault, &agentCustom), binding("sessions", sessionDefault, nil)},
+			[]string{sessionDefault + separator},
+			[]string{agentCustom + separator, sessionDefault + separator},
+			[]string{agentDefault + separator},
+		},
+		{
+			"default sessions custom agent reversed",
+			[]manifest.StateBinding{binding("sessions", sessionDefault, nil), binding("agent", agentDefault, &agentCustom)},
+			[]string{sessionDefault + separator},
+			[]string{sessionDefault + separator, agentCustom + separator},
+			[]string{agentDefault + separator},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			plan, err := PlanBindings(test.specs, nil, home)
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantWritable := []string{test.writable + string(os.PathSeparator)}
-			wantDenied := []string{test.denied + string(os.PathSeparator)}
-			if got := plan.WritablePaths(); !sameStrings(got, wantWritable) {
-				t.Fatalf("WritablePaths = %#v, want %#v", got, wantWritable)
+			if got := plan.WritablePaths(); !sameStrings(got, test.planWritable) {
+				t.Fatalf("WritablePaths() = %#v, want %#v", got, test.planWritable)
 			}
-			if got := plan.DeniedWritePaths(); !sameStrings(got, wantDenied) {
-				t.Fatalf("DeniedWritePaths = %#v, want %#v", got, wantDenied)
+			if got := plan.DeniedWritePaths(); !sameStrings(got, test.denied) {
+				t.Fatalf("DeniedWritePaths() = %#v, want %#v", got, test.denied)
+			}
+
+			handles, err := plan.Open("linux", ACLValidator{ACLProbe: []string{probe}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				for index := len(handles) - 1; index >= 0; index-- {
+					if err := handles[index].Close(); err != nil {
+						t.Errorf("Close() error = %v", err)
+					}
+				}
+			}()
+
+			var writable, denied []string
+			for _, handle := range handles {
+				writable = append(writable, handle.WritablePaths...)
+				denied = append(denied, handle.DeniedDefaultPaths...)
+			}
+			if !sameStrings(writable, test.writable) {
+				t.Fatalf("opened writable paths = %#v, want %#v", writable, test.writable)
+			}
+			if !sameStrings(denied, test.denied) {
+				t.Fatalf("opened denied defaults = %#v, want %#v", denied, test.denied)
 			}
 		})
 	}
