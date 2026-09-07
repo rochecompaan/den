@@ -90,7 +90,21 @@
          if (isOfflineModeEnabled() || sources.length === 0) {
              return;
          }
-@@ -923,6 +932,9 @@
+@@ -907,6 +916,7 @@
+         }
+     }
+     async updateNpmBatch(sources, scope) {
++        denyPackageMutation();
+         if (sources.length === 0) {
+             return;
+         }
+@@ -918,11 +928,15 @@
+         });
+     }
+     async installNpmBatch(specs, scope) {
++        denyPackageMutation();
+         const installRoot = this.getNpmInstallRoot(scope, false);
+         this.ensureNpmProject(installRoot);
          await this.runNpmCommand(this.getNpmInstallArgs(specs, installRoot));
      }
      async checkForAvailableUpdates() {
@@ -100,7 +114,7 @@
          if (isOfflineModeEnabled()) {
              return [];
          }
-@@ -992,44 +1004,18 @@
+@@ -992,44 +1006,18 @@
                  this.resolveLocalExtensionSource(parsed, accumulator, filter, metadata, baseDir);
                  continue;
              }
@@ -150,7 +164,7 @@
                  metadata.baseDir = installedPath;
                  this.collectPackageResources(installedPath, accumulator, filter, metadata);
              }
-@@ -1068,6 +1054,7 @@
+@@ -1068,6 +1056,7 @@
          }
      }
      async installParsedSource(parsed, scope) {
@@ -158,7 +172,7 @@
          if (parsed.type === "npm") {
              await this.installNpm(parsed, scope, scope === "temporary");
              return;
-@@ -1442,6 +1429,7 @@
+@@ -1442,6 +1431,7 @@
          return packageManagerCommand ? basename(packageManagerCommand).replace(/\.(cmd|exe)$/i, "") : "";
      }
      async runNpmCommand(args, options) {
@@ -166,7 +180,7 @@
          const npmCommand = this.getNpmCommand();
          await this.runCommand(npmCommand.command, [...npmCommand.args, ...args], options);
      }
-@@ -1453,6 +1441,7 @@
+@@ -1453,6 +1443,7 @@
          return ["install", "--omit=dev"];
      }
      runNpmCommandSync(args) {
@@ -174,7 +188,7 @@
          const npmCommand = this.getNpmCommand();
          return this.runCommandSync(npmCommand.command, [...npmCommand.args, ...args]);
      }
-@@ -1479,11 +1468,13 @@
+@@ -1479,11 +1470,13 @@
          return ["install", ...specs, "--prefix", installRoot, "--legacy-peer-deps"];
      }
      async installNpm(source, scope, temporary) {
@@ -188,7 +202,7 @@
          const installRoot = this.getNpmInstallRoot(scope, false);
          if (!existsSync(installRoot)) {
              return;
-@@ -1500,6 +1491,7 @@
+@@ -1500,6 +1493,7 @@
          await this.runNpmCommand(args);
      }
      async installGit(source, scope) {
@@ -196,7 +210,7 @@
          const targetDir = this.getGitInstallPath(source, scope);
          if (existsSync(targetDir)) {
              if (source.ref) {
-@@ -1533,6 +1525,7 @@
+@@ -1533,6 +1527,7 @@
          }
      }
      async updateGit(source, scope) {
@@ -204,7 +218,7 @@
          const targetDir = this.getGitInstallPath(source, scope);
          if (!existsSync(targetDir)) {
              await this.installGit(source, scope);
-@@ -1569,6 +1562,7 @@
+@@ -1569,6 +1564,7 @@
          }
      }
      async repairMissingGitDependencies(targetDir) {
@@ -212,7 +226,7 @@
          if (!this.hasMissingGitDependencies(targetDir))
              return;
          await this.runNpmCommand(this.getGitDependencyInstallArgs(), { cwd: targetDir });
-@@ -1577,6 +1571,7 @@
+@@ -1577,6 +1573,7 @@
          return join(dirname(targetDir), `.${basename(targetDir)}.pi-update-incomplete`);
      }
      async cleanAndInstallGitDependencies(targetDir, markerPath) {
@@ -220,7 +234,7 @@
          // Clean untracked files (extensions should be pristine). If this fails after
          // deleting dependencies, repair them so the existing extension still loads.
          try {
-@@ -1593,6 +1588,7 @@
+@@ -1593,6 +1590,7 @@
          rmSync(markerPath, { force: true });
      }
      async ensureGitRef(targetDir, fetchArgs, ref) {
@@ -228,17 +242,15 @@
          // Fetch only the ref we will reset to, avoiding unrelated branch/tag noise.
          await this.runCommand("git", fetchArgs, { cwd: targetDir });
          const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
-@@ -1619,6 +1615,9 @@
+@@ -1619,6 +1617,7 @@
          await this.cleanAndInstallGitDependencies(targetDir, markerPath);
      }
      async refreshTemporaryGitSource(source, sourceStr) {
-+        if (DEN_PACKAGE_MUTATION_DISABLED) {
-+            return;
-+        }
++        denyPackageMutation();
          if (isOfflineModeEnabled()) {
              return;
          }
-@@ -1632,6 +1631,7 @@
+@@ -1632,12 +1631,14 @@
          }
      }
      async removeGit(source, scope) {
@@ -246,18 +258,86 @@
          const targetDir = this.getGitInstallPath(source, scope);
          rmSync(targetDir, { recursive: true, force: true });
          rmSync(this.getGitUpdateMarkerPath(targetDir), { force: true });
+         this.pruneEmptyGitParents(targetDir, this.getGitInstallRoot(scope));
+     }
+     pruneEmptyGitParents(targetDir, installRoot) {
++        denyPackageMutation();
+         if (!installRoot)
+             return;
+         const resolvedRoot = resolve(installRoot);
+@@ -1661,6 +1662,7 @@
+         }
+     }
+     ensureNpmProject(installRoot) {
++        denyPackageMutation();
+         if (!existsSync(installRoot)) {
+             mkdirSync(installRoot, { recursive: true });
+         }
+@@ -1673,6 +1675,7 @@
+         }
+     }
+     ensureGitIgnore(dir) {
++        denyPackageMutation();
+         if (!existsSync(dir)) {
+             mkdirSync(dir, { recursive: true });
+         }
+@@ -2092,6 +2095,7 @@
+         };
+     }
+     spawnCommand(command, args, options) {
++        denyPackageMutation();
+         const env = getEnv();
+         return spawnProcess(command, args, {
+             cwd: options?.cwd,
+@@ -2100,6 +2104,7 @@
+         });
+     }
+     spawnCaptureCommand(command, args, options) {
++        denyPackageMutation();
+         const baseEnv = getEnv();
+         const env = options?.env ? { ...baseEnv, ...options.env } : baseEnv;
+         return spawnProcess(command, args, {
+@@ -2109,6 +2114,7 @@
+         });
+     }
+     runCommandCapture(command, args, options) {
++        denyPackageMutation();
+         return new Promise((resolvePromise, reject) => {
+             const child = this.spawnCaptureCommand(command, args, options);
+             let stdout = "";
+@@ -2148,6 +2154,7 @@
+         });
+     }
+     runCommand(command, args, options) {
++        denyPackageMutation();
+         return new Promise((resolvePromise, reject) => {
+             const child = this.spawnCommand(command, args, options);
+             child.on("error", reject);
+@@ -2162,6 +2169,7 @@
+         });
+     }
+     runCommandSync(command, args) {
++        denyPackageMutation();
+         const env = getEnv();
+         const result = spawnProcessSync(command, args, {
+             stdio: ["ignore", "pipe", "pipe"],
 --- a/dist/core/agent-session-runtime.js
 +++ b/dist/core/agent-session-runtime.js
-@@ -1,5 +1,6 @@
+@@ -1,9 +1,10 @@
 -import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 -import { basename, join, resolve } from "node:path";
-+import { closeSync, copyFileSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, realpathSync, statSync } from "node:fs";
++import { closeSync, copyFileSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
 +import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 +import { ENV_SESSION_DIR } from "../config.js";
  import { resolvePath } from "../utils/paths.js";
  import { emitSessionShutdownEvent } from "./extensions/runner.js";
  import { assertSessionCwdExists } from "./session-cwd.js";
-@@ -15,6 +16,47 @@
+-import { SessionManager } from "./session-manager.js";
++import { parseSessionEntries, SessionManager } from "./session-manager.js";
+ /**
+  * Thrown when /import references a JSONL file path that does not exist.
+  */
+@@ -15,6 +16,51 @@
          this.filePath = filePath;
      }
  }
@@ -292,32 +372,40 @@
 +    if (!target.isFile() || target.isSymbolicLink())
 +        throw new Error("Pi session target must be an existing regular file");
 +    const fd = openSync(canonicalPath, "r");
++    let entries;
 +    try {
 +        const opened = fstatSync(fd);
 +        if (!opened.isFile() || opened.dev !== target.dev || opened.ino !== target.ino)
 +            throw new Error("Pi session target changed while opening");
++        entries = parseSessionEntries(readFileSync(fd, "utf8"));
++        if (entries[0]?.type !== "session" || typeof entries[0].id !== "string")
++            throw new Error("Pi session target is not a valid session");
 +    }
 +    finally {
 +        closeSync(fd);
 +    }
-+    return canonicalPath;
++    return { canonicalPath, entries };
 +}
  function extractUserMessageText(content) {
      if (typeof content === "string") {
          return content;
-@@ -126,12 +168,13 @@
+@@ -126,12 +172,17 @@
          }
      }
      async switchSession(sessionPath, options) {
 -        const beforeResult = await this.emitBeforeSwitch("resume", sessionPath);
-+        const canonicalSessionPath = canonicalSessionTarget(sessionPath);
-+        const beforeResult = await this.emitBeforeSwitch("resume", canonicalSessionPath);
++        const validatedTarget = canonicalSessionTarget(sessionPath);
++        const beforeResult = await this.emitBeforeSwitch("resume", validatedTarget.canonicalPath);
          if (beforeResult.cancelled) {
              return beforeResult;
          }
          const previousSessionFile = this.session.sessionFile;
 -        const sessionManager = SessionManager.open(sessionPath, undefined, options?.cwdOverride);
-+        const sessionManager = SessionManager.open(canonicalSessionPath, undefined, options?.cwdOverride);
++        const header = validatedTarget.entries[0];
++        const cwd = options?.cwdOverride ?? (typeof header.cwd === "string" ? header.cwd : undefined) ?? process.cwd();
++        // Passing the entries read from the validated descriptor prevents the
++        // constructor from reopening attacker-replaceable session bytes.
++        const sessionManager = new SessionManager(cwd, resolve(validatedTarget.canonicalPath, ".."), validatedTarget.canonicalPath, true, undefined, validatedTarget.entries);
          assertSessionCwdExists(sessionManager, this.cwd);
          await this.teardownCurrent("resume", sessionManager.getSessionFile());
          this.apply(await this.createRuntime({
