@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+
+	"github.com/rochecompaan/den/internal/arguments"
 )
 
 const CurrentVersion = 2
@@ -199,6 +201,9 @@ func (a Agent) validate() error {
 		if !safeName(a.SecurityAdapter.Kind) || validateAbsolute("agent.securityAdapter.path", a.SecurityAdapter.Path) != nil || validateArguments("agent.securityAdapter.arguments", a.SecurityAdapter.Arguments) != nil {
 			return errors.New("manifest field agent.securityAdapter is invalid")
 		}
+	}
+	if err := arguments.Validate(a.ArgumentPolicy, a.ReservedFlags, a.ReservedCommands, nil); err != nil {
+		return errors.New("manifest field agent argument policy is invalid")
 	}
 	return nil
 }

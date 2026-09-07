@@ -8,7 +8,7 @@ import (
 
 const validManifest = `{
  "version":2,"platform":"linux","fenceExecutable":"/nix/store/fence/bin/fence","repoWolfClientDir":"/nix/store/repowolf","basePolicy":"/nix/store/policy.json","closurePathsFile":"/nix/store/closures","scratchRoot":"/tmp","aclProbe":["/usr/bin/getfacl"],"protectedPathPatterns":["~/.ssh/id_*"],"pathEntries":["/nix/store/bin"],
- "agent":{"name":"claude","executable":"/nix/store/claude/bin/claude","commandName":"claude","argumentPolicy":"claude","mandatoryArgs":["--safe"],"resourceArgs":[],"reservedFlags":["--safe"],"reservedCommands":[],"environment":{"scrub":[],"set":{}},"packageDirectory":null,"securityAdapter":null},
+ "agent":{"name":"claude","executable":"/nix/store/claude/bin/claude","commandName":"claude","argumentPolicy":"claude","mandatoryArgs":["--safe"],"resourceArgs":[],"reservedFlags":["--settings","--permission-mode","--dangerously-skip-permissions"],"reservedCommands":[],"environment":{"scrub":[],"set":{}},"packageDirectory":null,"securityAdapter":null},
  "stateBindings":[{"name":"config","explicitPath":null,"inheritedEnvironment":"CLAUDE_CONFIG_DIR","defaultPath":"","defaultWritablePaths":[],"exports":[{"kind":"environment","name":"CLAUDE_CONFIG_DIR","exportDefault":false}]}],
  "docker":{"enable":false,"socketPath":null,"hostPorts":[],"clientPrograms":[]},"podman":{"enable":false,"socketPath":null,"hostPorts":[],"clientPrograms":[]}
 }`
@@ -90,7 +90,7 @@ func TestLoadRejectsUnsafeAgentContractValues(t *testing.T) {
 		{"empty mandatory argument", `"mandatoryArgs":["--safe"]`, `"mandatoryArgs":[""]`},
 		{"newline resource argument", `"resourceArgs":[]`, `"resourceArgs":["bad\nresource"]`},
 		{"empty resource argument", `"resourceArgs":[]`, `"resourceArgs":[""]`},
-		{"empty reserved flag", `"reservedFlags":["--safe"]`, `"reservedFlags":[""]`},
+		{"empty reserved flag", `"--settings"`, `""`},
 		{"carriage-return reserved command", `"reservedCommands":[]`, `"reservedCommands":["bad\rcommand"]`},
 		{"empty reserved command", `"reservedCommands":[]`, `"reservedCommands":[""]`},
 		{"empty security adapter kind", `"securityAdapter":null`, `"securityAdapter":{"kind":"","path":"/nix/store/adapter","arguments":[]}`},
@@ -104,6 +104,18 @@ func TestLoadRejectsUnsafeAgentContractValues(t *testing.T) {
 				t.Fatalf("Load accepted malformed %s", test.name)
 			}
 		})
+	}
+}
+
+func TestLoadRejectsArgumentPolicyTableMismatch(t *testing.T) {
+	pi := strings.ReplaceAll(validManifest, `"name":"claude"`, `"name":"pi"`)
+	pi = strings.ReplaceAll(pi, `"commandName":"claude","argumentPolicy":"claude","mandatoryArgs":["--safe"],"resourceArgs":[],"reservedFlags":["--settings","--permission-mode","--dangerously-skip-permissions"],"reservedCommands":[]`, `"commandName":"pi","argumentPolicy":"pi-0.84.4","mandatoryArgs":[],"resourceArgs":[],"reservedFlags":["--session-dir","--session","--fork","--export","--extension","-e","--skill","--prompt-template","--theme"],"reservedCommands":["install","remove","uninstall","update","list","config"]`)
+	if _, err := Load(writeManifest(t, pi)); err != nil {
+		t.Fatalf("Load() rejected Pi policy table: %v", err)
+	}
+	mismatch := strings.Replace(pi, `"--theme"`, `"--unknown"`, 1)
+	if _, err := Load(writeManifest(t, mismatch)); err == nil {
+		t.Fatal("Load() accepted mismatched Pi reserved flags")
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/rochecompaan/den/internal/arguments"
 	"github.com/rochecompaan/den/internal/claude"
 	"github.com/rochecompaan/den/internal/configdir"
 	"github.com/rochecompaan/den/internal/container"
@@ -42,7 +43,7 @@ func run(ctx context.Context, launcherManifest manifest.Manifest, arguments []st
 func runWithLifecycle(
 	ctx context.Context,
 	launcherManifest manifest.Manifest,
-	arguments []string,
+	userArguments []string,
 	lookup func(string) (string, bool),
 	lstat func(string) (fs.FileInfo, error),
 	environ func() []string,
@@ -50,13 +51,13 @@ func runWithLifecycle(
 	stderr io.Writer,
 	lifecycle lifecycleRunner,
 ) (exitCode int) {
-	return runWithLifecycleAndHome(ctx, launcherManifest, arguments, lookup, lstat, environ, build, stderr, lifecycle, invokingAccountHome)
+	return runWithLifecycleAndHome(ctx, launcherManifest, userArguments, lookup, lstat, environ, build, stderr, lifecycle, invokingAccountHome)
 }
 
 func runWithLifecycleAndHome(
 	ctx context.Context,
 	launcherManifest manifest.Manifest,
-	arguments []string,
+	userArguments []string,
 	lookup func(string) (string, bool),
 	lstat func(string) (fs.FileInfo, error),
 	environ func() []string,
@@ -65,22 +66,27 @@ func runWithLifecycleAndHome(
 	lifecycle lifecycleRunner,
 	resolveAccountHome accountHomeResolver,
 ) (exitCode int) {
+	if launcherManifest.Agent.ArgumentPolicy != "" {
+		if err := arguments.Validate(launcherManifest.Agent.ArgumentPolicy, launcherManifest.Agent.ReservedFlags, launcherManifest.Agent.ReservedCommands, userArguments); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	} else if launcherManifest.Agent.Name == "claude" {
+		if err := claude.ValidateArguments(userArguments); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	if launcherManifest.Agent.Name == "claude" && launcherManifest.Platform == "darwin" {
+		if err := claude.ValidateDarwinArguments(userArguments); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
 	config, err := repowolf.LoadEnv(lookup, lstat)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
-	}
-	if launcherManifest.Agent.Name == "claude" {
-		if err := claude.ValidateArguments(arguments); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if launcherManifest.Platform == "darwin" {
-			if err := claude.ValidateDarwinArguments(arguments); err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
-		}
 	}
 	home, _ := lookup("HOME")
 	accountHome, err := resolveAccountHome()
@@ -157,7 +163,8 @@ func runWithLifecycleAndHome(
 	if launcherManifest.Agent.Name == "claude" && launcherManifest.Platform == "darwin" {
 		host = claude.ScrubDarwinEnvironment(host)
 	}
-	childEnvironment := build(host, environment.Controlled{
+	host = environment.Scrub(host, launcherManifest.Agent.Environment.Scrub)
+	inputs := buildChildInputs(build(host, environment.Controlled{
 		Endpoint:      config.Endpoint,
 		Token:         config.Token,
 		CAFile:        config.CAFile,
@@ -166,12 +173,8 @@ func runWithLifecycleAndHome(
 		DockerHost:    dockerSocket.Endpoint,
 		ContainerHost: podmanSocket.Endpoint,
 		XDGRuntimeDir: podmanSocket.XDGRuntimeDir,
-	})
-	for name, value := range state.Environment {
-		childEnvironment = setEnvironment(childEnvironment, name, value)
-	}
-	arguments = append(append([]string(nil), state.Arguments...), arguments...)
-	return lifecycle(ctx, launcherManifest, arguments, config, handles, state, revalidateDarwinSettings, childEnvironment, dockerSocket, podmanSocket, stderr)
+	}), launcherManifest.Agent, state, userArguments)
+	return lifecycle(ctx, launcherManifest, inputs.Arguments, config, handles, state, revalidateDarwinSettings, inputs.Environment, dockerSocket, podmanSocket, stderr)
 }
 
 func invokingAccountHome() (string, error) {
@@ -221,16 +224,5 @@ func fenceTemporaryEnvironment(host []string, scratch string) []string {
 }
 
 func setEnvironment(values []string, name, value string) []string {
-	if name == "" {
-		return values
-	}
-	result := make([]string, 0, len(values)+1)
-	for _, entry := range values {
-		key, _, ok := strings.Cut(entry, "=")
-		if ok && key == name {
-			continue
-		}
-		result = append(result, entry)
-	}
-	return append(result, name+"="+value)
+	return environment.Overwrite(values, name, value)
 }

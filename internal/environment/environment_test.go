@@ -38,7 +38,7 @@ func TestBuildScrubsCredentialsAndRestoresOnlyControlledRepoWolfValues(t *testin
 	}
 	controlled := Controlled{
 		Endpoint:    "https://broker.example.test/",
-		Token:       "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		Token:       "token",
 		CAFile:      "/canonical/ca.pem",
 		ClientDir:   "/nix/store/repowolf-client",
 		PathEntries: []string{"/nix/store/git/bin", "/nix/store/coreutils/bin"},
@@ -75,7 +75,7 @@ func TestBuildDoesNotMutateHostAndProducesNoDuplicateNames(t *testing.T) {
 	original := append([]string(nil), host...)
 	got := Build(host, Controlled{
 		Endpoint:    "https://broker.example.test",
-		Token:       "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		Token:       "token",
 		CAFile:      "/ca.pem",
 		ClientDir:   "/client",
 		PathEntries: []string{"/path"},
@@ -148,6 +148,15 @@ func TestBuildScrubsUnvalidatedContainerEndpoints(t *testing.T) {
 				t.Fatalf("Build() mutated host: got %#v, want %#v", host, original)
 			}
 		})
+	}
+}
+
+func TestScrubAndOverwriteApplyExactKeys(t *testing.T) {
+	values := []string{"KEEP=first", "KEEP=second", "REMOVE=first", "REMOVE=second", "PREFIX_REMOVE=value"}
+	got := Overwrite(Scrub(values, []string{"REMOVE"}), "KEEP", "controlled")
+	want := []string{"PREFIX_REMOVE=value", "KEEP=controlled"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("controlled environment = %#v, want %#v", got, want)
 	}
 }
 

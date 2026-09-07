@@ -98,10 +98,6 @@ func runFenceWithTemporary(
 	environment = setEnvironment(environment, "REPOWOLF_CA_FILE", preparedCA)
 	environment = append(environment, "DEN_FENCE_POLICY_FILE="+policyFile)
 	argumentsForFence := []string{"--settings", policyFile, "--expose-host-path", config.CAFile, "--", launcherManifest.Agent.Executable}
-	argumentsForFence = append(argumentsForFence, launcherManifest.Agent.MandatoryArgs...)
-	if launcherManifest.Agent.SecurityAdapter != nil {
-		argumentsForFence = append(argumentsForFence, launcherManifest.Agent.SecurityAdapter.Arguments...)
-	}
 	argumentsForFence = append(argumentsForFence, arguments...)
 	return process.Run(process.Command{
 		Path: launcherManifest.FenceExecutable, Args: argumentsForFence, Env: environment,
