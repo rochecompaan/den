@@ -41,7 +41,7 @@ type commandResult struct {
 }
 
 type piFixture struct {
-	root, worktree, runtimeHome, agentDir, sessionDir, caFile string
+	root, worktree, invokingHome, runtimeHome, agentDir, sessionDir, caFile string
 }
 
 func newPiFixture(t *testing.T) *piFixture {
@@ -51,10 +51,10 @@ func newPiFixture(t *testing.T) *piFixture {
 		t.Fatal(err)
 	}
 	fixture := &piFixture{
-		root: root, worktree: filepath.Join(root, "worktree"), runtimeHome: filepath.Join(root, "runtime-home"),
+		root: root, worktree: filepath.Join(root, "worktree"), invokingHome: filepath.Join(root, "worktree/invoking-home"), runtimeHome: filepath.Join(root, "worktree/runtime-home"),
 		agentDir: filepath.Join(root, "agent"), sessionDir: filepath.Join(root, "sessions"), caFile: filepath.Join(root, "ca.pem"),
 	}
-	for _, path := range []string{fixture.worktree, fixture.runtimeHome, fixture.agentDir, fixture.sessionDir} {
+	for _, path := range []string{fixture.worktree, fixture.invokingHome, fixture.runtimeHome, fixture.agentDir, fixture.sessionDir} {
 		if err := os.Mkdir(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -69,6 +69,7 @@ func newPiFixture(t *testing.T) *piFixture {
 func (fixture *piFixture) environment(extra ...string) []string {
 	replacements := map[string]string{
 		"HOME":                        "HOME=" + fixture.runtimeHome,
+		"DEN_NATIVE_INVOKING_HOME":    "DEN_NATIVE_INVOKING_HOME=" + fixture.invokingHome,
 		"PI_CODING_AGENT_DIR":         "PI_CODING_AGENT_DIR=" + fixture.agentDir,
 		"PI_CODING_AGENT_SESSION_DIR": "PI_CODING_AGENT_SESSION_DIR=" + fixture.sessionDir,
 		"PI_PROVIDER_FIXTURE_TOKEN":   "PI_PROVIDER_FIXTURE_TOKEN=not-a-real-provider-credential",
@@ -283,6 +284,10 @@ func requireRPCResponse(t *testing.T, result commandResult, id string, success b
 	t.Fatalf("missing RPC response %q: %s%s", id, result.stdout, result.stderr)
 }
 
+func reportHasLine(contents []byte, line string) bool {
+	return slicesContain(strings.Split(string(contents), "\n"), line)
+}
+
 func requireReportLines(t *testing.T, path string, lines ...string) {
 	t.Helper()
 	contents, err := os.ReadFile(path)
@@ -290,7 +295,7 @@ func requireReportLines(t *testing.T, path string, lines ...string) {
 		t.Fatal(err)
 	}
 	for _, line := range lines {
-		if !strings.Contains(string(contents), line) {
+		if !reportHasLine(contents, line) {
 			t.Fatalf("missing report line %q in %q", line, contents)
 		}
 	}
@@ -307,7 +312,7 @@ func waitForReportLine(t *testing.T, path, line string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if contents, err := os.ReadFile(path); err == nil && strings.Contains(string(contents), line) {
+		if contents, err := os.ReadFile(path); err == nil && reportHasLine(contents, line) {
 			return
 		}
 		time.Sleep(25 * time.Millisecond)

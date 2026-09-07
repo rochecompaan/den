@@ -254,6 +254,7 @@ pkgs.writeShellApplication {
   text = ''
     export DEN_NATIVE_HOST_SYSTEM=${pkgs.stdenv.hostPlatform.system}
     export DEN_NATIVE_TEST_BINARY=${nativeTests}/bin/den-native-tests
+    export DEN_NATIVE_PI_LAUNCHER=${piFixture.launcher}/bin/den-launcher
     export DEN_NATIVE_PI_TEST_BINARY=${piNativeTests}/bin/den-pi-native-tests
     export DEN_NATIVE_CLAUDE=${claude}/bin/claude
     export DEN_NATIVE_PI=${piFixture.pi}/bin/pi

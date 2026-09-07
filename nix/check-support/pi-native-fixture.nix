@@ -2,6 +2,38 @@
 
 let
   mkPi = import ../lib/mk-pi.nix;
+  # Only this native fixture substitutes account-home discovery. The production
+  # source and launcher derivation stay unchanged; drift fails the fixture build.
+  launcher = (import ../packages/den-launcher.nix { inherit pkgs; }).overrideAttrs (old: {
+    pname = "den-native-pi-launcher";
+    nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.python3 ];
+    postPatch = (old.postPatch or "") + ''
+      python3 - <<'PYTHON'
+      from pathlib import Path
+      path = Path("internal/launch/launch.go")
+      source = path.read_text()
+      original = "func invokingAccountHome() (string, error) {\n\taccount, err := user.Current()\n\tif err != nil || account == nil {\n\t\treturn \"\", err\n\t}\n\treturn account.HomeDir, nil\n}"
+      replacement = "func invokingAccountHome() (string, error) {\n\thome := os.Getenv(\"DEN_NATIVE_INVOKING_HOME\")\n\tif !filepath.IsAbs(home) {\n\t\treturn \"\", fmt.Errorf(\"native fixture requires an absolute invoking home\")\n\t}\n\treturn home, nil\n}"
+      account_import = '\t"os/user"\n'
+      if source.count(original) != 1 or source.count(account_import) != 1:
+          raise SystemExit("native fixture account-home substitution drifted")
+      path.write_text(source.replace(original, replacement).replace(account_import, ""))
+      PYTHON
+    '';
+  });
+  mkFixtureSandbox = args: (import ../lib/mk-agent-sandbox.nix { inherit inputs pkgs; }) (args // {
+    dependencies = {
+      inherit launcher;
+      fence = (import ../lib/fence.nix { inherit pkgs; }).package;
+      repoWolfClient = import ../packages/repowolf-client.nix { inherit inputs pkgs; };
+      git = pkgs.gitMinimal;
+      bash = pkgs.bash;
+      coreutils = pkgs.coreutils;
+    } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux { acl = pkgs.acl; }
+      // pkgs.lib.optionalAttrs pkgs.stdenv.isDarwin {
+        aclProbeDarwin = import ../packages/den-acl-probe.nix { inherit (pkgs) lib stdenv; };
+      };
+  });
   pi = import ../packages/pi-coding-agent.nix { inherit pkgs; };
   resourceFixture = pkgs.runCommand "den-native-pi-resource-package" { } ''
     mkdir -p "$out/extensions" "$out/skills/fixture-package-skill" "$out/prompts" "$out/themes"
@@ -22,7 +54,9 @@ let
     sed 's/fixture-skill/native-collision/' ${./fixtures/pi/native/skill/SKILL.md} > "$out/skills/native-collision/SKILL.md"
     printf '%s\n' 'Package collision winner.' > "$out/prompts/native-collision.md"
     sed 's/fixture-theme/native-collision/' ${./fixtures/pi/native/theme.json} > "$out/themes/native-collision.json"
-    cat > "$out/extensions/z-collision.ts" <<'TS'
+    mkdir -p "$out/collision-package/extensions"
+    printf '%s\n' '{"name":"fixture-collision-package","pi":{"extensions":["./extensions/z-collision.ts"]}}' > "$out/collision-package/package.json"
+    cat > "$out/collision-package/extensions/z-collision.ts" <<'TS'
     export default function (pi: any) {
       pi.registerTool({ name: "native-collision", label: "Collision", description: "Package loser", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [] }) });
     }
@@ -34,7 +68,7 @@ let
     printf '%s\n' 'Direct collision loser.' > "$prompts/native-collision.md"
     sed 's/fixture-theme/native-collision/' ${./fixtures/pi/native/theme.json} > "$themes/native-collision.json"
   '';
-  sandbox = mkPi { inherit inputs pkgs; } {
+  sandbox = mkPi { inherit inputs pkgs; mkAgentSandbox = mkFixtureSandbox; } {
     agentDir = null;
     sessionDir = null;
     extraPkgs = [ ];
@@ -54,7 +88,7 @@ let
   };
 in
 {
-  inherit pi resourceFixture sandbox;
+  inherit pi resourceFixture sandbox launcher;
   manifest = sandbox.denManifest;
   packageRoot = pi.packageRoot;
 }

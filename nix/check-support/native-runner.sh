@@ -7,6 +7,7 @@ if [[ $# -ne 0 ]]; then
 fi
 
 : "${DEN_NATIVE_TEST_BINARY:?packaged native test binary is required}"
+: "${DEN_NATIVE_PI_LAUNCHER:?packaged Pi fixture launcher is required}"
 : "${DEN_NATIVE_PI_TEST_BINARY:?packaged Pi native test binary is required}"
 : "${DEN_NATIVE_PI:?packaged Pi binary is required}"
 : "${DEN_NATIVE_PI_SANDBOX:?packaged Pi sandbox is required}"
@@ -129,7 +130,7 @@ if [[ $DEN_NATIVE_HOST_SYSTEM == *-darwin ]]; then
   test_status=0
   if "$DEN_NATIVE_TEST_BINARY" -test.count=1 -test.timeout=2m; then
     require_suite_completion Claude claude-suite.complete
-    if "$DEN_NATIVE_PI_TEST_BINARY" -test.count=1 -test.timeout=2m; then
+    if DEN_NATIVE_LAUNCHER="$DEN_NATIVE_PI_LAUNCHER" "$DEN_NATIVE_PI_TEST_BINARY" -test.count=1 -test.timeout=2m; then
       require_suite_completion Pi pi-suite.complete
       test_status=0
     else
@@ -177,6 +178,6 @@ mkdir -m 1777 "$namespace_tmp"
   export TMPDIR=/tmp
   "$DEN_NATIVE_TEST_BINARY" -test.count=1 -test.timeout=2m
   cmp -s <(printf "complete\\n") "$DEN_NATIVE_HOST_ROOT/claude-suite.complete"
-  "$DEN_NATIVE_PI_TEST_BINARY" -test.count=1 -test.timeout=2m
+  DEN_NATIVE_LAUNCHER="$DEN_NATIVE_PI_LAUNCHER" "$DEN_NATIVE_PI_TEST_BINARY" -test.count=1 -test.timeout=2m
   cmp -s <(printf "complete\\n") "$DEN_NATIVE_HOST_ROOT/pi-suite.complete"
 ' den-native "$resolver" "$nsswitch" "$namespace_tmp"

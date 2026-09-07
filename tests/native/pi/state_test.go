@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -62,20 +61,19 @@ func TestPiStateSelectionPrecedenceAndDefaultCreation(t *testing.T) {
 
 func TestPiStateRejectsProtectedHomesAliasesAndOverlaps(t *testing.T) {
 	fixture := newPiFixture(t)
-	account, err := user.Current()
-	if err != nil || account.HomeDir == "" {
-		t.Fatalf("invoking account home unavailable: %v", err)
-	}
 	protected := []string{
-		filepath.Join(account.HomeDir, ".pi/agent"),
-		filepath.Join(account.HomeDir, ".agents"),
+		filepath.Join(fixture.invokingHome, ".pi/agent"),
+		filepath.Join(fixture.invokingHome, ".agents"),
 		filepath.Join(fixture.runtimeHome, ".pi/agent"),
 		filepath.Join(fixture.runtimeHome, ".agents/skills"),
 	}
-	if account.HomeDir == fixture.runtimeHome {
+	if fixture.invokingHome == fixture.runtimeHome {
 		t.Fatal("home-difference fixture is ineffective")
 	}
 	for _, path := range protected {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
 		for _, binding := range []string{"PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"} {
 			t.Run(binding+strings.ReplaceAll(path, "/", "_"), func(t *testing.T) {
 				result := fixture.launch("", []string{binding + "=" + path}, nil, "--mode", "rpc")
@@ -147,27 +145,32 @@ func TestPiStateRejectsProtectedHomesAliasesAndOverlaps(t *testing.T) {
 	}
 }
 
-func TestPiIsolatedCredentialTrustWritesAndRuntimeHomeDenies(t *testing.T) {
+func TestPiIsolatedCredentialTrustWritesAndBothHomeDenies(t *testing.T) {
 	fixture := newPiFixture(t)
-	for _, relative := range []string{".pi/agent/auth.json", ".agents/skills/host/SKILL.md"} {
-		path := filepath.Join(fixture.runtimeHome, relative)
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("fixture-only host sentinel\n"), 0o600); err != nil {
-			t.Fatal(err)
+	for _, home := range []string{fixture.invokingHome, fixture.runtimeHome} {
+		for _, relative := range []string{"control.txt", ".pi/agent/auth.json", ".agents/skills/host/SKILL.md"} {
+			path := filepath.Join(home, relative)
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("fixture-only host sentinel\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	before := snapshotPaths(t, fixture.runtimeHome)
+	before := snapshotPaths(t, fixture.invokingHome, fixture.runtimeHome)
 	result := fixture.run(os.Getenv("DEN_NATIVE_PI_SANDBOX"), rpcInput(`{"id":"state-probe","type":"prompt","message":"/native-switch state-probe"}`), nil, "--mode", "rpc")
 	requireRPCResponse(t, result, "state-probe", true, "")
-	requireReportLines(t, fixture.reportPath(), "state-probe:credential-and-trust-written", "state-probe:home-denied:2")
+	requireReportLines(t, fixture.reportPath(), "state-probe:credential-and-trust-written",
+		"state-probe:control-readable:invoking", "state-probe:control-readable:runtime",
+		"state-probe:denied:invoking:.pi/agent/auth.json", "state-probe:denied:invoking:.agents/skills/host/SKILL.md",
+		"state-probe:denied:runtime:.pi/agent/auth.json", "state-probe:denied:runtime:.agents/skills/host/SKILL.md", "state-probe:home-denied:4")
 	for _, name := range []string{"auth.json", "trust.json"} {
 		if !pathExists(filepath.Join(fixture.agentDir, name)) {
 			t.Fatalf("isolated %s was not written", name)
 		}
 	}
-	if snapshotPaths(t, fixture.runtimeHome) != before {
+	if snapshotPaths(t, fixture.invokingHome, fixture.runtimeHome) != before {
 		t.Fatal("Pi changed host-global state")
 	}
 	requireNoCredential(t, result, "native-fixture-only-key")
@@ -200,8 +203,8 @@ export default function () { writeFileSync(%s, %s); }
 	if pathExists(projectMarker) {
 		t.Fatal("untrusted project extension loaded")
 	}
-	requireReportLines(t, fixture.reportPath(), "session-start:startup:worktree:false:")
-	if report, _ := os.ReadFile(fixture.reportPath()); strings.Contains(string(report), "inventory:skill:project-skill:") {
+	requireReportLines(t, fixture.reportPath(), "session-start:startup:worktree:false:sessions")
+	if report, _ := os.ReadFile(fixture.reportPath()); reportHasLine(report, "inventory:skill:project-skill:ambient") {
 		t.Fatal("untrusted project skill loaded")
 	}
 	_ = os.Remove(fixture.reportPath())
@@ -216,7 +219,7 @@ export default function () { writeFileSync(%s, %s); }
 	if result.err != nil {
 		t.Fatalf("trusted startup failed: %v\n%s", result.err, result.stderr)
 	}
-	requireReportLines(t, fixture.reportPath(), "session-start:startup:worktree:true:", "inventory:skill:project-skill:ambient")
+	requireReportLines(t, fixture.reportPath(), "session-start:startup:worktree:true:sessions", "inventory:skill:project-skill:ambient")
 	if contents, err := os.ReadFile(projectMarker); err != nil || string(contents) != "loaded\n" {
 		t.Fatalf("saved trust did not permit the real project extension: %q / %v", contents, err)
 	}
@@ -227,7 +230,7 @@ func TestPiRPCSessionSwitchContainmentAndOrdering(t *testing.T) {
 	valid := writeSession(t, fixture.sessionDir, "valid.jsonl", "valid", fixture.worktree)
 	result := fixture.rpc(nil, rpcSwitch("valid", valid))
 	requireRPCSuccess(t, result)
-	requireReportLines(t, fixture.reportPath(), "session-before:valid.jsonl", "session-start:resume:worktree:true:")
+	requireReportLines(t, fixture.reportPath(), "session-before:valid.jsonl", "session-start:resume:worktree:true:sessions")
 
 	outsideDir := filepath.Join(fixture.root, "outside")
 	if err := os.Mkdir(outsideDir, 0o700); err != nil {
@@ -287,7 +290,7 @@ func TestPiRPCSessionSwitchContainmentAndOrdering(t *testing.T) {
 			}
 			requireRPCResponse(t, result, name, false, message)
 			report, _ := os.ReadFile(attempt.reportPath())
-			if strings.Contains(string(report), "session-before:"+filepath.Base(target)) {
+			if reportHasLine(report, "session-before:"+filepath.Base(target)) {
 				t.Fatalf("invalid switch reached extension event: %s", report)
 			}
 			if name == "outside_before_read" && strings.Contains(result.stdout+result.stderr, "valid session") {
@@ -308,9 +311,9 @@ func TestPiSessionTargetSwapUsesValidatedBytes(t *testing.T) {
 	}
 	target := writeSession(t, fixture.sessionDir, "swap.jsonl", "trusted", trustedCwd)
 	outside := writeSession(t, fixture.worktree, "hostile.jsonl", "hostile", hostileCwd)
-	runInteractiveCommand(t, fixture, "interactive", target, "DEN_PI_SWAP_TARGET="+target, "DEN_PI_SWAP_OUTSIDE="+outside)
-	requireReportLines(t, fixture.reportPath(), "session-target-swapped", "session-start:resume:trusted-cwd:true")
-	if report, _ := os.ReadFile(fixture.reportPath()); strings.Contains(string(report), "session-start:resume:hostile-cwd") {
+	runNativeResume(t, fixture, target, "trusted-cwd", false, "DEN_PI_SWAP_TARGET="+target, "DEN_PI_SWAP_OUTSIDE="+outside)
+	requireReportLines(t, fixture.reportPath(), "session-target-swapped", "session-start:resume:trusted-cwd:true:sessions")
+	if report, _ := os.ReadFile(fixture.reportPath()); reportHasLine(report, "session-start:resume:hostile-cwd:true:sessions") {
 		t.Fatal("Pi reopened attacker-replaced session bytes")
 	}
 }
@@ -322,8 +325,8 @@ func TestPiExtensionMutationCannotChangeCapturedSessionRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	valid := writeSession(t, fixture.sessionDir, "extension.jsonl", "extension", fixture.worktree)
-	runInteractiveCommand(t, fixture, "interactive", valid, "DEN_PI_MUTATE_SESSION_ENV="+hostileDir)
-	requireReportLines(t, fixture.reportPath(), "session-loaded:interactive:worktree")
+	runNativeResume(t, fixture, valid, "worktree", false, "DEN_PI_MUTATE_SESSION_ENV="+hostileDir)
+	requireReportLines(t, fixture.reportPath(), "session-start:resume:worktree:true:hostile-sessions")
 
 	attempt := newPiFixture(t)
 	hostileDir = filepath.Join(attempt.worktree, "hostile-sessions")
@@ -335,7 +338,7 @@ func TestPiExtensionMutationCannotChangeCapturedSessionRoot(t *testing.T) {
 		[]string{"DEN_PI_MUTATE_SESSION_ENV=" + hostileDir}, "--mode", "rpc")
 	requireRPCResponse(t, result, "hostile", false, "Pi session target escapes the configured directory")
 	report, _ := os.ReadFile(attempt.reportPath())
-	if strings.Contains(string(report), "session-before:hostile.jsonl") {
+	if reportHasLine(report, "session-before:hostile.jsonl") {
 		t.Fatal("environment escape reached the before-switch event")
 	}
 }
@@ -366,7 +369,7 @@ func TestPiSessionRootIdentityChangeIsRejectedBeforeEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { cancel(); _ = stdin.Close() })
-	waitForReportLine(t, fixture.reportPath(), "session-start:startup:", 10*time.Second)
+	waitForReportLine(t, fixture.reportPath(), "session-start:startup:worktree:true:sessions", 10*time.Second)
 	held := fixture.sessionDir + ".held"
 	if err := os.Rename(fixture.sessionDir, held); err != nil {
 		t.Fatal(err)
@@ -384,7 +387,7 @@ func TestPiSessionRootIdentityChangeIsRejectedBeforeEvent(t *testing.T) {
 		t.Fatalf("real Fence RPC failed: %v", err)
 	}
 	requireRPCResponse(t, commandResult{stdout: output.String()}, "root-identity", false, "Pi session directory changed after startup")
-	if report, _ := os.ReadFile(fixture.reportPath()); strings.Contains(string(report), "session-before:root-identity.jsonl") {
+	if report, _ := os.ReadFile(fixture.reportPath()); reportHasLine(report, "session-before:root-identity.jsonl") {
 		t.Fatal("changed session root reached the before-switch event")
 	}
 }
@@ -422,20 +425,26 @@ func TestPiExtensionSessionSwitchRejectsAdversarialTargets(t *testing.T) {
 			request, _ := json.Marshal(map[string]string{"id": "extension-reject", "type": "prompt", "message": "/native-switch reject " + target})
 			result := fixture.rpc(nil, string(request))
 			requireRPCResponse(t, result, "extension-reject", true, "")
-			requireReportLines(t, fixture.reportPath(), "session-rejected:reject:")
-			if report, _ := os.ReadFile(fixture.reportPath()); strings.Contains(string(report), "session-before:"+filepath.Base(target)) {
+			requireReportLines(t, fixture.reportPath(), "session-rejected:reject:"+filepath.Base(target))
+			if report, _ := os.ReadFile(fixture.reportPath()); reportHasLine(report, "session-before:"+filepath.Base(target)) {
 				t.Fatal("invalid extension switch reached before-switch event")
 			}
 		})
 	}
 }
 
-func TestPiInteractiveRejectsOutOfRootSwitch(t *testing.T) {
+func TestPiNativeResumeRejectsPostDiscoverySymlinkBeforeEvents(t *testing.T) {
 	fixture := newPiFixture(t)
-	target := writeSession(t, fixture.worktree, "hostile.jsonl", "hostile", fixture.worktree)
-	runInteractiveCommand(t, fixture, "interactive-reject", target)
-	if report, _ := os.ReadFile(fixture.reportPath()); strings.Contains(string(report), "session-before:hostile.jsonl") {
-		t.Fatal("invalid interactive switch reached before-switch event")
+	target := writeSession(t, fixture.sessionDir, "selector.jsonl", "selector", fixture.worktree)
+	runNativeResume(t, fixture, target, "worktree", true)
+	report, err := os.ReadFile(fixture.reportPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(report), "\n") {
+		if strings.HasPrefix(line, "session-before:") || strings.HasPrefix(line, "session-start:resume:") {
+			t.Fatalf("post-discovery replacement reached extension events: %s", report)
+		}
 	}
 }
 
@@ -448,36 +457,37 @@ func TestPiRPCExtensionSessionSwitch(t *testing.T) {
 	requireReportLines(t, fixture.reportPath(), "session-before:extension-rpc.jsonl", "session-loaded:rpc-extension:worktree")
 }
 
-func TestPiInteractiveExtensionSessionSwitch(t *testing.T) {
+func TestPiNativeResumeSelectsContainedSession(t *testing.T) {
 	fixture := newPiFixture(t)
-	target := writeSession(t, fixture.sessionDir, "interactive.jsonl", "interactive", fixture.worktree)
-	runInteractiveCommand(t, fixture, "interactive", target)
-	requireReportLines(t, fixture.reportPath(), "session-before:interactive.jsonl", "session-loaded:interactive:worktree")
+	target := writeSession(t, fixture.sessionDir, "selector.jsonl", "selector", fixture.worktree)
+	runNativeResume(t, fixture, target, "worktree", false)
+	requireReportLines(t, fixture.reportPath(), "session-before:selector.jsonl", "session-start:resume:worktree:true:sessions")
 }
 
-func runInteractiveCommand(t *testing.T, fixture *piFixture, mode, target string, extra ...string) string {
+// Drive Pi's own /resume selector over a real PTY. A displayed unique session
+// name proves discovery completed before the host replaces the selected inode.
+func runNativeResume(t *testing.T, fixture *piFixture, target, cwd string, replace bool, extra ...string) {
 	t.Helper()
-	return runInteractiveBinary(t, fixture, os.Getenv("DEN_NATIVE_PI_SANDBOX"), nil, mode, target, extra...)
-}
-
-func runInteractiveBinary(t *testing.T, fixture *piFixture, binary string, arguments []string, mode, target string, extra ...string) string {
-	t.Helper()
+	const name = "pi8pick"
+	file, err := os.OpenFile(target, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fmt.Fprintf(file, `{"type":"session_info","id":"12345678","parentId":null,"timestamp":"2026-09-05T00:00:00.000Z","name":%q}`+"\n", name)
+	if closeErr := file.Close(); err != nil || closeErr != nil {
+		t.Fatalf("name selector session: %v / %v", err, closeErr)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	script := os.Getenv("DEN_NATIVE_SCRIPT")
-	piArguments := append(append([]string{}, arguments...), "--mode", "interactive")
+	script, binary := os.Getenv("DEN_NATIVE_SCRIPT"), os.Getenv("DEN_NATIVE_PI_SANDBOX")
 	var command *exec.Cmd
 	if strings.HasSuffix(os.Getenv("DEN_NATIVE_HOST_SYSTEM"), "-linux") {
-		line := shellQuote(binary)
-		for _, argument := range piArguments {
-			line += " " + shellQuote(argument)
-		}
-		command = exec.CommandContext(ctx, script, "--quiet", "--return", "--command", line, "/dev/null")
+		command = exec.CommandContext(ctx, script, "--quiet", "--return", "--command", shellQuote(binary)+" --mode interactive", "/dev/null")
 	} else {
-		command = exec.CommandContext(ctx, script, append([]string{"-q", "/dev/null", binary}, piArguments...)...)
+		command = exec.CommandContext(ctx, script, "-q", "/dev/null", binary, "--mode", "interactive")
 	}
 	command.Dir = fixture.worktree
-	if mode == "interactive-reject" {
+	if replace {
 		extra = append(extra, "DEN_PI_OBSERVE_INTERACTIVE_REJECTION=1")
 	}
 	command.Env = fixture.environment(append(extra, "TERM=xterm-256color")...)
@@ -492,58 +502,75 @@ func runInteractiveBinary(t *testing.T, fixture *piFixture, binary string, argum
 	}
 	done := make(chan error, 1)
 	go func() { done <- command.Wait() }()
-	deadline := time.NewTimer(10 * time.Second)
-	defer deadline.Stop()
-	ready := time.NewTicker(25 * time.Millisecond)
-	defer ready.Stop()
-	for {
-		if contents, err := os.ReadFile(fixture.reportPath()); err == nil && strings.Contains(string(contents), "session-start:startup:") {
-			break
+	defer stdin.Close()
+	wait := func(description string, ready func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			if ready() {
+				return
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("Pi exited before %s: %v\n%s", description, err, output.String())
+			default:
+				time.Sleep(25 * time.Millisecond)
+			}
 		}
-		select {
-		case err := <-done:
-			t.Fatalf("interactive Pi exited before startup report: %v\n%s", err, output.String())
-		case <-deadline.C:
-			t.Fatalf("timed out waiting for interactive startup report\n%s", output.String())
-		case <-ready.C:
+		t.Fatalf("timed out waiting for %s\n%s", description, output.String())
+	}
+	hasReport := func(line string) bool {
+		contents, _ := os.ReadFile(fixture.reportPath())
+		return reportHasLine(contents, line)
+	}
+	sessionName := filepath.Base(fixture.sessionDir)
+	for _, entry := range extra {
+		if value, ok := strings.CutPrefix(entry, "DEN_PI_MUTATE_SESSION_ENV="); ok {
+			sessionName = filepath.Base(value)
 		}
 	}
-	if _, err := fmt.Fprint(stdin, "/native-switch "+mode+" "+target+"\r"); err != nil {
+	wait("startup", func() bool { return hasReport("session-start:startup:worktree:true:" + sessionName) })
+	if _, err := fmt.Fprint(stdin, "/resume\r"); err != nil {
 		t.Fatal(err)
 	}
-	wanted := "session-loaded:" + mode + ":"
-	if mode == "interactive-reject" {
-		wanted = "session-interactive-error:outside-root"
-	}
-	deadline.Reset(10 * time.Second)
-	for {
-		if contents, err := os.ReadFile(fixture.reportPath()); err == nil && strings.Contains(string(contents), wanted) {
-			break
-		}
-		select {
-		case err := <-done:
-			if contents, readErr := os.ReadFile(fixture.reportPath()); readErr == nil && strings.Contains(string(contents), wanted) && interactiveExitMatches(mode, err) {
-				return output.String()
-			}
-			t.Fatalf("interactive Pi exited before %q report: %v\n%s", wanted, err, output.String())
-		case <-deadline.C:
-			t.Fatalf("timed out waiting for interactive report %q\n%s", wanted, output.String())
-		case <-ready.C:
+	if cwd != "worktree" {
+		wait("native selector header", func() bool { return strings.Contains(output.String(), "Resume Session") })
+		if _, err := fmt.Fprint(stdin, "\t"); err != nil {
+			t.Fatal(err)
 		}
 	}
-	_ = stdin.Close()
-	if err := <-done; !interactiveExitMatches(mode, err) {
-		t.Fatalf("interactive extension switch failed: %v\n%s", err, output.String())
+	wait("native selector discovery", func() bool { return strings.Contains(output.String(), name) })
+	if replace {
+		outside := filepath.Join(fixture.worktree, "unparsed-outside.jsonl")
+		if err := os.WriteFile(outside, []byte("must not be parsed\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(target, target+".discovered"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, target); err != nil {
+			t.Fatal(err)
+		}
 	}
-	return output.String()
-}
-
-func interactiveExitMatches(mode string, err error) bool {
-	if mode != "interactive-reject" {
-		return err == nil
+	if _, err := fmt.Fprint(stdin, "\r"); err != nil {
+		t.Fatal(err)
 	}
-	exit, ok := err.(*exec.ExitError)
-	return ok && exit.ExitCode() == 1
+	if replace {
+		err := <-done
+		exit, ok := err.(*exec.ExitError)
+		if !ok || exit.ExitCode() != 1 {
+			t.Fatalf("native selector expected fatal rejection: %v\n%s", err, output.String())
+		}
+		requireReportLines(t, fixture.reportPath(), "session-interactive-error:regular-file")
+	} else {
+		wait("native resume event", func() bool { return hasReport("session-start:resume:" + cwd + ":true:" + sessionName) })
+		if _, err := fmt.Fprint(stdin, "/quit\r"); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; err != nil {
+			t.Fatalf("native resume failed: %v\n%s", err, output.String())
+		}
+	}
 }
 
 func requireStateLaunch(t *testing.T, result commandResult, agentDir, sessionDir string) {

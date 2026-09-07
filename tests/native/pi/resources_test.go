@@ -3,6 +3,7 @@
 package pi
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +13,7 @@ import (
 func prepareAmbientResources(t *testing.T, fixture *piFixture) {
 	t.Helper()
 	files := map[string]string{
-		"extensions/ambient.ts":         `import {appendFileSync} from "node:fs"; import {join} from "node:path"; export default function() { appendFileSync(join(process.env.PI_CODING_AGENT_DIR!, "pi-resources.report"), "extension:ambient-extension\\n"); }`,
+		"extensions/ambient.ts":         `import {appendFileSync} from "node:fs"; import {join} from "node:path"; export default function() { appendFileSync(join(process.env.PI_CODING_AGENT_DIR!, "pi-resources.report"), "extension:ambient-extension\n"); }`,
 		"skills/ambient-skill/SKILL.md": "---\nname: ambient-skill\ndescription: Ambient skill fixture\n---\nAmbient skill.\n",
 		"prompts/ambient-prompt.md":     "Ambient prompt.\n",
 	}
@@ -67,7 +68,7 @@ func TestPiConfiguredImmutableResourcesLoadInOrder(t *testing.T) {
 	}
 	previous := -1
 	for _, name := range want {
-		position := strings.Index(report, name)
+		position := reportLineIndex(contents, name)
 		if position < 0 || position < previous {
 			t.Fatalf("configured resource order is missing %q in %q", name, report)
 		}
@@ -77,13 +78,19 @@ func TestPiConfiguredImmutableResourcesLoadInOrder(t *testing.T) {
 
 func TestPiImmutableExtensionCollisionNamesWinnerAndLoser(t *testing.T) {
 	fixture := newPiFixture(t)
-	loser := filepath.Join(os.Getenv("DEN_NATIVE_PI_RESOURCE_FIXTURE"), "extensions/z-collision.ts")
+	loser := filepath.Join(os.Getenv("DEN_NATIVE_PI_RESOURCE_FIXTURE"), "collision-package/extensions/z-collision.ts")
+	var winner string
 	result := fixture.launch("", nil, func(document map[string]any) {
 		agent := document["agent"].(map[string]any)
-		agent["resourceArgs"] = append(agent["resourceArgs"].([]any), "--extension", loser)
+		for _, argument := range agent["resourceArgs"].([]any) {
+			if path, ok := argument.(string); ok && strings.HasSuffix(path, "-report-extension.ts") {
+				winner = path
+			}
+		}
+		agent["resourceArgs"] = append(agent["resourceArgs"].([]any), "--extension", filepath.Dir(filepath.Dir(loser)))
 	}, "--mode", "rpc")
 	requireDeniedWith(t, result, `Tool "native-collision" conflicts with `)
-	if !strings.Contains(result.stderr, loser) || !strings.Contains(result.stderr, "report-extension.ts") {
+	if winner == "" || !reportHasLine([]byte(result.stderr), fmt.Sprintf(`Error: Failed to load extension "%s": Tool "native-collision" conflicts with %s`, loser, winner)) {
 		t.Fatalf("actual extension collision did not name both immutable paths: %s", result.stderr)
 	}
 	report, _ := os.ReadFile(fixture.reportPath())
@@ -122,17 +129,34 @@ func TestPiNoDiscoveryFlagsKeepMandatoryResources(t *testing.T) {
 			if kind == "extension" {
 				needle = "extension:ambient-extension"
 			}
-			if strings.Contains(string(report), needle) == disabled {
+			if reportHasLine(report, needle) == disabled {
 				t.Fatalf("%s ambient subgroup not isolated by %q: %s", kind, flag, report)
 			}
+			if !disabled && kind == "extension" {
+				direct := reportLineIndex(report, "extension:switch-extension")
+				packaged := reportLineIndex(report, "package:fixture-package")
+				ambient := reportLineIndex(report, needle)
+				if direct < 0 || direct >= packaged || packaged >= ambient {
+					t.Fatalf("extension direct/package/ambient order changed: %s", report)
+				}
+			}
 			if !disabled && kind != "extension" {
-				packageIndex := strings.Index(string(report), "inventory:"+kind+":native-collision:package")
-				ambientIndex := strings.Index(string(report), needle)
-				directIndex := strings.Index(string(report), "inventory:"+kind+":"+map[string]string{"skill": "fixture-skill", "prompt": "prompt", "theme": "fixture-theme"}[kind]+":direct")
+				packageIndex := reportLineIndex(report, "inventory:"+kind+":native-collision:package")
+				ambientIndex := reportLineIndex(report, needle)
+				directIndex := reportLineIndex(report, "inventory:"+kind+":"+map[string]string{"skill": "fixture-skill", "prompt": "prompt", "theme": "fixture-theme"}[kind]+":direct")
 				if packageIndex < 0 || packageIndex >= ambientIndex || ambientIndex >= directIndex {
 					t.Fatalf("%s subgroup order changed: %s", kind, report)
 				}
 			}
 		}
 	}
+}
+
+func reportLineIndex(report []byte, line string) int {
+	for index, candidate := range strings.Split(string(report), "\n") {
+		if candidate == line {
+			return index
+		}
+	}
+	return -1
 }

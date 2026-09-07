@@ -126,12 +126,21 @@ async function exerciseState() {
   new ProjectTrustStore(root).set(process.cwd(), true);
   report("state-probe:credential-and-trust-written");
   let denied = 0;
-  for (const relative of [".pi/agent/auth.json", ".agents/skills/host/SKILL.md"]) {
-    try { readFileSync(join(process.env.HOME!, relative)); }
-    catch (error: any) {
-      // Linux Fence hides denied home trees from its mount namespace;
-      // Darwin denies their reads. The host test proves these sentinels exist.
-      if (!["EACCES", "EPERM", "ENOENT"].includes(error.code)) throw error;
+  for (const [name, home] of [["invoking", process.env.DEN_NATIVE_INVOKING_HOME], ["runtime", process.env.HOME]]) {
+    if (!home) throw new Error("synthetic home is required");
+    if (readFileSync(join(home, "control.txt"), "utf8") !== "fixture-only host sentinel\n") throw new Error("home control was not readable");
+    report(`state-probe:control-readable:${name}`);
+    for (const relative of [".pi/agent/auth.json", ".agents/skills/host/SKILL.md"]) {
+      let rejected = false;
+      try { readFileSync(join(home, relative)); }
+      catch (error: any) {
+        // Controls and protected sentinels share the granted worktree. The host
+        // proves all files exist; Fence hides denied trees on Linux.
+        if (!["EACCES", "EPERM", "ENOENT"].includes(error.code)) throw error;
+        rejected = true;
+      }
+      if (!rejected) throw new Error(`protected ${name} home resource was readable`);
+      report(`state-probe:denied:${name}:${relative}`);
       denied++;
     }
   }
@@ -146,7 +155,7 @@ export default async function switchExtension(pi: any) {
     const { InteractiveMode } = await import(join(process.env.PI_PACKAGE_DIR!, "dist/modes/interactive/interactive-mode.js"));
     const original = InteractiveMode.prototype.handleFatalRuntimeError;
     InteractiveMode.prototype.handleFatalRuntimeError = function (prefix: string, error: Error) {
-      if (error.message === "Pi session target escapes the configured directory") report("session-interactive-error:outside-root");
+      if (error.message === "Pi session target must be an existing regular file") report("session-interactive-error:regular-file");
       return original.call(this, prefix, error);
     };
   }
@@ -176,7 +185,7 @@ export default async function switchExtension(pi: any) {
         await exercisePackageManager(mode.slice("package-".length));
         return;
       }
-      if (mode === "reject" || mode === "interactive-reject") {
+      if (mode === "reject") {
         let rejected = false;
         try { await ctx.switchSession(target); }
         catch (error) {
@@ -186,14 +195,12 @@ export default async function switchExtension(pi: any) {
           report(`session-rejected:${mode}:${basename(target)}`);
         }
         if (!rejected) throw new Error("invalid extension switch succeeded");
-        if (mode === "interactive-reject") ctx.shutdown();
         return;
       }
       await ctx.switchSession(target, {
         withSession: async (fresh: any) => {
           const cwd = fresh.cwd ?? fresh.sessionManager.getCwd();
           report(`session-loaded:${mode}:${basename(cwd)}`);
-          if (mode === "interactive") fresh.shutdown();
         },
       });
     },
