@@ -20,6 +20,7 @@ var requiredEnvironment = []string{
 	"DEN_NATIVE_LAUNCHER",
 	"DEN_NATIVE_FENCE",
 	"DEN_NATIVE_REPOWOLF_CLIENT_DIR",
+	"DEN_NATIVE_SCRIPT",
 }
 
 func TestMain(m *testing.M) {
@@ -54,5 +55,21 @@ func requireNoCredential(t testing.TB, result commandResult, credential string) 
 	t.Helper()
 	if strings.Contains(result.stdout, credential) || strings.Contains(result.stderr, credential) {
 		t.Fatal("Pi launch disclosed fixture credential")
+	}
+}
+
+func TestPiRPCUsesConfiguredInProcessProvider(t *testing.T) {
+	fixture := newPiFixture(t)
+	result := fixture.rpc([]string{"--model", "den-native/fixture"},
+		`{"id":"fixture-prompt","type":"prompt","message":"native provider request"}`)
+	if result.err != nil {
+		t.Fatalf("configured-provider RPC failed: %v\n%s", result.err, result.stderr)
+	}
+	requireNoCredential(t, result, "not-a-real-provider-credential")
+	if !strings.Contains(result.stdout, "native provider response") {
+		t.Fatalf("RPC did not return the in-process provider response: %s", result.stdout)
+	}
+	if !strings.Contains(result.stdout, `"id":"fixture-prompt"`) {
+		t.Fatalf("RPC request was not processed as a newline-delimited record: %s", result.stdout)
 	}
 }

@@ -265,6 +265,7 @@ pkgs.writeShellApplication {
     export DEN_NATIVE_MANIFEST=${fixtureSandbox.denManifest}
     export DEN_NATIVE_LAUNCHER=${launcher}/bin/den-launcher
     export DEN_NATIVE_FENCE=${fence}/bin/fence
+    export DEN_NATIVE_SCRIPT=${if pkgs.stdenv.isDarwin then "/usr/bin/script" else "${pkgs.util-linux}/bin/script"}
     export DEN_NATIVE_SETTINGS_MERGE=${claudeSettingsMerge}/bin/claude-settings-merge
     export DEN_NATIVE_REPOWOLF_CLIENT_DIR=${repoWolfClient}
     export DEN_NATIVE_REPOWOLF_FIXTURE=${repoWolfFixture}/bin/den-native-repowolf-fixture
