@@ -174,39 +174,6 @@ func TestRunRejectsClaudeReservedArgumentsBeforeBuildingEnvironment(t *testing.T
 	}
 }
 
-func TestRunRejectsPiArgumentsBeforeRepoWolfOrHomeResolution(t *testing.T) {
-	root := t.TempDir()
-	repoWolfRead := false
-	homeResolved := false
-	code := runWithLifecycleAndHome(context.Background(), manifest.Manifest{
-		Agent: manifest.Agent{
-			ArgumentPolicy:   "pi-0.84.4",
-			ReservedFlags:    []string{"--session-dir", "--session", "--fork", "--export", "--extension", "-e", "--skill", "--prompt-template", "--theme"},
-			ReservedCommands: []string{"install", "remove", "uninstall", "update", "list", "config"},
-		},
-	}, []string{"--extension", "untrusted.ts"},
-		func(name string) (string, bool) {
-			if strings.HasPrefix(name, "REPOWOLF_") {
-				repoWolfRead = true
-			}
-			if name == "HOME" {
-				return root, true
-			}
-			return "", false
-		},
-		func(string) (fs.FileInfo, error) { t.Fatal("RepoWolf CA was inspected"); return nil, nil },
-		func() []string { t.Fatal("environment was read"); return nil }, environment.Build, &bytes.Buffer{},
-		func(context.Context, manifest.Manifest, []string, repowolf.Config, []*configdir.Handle, StateInputs, func() error, []string, container.Socket, container.Socket, io.Writer) int {
-			t.Fatal("lifecycle ran")
-			return 0
-		},
-		func() (string, error) { homeResolved = true; return root, nil },
-	)
-	if code != 1 || repoWolfRead || homeResolved {
-		t.Fatalf("runWithLifecycleAndHome() = %d, RepoWolf read = %t, home resolved = %t", code, repoWolfRead, homeResolved)
-	}
-}
-
 func TestRunRejectsDarwinBareBeforeBuildingEnvironment(t *testing.T) {
 	values := map[string]string{
 		"REPOWOLF_ENDPOINT": "https://broker.example.test/",

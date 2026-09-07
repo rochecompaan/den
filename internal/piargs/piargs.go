@@ -23,6 +23,9 @@ func Validate(manifestFlags, manifestCommands, userArgs []string) error {
 		return errors.New("Pi package commands are disabled by Den")
 	}
 	for index, argument := range userArgs {
+		if argument == "--" {
+			break
+		}
 		switch argument {
 		case "--session-dir", "--export", "--extension", "-e", "--skill", "--prompt-template", "--theme":
 			return errors.New("Pi argument conflicts with a Den-owned input; remove it")

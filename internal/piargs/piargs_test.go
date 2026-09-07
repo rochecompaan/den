@@ -73,6 +73,9 @@ func TestPiArgumentPolicy(t *testing.T) {
 		{"update after terminator", []string{"--", "update"}, true},
 		{"list after terminator", []string{"--", "list"}, true},
 		{"config after terminator", []string{"--", "config"}, true},
+		{"reserved long option after terminator", []string{"--", "--extension"}, true},
+		{"reserved session option after terminator", []string{"--", "--session-dir"}, true},
+		{"reserved short option after terminator", []string{"--", "-euntrusted.ts"}, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := Validate([]string{"--session-dir", "--session", "--fork", "--export", "--extension", "-e", "--skill", "--prompt-template", "--theme"}, []string{"install", "remove", "uninstall", "update", "list", "config"}, test.args)
