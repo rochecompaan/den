@@ -27,6 +27,30 @@ func TestPlanBindingsRejectsOverlapsBeforeOpeningDirectories(t *testing.T) {
 	}
 }
 
+func TestPlanBindingsRejectsDistinctPathsWithOneCanonicalDirectory(t *testing.T) {
+	// Catches a planner regression that compares lexical paths before resolving
+	// existing parent symlinks, allowing two bindings to claim one state directory.
+	root := t.TempDir()
+	home := privateDir(t, root, "home")
+	target := privateDir(t, root, "state-root")
+	alias := filepath.Join(root, "state-alias")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	direct := filepath.Join(target, "shared")
+	throughAlias := filepath.Join(alias, "shared")
+	specs := []manifest.StateBinding{
+		{Name: "direct", ExplicitPath: &direct, Exports: []manifest.StateExport{{Kind: "environment", Name: "DIRECT"}}},
+		{Name: "alias", ExplicitPath: &throughAlias, Exports: []manifest.StateExport{{Kind: "environment", Name: "ALIAS"}}},
+	}
+	if _, err := PlanBindings(specs, nil, home); err == nil {
+		t.Fatal("PlanBindings() accepted two paths that resolve to one directory")
+	}
+	if _, err := os.Lstat(direct); !os.IsNotExist(err) {
+		t.Fatalf("planning created shared state: %v", err)
+	}
+}
+
 func TestPlanBindingsDefaultAndCustomDenySets(t *testing.T) {
 	root := t.TempDir()
 	home := privateDir(t, root, "home")
@@ -70,7 +94,60 @@ func TestPlanBindingsResolvesRelativeDefaultAndRejectsEmptyInherited(t *testing.
 	}
 }
 
+func TestPlanBindingsPrefersExplicitThenInheritedThenDefault(t *testing.T) {
+	// Catches selection-order regressions that let inherited state override an
+	// explicit directory, or bypass inherited state for a Den-owned default.
+	root := t.TempDir()
+	home := privateDir(t, root, "home")
+	defaultPath := filepath.Join(home, ".local", "state", "agent")
+	if err := os.MkdirAll(filepath.Dir(defaultPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inheritedPath := filepath.Join(root, "inherited")
+	explicitPath := filepath.Join(root, "explicit")
+	probe := filepath.Join(root, "acl-probe")
+	if err := os.WriteFile(probe, []byte("#!/bin/sh\nprintf 'user::rwx\\ngroup::---\\nother::---\\n'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name      string
+		explicit  *string
+		inherited map[string]string
+		canonical string
+		writable  []string
+		denied    []string
+	}{
+		{"default", nil, nil, defaultPath, []string{defaultPath + string(os.PathSeparator)}, nil},
+		{"inherited", nil, map[string]string{"AGENT_DIR": inheritedPath}, inheritedPath, []string{inheritedPath + string(os.PathSeparator)}, []string{defaultPath + string(os.PathSeparator)}},
+		{"explicit wins over inherited", &explicitPath, map[string]string{"AGENT_DIR": inheritedPath}, explicitPath, []string{explicitPath + string(os.PathSeparator)}, []string{defaultPath + string(os.PathSeparator)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := manifest.StateBinding{Name: "agent", ExplicitPath: test.explicit, InheritedEnvironment: "AGENT_DIR", DefaultPath: ".local/state/agent", Exports: []manifest.StateExport{{Kind: "environment", Name: "AGENT_DIR", ExportDefault: true}}}
+			plan, err := PlanBindings([]manifest.StateBinding{spec}, test.inherited, home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			handles, err := plan.Open("linux", ACLValidator{ACLProbe: []string{probe}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = handles[0].Close() }()
+			if got := handles[0].CanonicalPath; got != test.canonical {
+				t.Fatalf("CanonicalPath = %q, want %q", got, test.canonical)
+			}
+			if got := handles[0].WritablePaths; !sameStrings(got, test.writable) {
+				t.Fatalf("WritablePaths = %#v, want %#v", got, test.writable)
+			}
+			if got := handles[0].DeniedDefaultPaths; !sameStrings(got, test.denied) {
+				t.Fatalf("DeniedDefaultPaths = %#v, want %#v", got, test.denied)
+			}
+		})
+	}
+}
+
 func TestPlanBindingsMixedDefaultsAndCustomsInEitherOrder(t *testing.T) {
+	// Catches aggregation regressions that grant an unselected binding's default
+	// or deny the selected binding's default after the binding order changes.
 	root := t.TempDir()
 	home := privateDir(t, root, "home")
 	agentDefault := filepath.Join(home, ".agent")
@@ -80,19 +157,29 @@ func TestPlanBindingsMixedDefaultsAndCustomsInEitherOrder(t *testing.T) {
 	binding := func(name, defaultPath string, custom *string) manifest.StateBinding {
 		return manifest.StateBinding{Name: name, ExplicitPath: custom, DefaultPath: defaultPath, DefaultWritablePaths: []string{defaultPath + string(os.PathSeparator)}, Exports: []manifest.StateExport{{Kind: "environment", Name: "STATE", ExportDefault: true}}}
 	}
-	for _, specs := range [][]manifest.StateBinding{
-		{binding("agent", agentDefault, nil), binding("sessions", sessionDefault, &sessionCustom)},
-		{binding("sessions", sessionDefault, &sessionCustom), binding("agent", agentDefault, nil)},
-		{binding("agent", agentDefault, &agentCustom), binding("sessions", sessionDefault, nil)},
-		{binding("sessions", sessionDefault, nil), binding("agent", agentDefault, &agentCustom)},
+	for _, test := range []struct {
+		name, writable, denied string
+		specs                  []manifest.StateBinding
+	}{
+		{"default agent custom sessions", agentDefault, sessionDefault, []manifest.StateBinding{binding("agent", agentDefault, nil), binding("sessions", sessionDefault, &sessionCustom)}},
+		{"custom sessions default agent reversed", agentDefault, sessionDefault, []manifest.StateBinding{binding("sessions", sessionDefault, &sessionCustom), binding("agent", agentDefault, nil)}},
+		{"custom agent default sessions", sessionDefault, agentDefault, []manifest.StateBinding{binding("agent", agentDefault, &agentCustom), binding("sessions", sessionDefault, nil)}},
+		{"default sessions custom agent reversed", sessionDefault, agentDefault, []manifest.StateBinding{binding("sessions", sessionDefault, nil), binding("agent", agentDefault, &agentCustom)}},
 	} {
-		plan, err := PlanBindings(specs, nil, home)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(plan.WritablePaths()) != 1 || len(plan.DeniedWritePaths()) != 1 {
-			t.Fatalf("mixed plan grants=%#v denies=%#v", plan.WritablePaths(), plan.DeniedWritePaths())
-		}
+		t.Run(test.name, func(t *testing.T) {
+			plan, err := PlanBindings(test.specs, nil, home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantWritable := []string{test.writable + string(os.PathSeparator)}
+			wantDenied := []string{test.denied + string(os.PathSeparator)}
+			if got := plan.WritablePaths(); !sameStrings(got, wantWritable) {
+				t.Fatalf("WritablePaths = %#v, want %#v", got, wantWritable)
+			}
+			if got := plan.DeniedWritePaths(); !sameStrings(got, wantDenied) {
+				t.Fatalf("DeniedWritePaths = %#v, want %#v", got, wantDenied)
+			}
+		})
 	}
 }
 

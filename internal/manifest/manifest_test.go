@@ -67,13 +67,43 @@ func TestValidateStateBinding(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsUnsafeAgentFields(t *testing.T) {
-	for _, test := range []struct{ old, new string }{
-		{`"commandName":"claude"`, `"commandName":"bad/name"`}, {`"argumentPolicy":"claude"`, `"argumentPolicy":""`}, {`"--safe"`, `""`}, {`"securityAdapter":null`, `"securityAdapter":{"kind":"settings","path":"relative","arguments":[]}`},
+func TestLoadRejectsUnsafeAgentContractValues(t *testing.T) {
+	// Catches validation regressions that admit malformed process controls into
+	// the launcher after the manifest has passed its version and schema checks.
+	for _, test := range []struct {
+		name, old, new string
+	}{
+		{"empty agent name", `"name":"claude"`, `"name":""`},
+		{"unsafe agent name", `"name":"claude"`, `"name":"bad/name"`},
+		{"slash command name", `"commandName":"claude"`, `"commandName":"bad/name"`},
+		{"empty command name", `"commandName":"claude"`, `"commandName":""`},
+		{"newline command name", `"commandName":"claude"`, `"commandName":"bad\nname"`},
+		{"empty argument policy", `"argumentPolicy":"claude"`, `"argumentPolicy":""`},
+		{"unsafe environment scrub name", `"scrub":[]`, `"scrub":["BAD-NAME"]`},
+		{"empty environment scrub name", `"scrub":[]`, `"scrub":[""]`},
+		{"unsafe environment set name", `"set":{}`, `"set":{"BAD-NAME":"value"}`},
+		{"empty environment set name", `"set":{}`, `"set":{"":"value"}`},
+		{"empty environment set value", `"set":{}`, `"set":{"SAFE":""}`},
+		{"unsafe environment export name", `"name":"CLAUDE_CONFIG_DIR"`, `"name":"BAD-NAME"`},
+		{"empty environment export name", `"name":"CLAUDE_CONFIG_DIR"`, `"name":""`},
+		{"unsafe argument export name", `"kind":"environment","name":"CLAUDE_CONFIG_DIR"`, `"kind":"argument","name":"session-dir"`},
+		{"empty mandatory argument", `"mandatoryArgs":["--safe"]`, `"mandatoryArgs":[""]`},
+		{"newline resource argument", `"resourceArgs":[]`, `"resourceArgs":["bad\nresource"]`},
+		{"empty resource argument", `"resourceArgs":[]`, `"resourceArgs":[""]`},
+		{"empty reserved flag", `"reservedFlags":["--safe"]`, `"reservedFlags":[""]`},
+		{"carriage-return reserved command", `"reservedCommands":[]`, `"reservedCommands":["bad\rcommand"]`},
+		{"empty reserved command", `"reservedCommands":[]`, `"reservedCommands":[""]`},
+		{"empty security adapter kind", `"securityAdapter":null`, `"securityAdapter":{"kind":"","path":"/nix/store/adapter","arguments":[]}`},
+		{"unsafe security adapter kind", `"securityAdapter":null`, `"securityAdapter":{"kind":"bad/kind","path":"/nix/store/adapter","arguments":[]}`},
+		{"relative security adapter path", `"securityAdapter":null`, `"securityAdapter":{"kind":"adapter","path":"relative","arguments":[]}`},
+		{"empty security argument", `"securityAdapter":null`, `"securityAdapter":{"kind":"adapter","path":"/nix/store/adapter","arguments":[""]}`},
+		{"newline security argument", `"securityAdapter":null`, `"securityAdapter":{"kind":"adapter","path":"/nix/store/adapter","arguments":["bad\nargument"]}`},
 	} {
-		if _, err := Load(writeManifest(t, strings.Replace(validManifest, test.old, test.new, 1))); err == nil {
-			t.Fatalf("Load accepted %s", test.new)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := Load(writeManifest(t, strings.Replace(validManifest, test.old, test.new, 1))); err == nil {
+				t.Fatalf("Load accepted malformed %s", test.name)
+			}
+		})
 	}
 }
 

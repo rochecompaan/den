@@ -152,33 +152,88 @@ func TestLifecycleCommitControlsCustomConfigurationRollback(t *testing.T) {
 }
 
 func TestLifecycleCommitsEveryStateDirectoryAfterChildStart(t *testing.T) {
+	// Catches a lifecycle regression where Fence's process-start callback does
+	// not commit every created state directory, leaving a started child's state
+	// eligible for the launch defer's rollback.
 	root := t.TempDir()
 	first, second := filepath.Join(root, "first"), filepath.Join(root, "second")
 	ca, probe := filepath.Join(root, "ca.pem"), filepath.Join(root, "acl-probe")
+	base, closures := filepath.Join(root, "base.json"), filepath.Join(root, "closures")
+	fence, agent := filepath.Join(root, "fence"), filepath.Join(root, "agent")
 	if err := os.WriteFile(ca, []byte("certificate"), 0o400); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(probe, []byte("#!/bin/sh\nprintf 'user::rwx\\ngroup::---\\nother::---\\n'\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	values := map[string]string{"REPOWOLF_ENDPOINT": "https://broker.example.test/", "REPOWOLF_TOKEN": "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "REPOWOLF_CA_FILE": ca, "HOME": root}
+	for path, contents := range map[string]string{
+		base:     `{"allowPty":true,"network":{"allowedDomains":[],"deniedDomains":[]},"filesystem":{"defaultDenyRead":true,"strictDenyRead":true,"allowGitConfig":true,"allowRead":[],"allowExecute":[],"allowWrite":[],"denyRead":[],"denyWrite":[]},"command":{"deny":[],"useDefaults":true}}`,
+		closures: root + "\n",
+		fence: `#!/bin/sh
+while [ "$1" != -- ]; do shift; done
+shift
+exec "$@"
+`,
+		agent: "#!/bin/sh\nexit 0\n",
+	} {
+		mode := os.FileMode(0o600)
+		if path == fence || path == agent {
+			mode = 0o700
+		}
+		if err := os.WriteFile(path, []byte(contents), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
 	bindings := []manifest.StateBinding{
 		{Name: "first", ExplicitPath: &first, Exports: []manifest.StateExport{{Kind: "environment", Name: "FIRST"}}},
 		{Name: "second", ExplicitPath: &second, Exports: []manifest.StateExport{{Kind: "environment", Name: "SECOND"}}},
 	}
-	code := runWithLifecycle(context.Background(), manifest.Manifest{StateBindings: bindings, ACLProbe: []string{probe}}, nil, lookup(values), os.Lstat, os.Environ, environment.Build, &bytes.Buffer{},
-		func(_ context.Context, _ manifest.Manifest, _ []string, _ repowolf.Config, handles []*configdir.Handle, _ StateInputs, _ func() error, _ []string, _, _ container.Socket, _ io.Writer) int {
-			commitStateHandles(handles)
-			return 17
-		})
-	if code != 17 {
-		t.Fatalf("runWithLifecycle() = %d, want 17", code)
-	}
-	for _, path := range []string{first, second} {
-		if _, err := os.Lstat(path); err != nil {
-			t.Fatalf("committed directory %q missing: %v", path, err)
+	open := func(t *testing.T) []*configdir.Handle {
+		t.Helper()
+		plan, err := configdir.PlanBindings(bindings, nil, root)
+		if err != nil {
+			t.Fatal(err)
 		}
+		handles, err := plan.Open("linux", configdir.ACLValidator{ACLProbe: []string{probe}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handles
 	}
+	launcherManifest := manifest.Manifest{Platform: "darwin", FenceExecutable: fence, BasePolicy: base, ClosurePathsFile: closures, ScratchRoot: root, Agent: manifest.Agent{Executable: agent}}
+	config := repowolf.Config{Hostname: "broker.example.test", CAFile: ca}
+	t.Run("before Fence starts rollback removes every directory", func(t *testing.T) {
+		handles := open(t)
+		code := runFenceWithTemporary(context.Background(), launcherManifest, nil, config, handles, StateInputsFrom(handles), nil, nil, container.Socket{}, container.Socket{}, &bytes.Buffer{},
+			func(string, int, time.Duration) error { return errors.New("stop before start") }, testTemporaryPair(root))
+		if code != 1 {
+			t.Fatalf("runFenceWithTemporary() = %d, want 1", code)
+		}
+		if err := closeStateHandles(handles); err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{first, second} {
+			if _, err := os.Lstat(path); !os.IsNotExist(err) {
+				t.Fatalf("unstarted directory %q remains: %v", path, err)
+			}
+		}
+	})
+	t.Run("Fence process start commits every directory", func(t *testing.T) {
+		handles := open(t)
+		code := runFenceWithTemporary(context.Background(), launcherManifest, nil, config, handles, StateInputsFrom(handles), nil, nil, container.Socket{}, container.Socket{}, &bytes.Buffer{},
+			func(string, int, time.Duration) error { return nil }, testTemporaryPair(root))
+		if code != 0 {
+			t.Fatalf("runFenceWithTemporary() = %d, want 0", code)
+		}
+		if err := closeStateHandles(handles); err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{first, second} {
+			if _, err := os.Lstat(path); err != nil {
+				t.Fatalf("started directory %q was rolled back: %v", path, err)
+			}
+		}
+	})
 }
 
 func TestRunFencePreservesChildStatusWhenTemporaryCleanupFails(t *testing.T) {
