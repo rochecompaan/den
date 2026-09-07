@@ -76,7 +76,7 @@ let
       }
       ${lib.concatMapStringsSep "\n" (item: let parts = lib.splitString ":" item; in "validate ${lib.escapeShellArg (builtins.elemAt parts 0)} ${lib.escapeShellArg (lib.concatStringsSep ":" (lib.drop 1 parts))}") diagnosticInputs}
       ${lib.concatMapStringsSep "\n" (entry: "[ ! -e ${lib.escapeShellArg entry} ] || { echo 'extraPkgs must not expose bin/pi' >&2; exit 1; }") extraInputs}
-      printf '%s\n' 'Pi resource validation passed; configured resource order remains adapter-owned and Pi retains same-name first-winner diagnostics.' > "$out"
+      printf '%s\n' 'Pi resource validation passed.' > "$out"
     '';
 in
 {
