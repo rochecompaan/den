@@ -1,6 +1,7 @@
 { pkgs, fence }:
 
 let
+  fenceInfo = import ../lib/fence.nix { inherit pkgs; };
   closure = pkgs.closureInfo {
     rootPaths = [ fence pkgs.bash pkgs.coreutils pkgs.gnugrep pkgs.jq ];
   };
@@ -62,9 +63,22 @@ let
           denyRead: [$home + "/secret"],
           denyWrite: ["~/.npm/_logs", "~/.fence/debug", "/tmp/fence", "/tmp/fence/**", "/private/tmp/fence", "/private/tmp/fence/**", $policy, $policyDir]
         },
-        command: { deny: [], useDefaults: true, acceptSharedBinaryCannotRuntimeDeny: ["chroot"], runtimeExecPolicy: "argv" }
+        command: { deny: ["printf denied"], useDefaults: true, acceptSharedBinaryCannotRuntimeDeny: ["chroot"], runtimeExecPolicy: "argv" }
       }' > "$policy"
     chmod 0400 "$policy"
+
+    request='{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"printf allowed","cwd":"/tmp"},"cwd":"/tmp"}'
+    printf '%s\n' "$request" | FENCE_SANDBOX=1 DEN_FENCE_TMPDIR="$scratch" TMPDIR="$scratch" \
+      "$fence" --claude-pre-tool-use --settings "$policy" > helper-allow.out 2> helper-allow.err
+    test ! -s helper-allow.out
+    test ! -s helper-allow.err
+    request='{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"printf denied","cwd":"/tmp"},"cwd":"/tmp"}'
+    printf '%s\n' "$request" | FENCE_SANDBOX=1 DEN_FENCE_TMPDIR="$scratch" TMPDIR="$scratch" \
+      "$fence" --claude-pre-tool-use --settings "$policy" > helper-deny.out 2> helper-deny.err
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}' > helper-deny.expected
+    cmp helper-deny.expected helper-deny.out
+    test ! -s helper-deny.err
+    test -z "$(find "$scratch" -mindepth 1 -print -quit)"
 
     "$fence" config show --settings "$policy" > parsed.json
     jq -e '
@@ -176,9 +190,22 @@ let
           denyRead: [$home + "/secret"],
           denyWrite: ["~/.npm/_logs", "~/.fence/debug", "/tmp/fence", "/tmp/fence/**", "/private/tmp/fence", "/private/tmp/fence/**", $policy, $policyDir]
         },
-        command: { deny: [], useDefaults: true, acceptSharedBinaryCannotRuntimeDeny: ["chroot"], runtimeExecPolicy: "argv" }
+        command: { deny: ["printf denied"], useDefaults: true, acceptSharedBinaryCannotRuntimeDeny: ["chroot"], runtimeExecPolicy: "argv" }
       }' > "$policy"
     chmod 0400 "$policy"
+
+    request='{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"printf allowed","cwd":"/tmp"},"cwd":"/tmp"}'
+    printf '%s\n' "$request" | FENCE_SANDBOX=1 DEN_FENCE_TMPDIR="$scratch" TMPDIR="$scratch" \
+      "$fence" --claude-pre-tool-use --settings "$policy" > helper-allow.out 2> helper-allow.err
+    test ! -s helper-allow.out
+    test ! -s helper-allow.err
+    request='{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"printf denied","cwd":"/tmp"},"cwd":"/tmp"}'
+    printf '%s\n' "$request" | FENCE_SANDBOX=1 DEN_FENCE_TMPDIR="$scratch" TMPDIR="$scratch" \
+      "$fence" --claude-pre-tool-use --settings "$policy" > helper-deny.out 2> helper-deny.err
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}' > helper-deny.expected
+    cmp helper-deny.expected helper-deny.out
+    test ! -s helper-deny.err
+    test -z "$(find "$scratch" -mindepth 1 -print -quit)"
 
     "$fence" config show --settings "$policy" > parsed.json
     jq -e '
@@ -225,6 +252,14 @@ let
     printf 'complete\n' > "$DEN_NATIVE_HOST_ROOT/fence-capabilities.complete"
   '';
 in
+assert fence == fenceInfo.package;
+assert fenceInfo.version == "0.1.58";
+assert fenceInfo.sourceHash == "sha256-ACe3N4bXYJW6QDQHtRChFWOTXTZTbEUbZ4d8cuFRqMY=";
+assert fenceInfo.patchHash == "4be4f0266a0a79da10002893752ea8185915f6ecfb146513946bde8a96e41e2a";
+assert fenceInfo.capabilities.claudePreToolUse;
+assert fenceInfo.capabilities.denFenceTmpdir;
+assert fenceInfo.capabilities.strictDenyRead;
+assert if pkgs.stdenv.isDarwin then fenceInfo.capabilities.allowUnixSockets else fenceInfo.capabilities.argvRuntimePolicy;
 if pkgs.stdenv.isLinux then
   pkgs.runCommand "fence-capabilities"
     {
