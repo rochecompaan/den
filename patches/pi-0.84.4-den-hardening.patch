@@ -1,0 +1,323 @@
+--- a/dist/main.js
++++ b/dist/main.js
+@@ -433,7 +433,12 @@
+         { label: "Cancel", value: undefined },
+     ]);
+ }
++const DEN_PACKAGE_MUTATION_DISABLED = true;
++const DEN_PACKAGE_COMMANDS = new Set(["install", "remove", "uninstall", "update", "list", "config"]);
+ export async function main(args, options) {
++    if (DEN_PACKAGE_MUTATION_DISABLED && DEN_PACKAGE_COMMANDS.has(args[0])) {
++        throw new Error("Pi package mutation is disabled by Den");
++    }
+     resetTimings();
+     const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
+     const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
+--- a/dist/core/package-manager.js
++++ b/dist/core/package-manager.js
+@@ -34,11 +34,12 @@
+ const NETWORK_TIMEOUT_MS = 10000;
+ const UPDATE_CHECK_CONCURRENCY = 4;
+ const GIT_UPDATE_CONCURRENCY = 4;
++const DEN_PACKAGE_MUTATION_DISABLED = true;
++function denyPackageMutation() {
++    throw new Error("Pi package mutation is disabled by Den");
++}
+ function isOfflineModeEnabled() {
+-    const value = process.env.PI_OFFLINE;
+-    if (!value)
+-        return false;
+-    return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
++    return DEN_PACKAGE_MUTATION_DISABLED;
+ }
+ function isExactNpmVersion(version) {
+     return valid(version ?? "") !== null;
+@@ -616,6 +617,7 @@
+         this.progressCallback = callback;
+     }
+     addSourceToSettings(source, options) {
++        denyPackageMutation();
+         const scope = options?.local ? "project" : "user";
+         const currentSettings = scope === "project" ? this.settingsManager.getProjectSettings() : this.settingsManager.getGlobalSettings();
+         const currentPackages = currentSettings.packages ?? [];
+@@ -647,6 +649,7 @@
+         return true;
+     }
+     removeSourceFromSettings(source, options) {
++        denyPackageMutation();
+         const scope = options?.local ? "project" : "user";
+         const currentSettings = scope === "project" ? this.settingsManager.getProjectSettings() : this.settingsManager.getGlobalSettings();
+         const currentPackages = currentSettings.packages ?? [];
+@@ -762,6 +765,7 @@
+         return configuredPackages;
+     }
+     async install(source, options) {
++        denyPackageMutation();
+         const parsed = this.parseSource(source);
+         const scope = options?.local ? "project" : "user";
+         this.assertProjectTrustedForScope(scope);
+@@ -785,10 +789,12 @@
+         });
+     }
+     async installAndPersist(source, options) {
++        denyPackageMutation();
+         await this.install(source, options);
+         this.addSourceToSettings(source, options);
+     }
+     async remove(source, options) {
++        denyPackageMutation();
+         const parsed = this.parseSource(source);
+         const scope = options?.local ? "project" : "user";
+         this.assertProjectTrustedForScope(scope);
+@@ -808,10 +814,12 @@
+         });
+     }
+     async removeAndPersist(source, options) {
++        denyPackageMutation();
+         await this.remove(source, options);
+         return this.removeSourceFromSettings(source, options);
+     }
+     async update(source) {
++        denyPackageMutation();
+         const globalSettings = this.settingsManager.getGlobalSettings();
+         const projectSettings = this.settingsManager.getProjectSettings();
+         const identity = source ? this.getPackageIdentity(source) : undefined;
+@@ -840,6 +848,7 @@
+         await this.updateConfiguredSources(updateSources);
+     }
+     async updateConfiguredSources(sources) {
++        denyPackageMutation();
+         if (isOfflineModeEnabled() || sources.length === 0) {
+             return;
+         }
+@@ -923,6 +932,9 @@
+         await this.runNpmCommand(this.getNpmInstallArgs(specs, installRoot));
+     }
+     async checkForAvailableUpdates() {
++        if (DEN_PACKAGE_MUTATION_DISABLED) {
++            return [];
++        }
+         if (isOfflineModeEnabled()) {
+             return [];
+         }
+@@ -992,44 +1004,18 @@
+                 this.resolveLocalExtensionSource(parsed, accumulator, filter, metadata, baseDir);
+                 continue;
+             }
+-            const installMissing = async () => {
+-                if (isOfflineModeEnabled())
+-                    return false;
+-                if (!onMissing) {
+-                    await this.installParsedSource(parsed, resolvedScope);
+-                    return true;
+-                }
+-                const action = await onMissing(resolvedSource);
+-                if (action === "skip")
+-                    return false;
+-                if (action === "error")
+-                    throw new Error(`Missing source: ${resolvedSource}`);
+-                await this.installParsedSource(parsed, resolvedScope);
+-                return true;
+-            };
+             if (parsed.type === "npm") {
+-                let installedPath = this.getNpmInstallPath(parsed, resolvedScope);
+-                const needsInstall = !existsSync(installedPath) || !(await this.installedNpmMatchesConfiguredVersion(parsed, installedPath));
+-                if (needsInstall) {
+-                    const installed = await installMissing();
+-                    if (!installed)
+-                        continue;
+-                    installedPath = this.getNpmInstallPath(parsed, resolvedScope);
+-                }
++                const installedPath = this.getNpmInstallPath(parsed, resolvedScope);
++                if (!existsSync(installedPath))
++                    continue;
+                 metadata.baseDir = installedPath;
+                 this.collectPackageResources(installedPath, accumulator, filter, metadata);
+                 continue;
+             }
+             if (parsed.type === "git") {
+                 const installedPath = this.getGitInstallPath(parsed, resolvedScope);
+-                if (!existsSync(installedPath)) {
+-                    const installed = await installMissing();
+-                    if (!installed)
+-                        continue;
+-                }
+-                else if (resolvedScope === "temporary" && !parsed.pinned && !isOfflineModeEnabled()) {
+-                    await this.refreshTemporaryGitSource(parsed, resolvedSource);
+-                }
++                if (!existsSync(installedPath))
++                    continue;
+                 metadata.baseDir = installedPath;
+                 this.collectPackageResources(installedPath, accumulator, filter, metadata);
+             }
+@@ -1068,6 +1054,7 @@
+         }
+     }
+     async installParsedSource(parsed, scope) {
++        denyPackageMutation();
+         if (parsed.type === "npm") {
+             await this.installNpm(parsed, scope, scope === "temporary");
+             return;
+@@ -1442,6 +1429,7 @@
+         return packageManagerCommand ? basename(packageManagerCommand).replace(/\.(cmd|exe)$/i, "") : "";
+     }
+     async runNpmCommand(args, options) {
++        denyPackageMutation();
+         const npmCommand = this.getNpmCommand();
+         await this.runCommand(npmCommand.command, [...npmCommand.args, ...args], options);
+     }
+@@ -1453,6 +1441,7 @@
+         return ["install", "--omit=dev"];
+     }
+     runNpmCommandSync(args) {
++        denyPackageMutation();
+         const npmCommand = this.getNpmCommand();
+         return this.runCommandSync(npmCommand.command, [...npmCommand.args, ...args]);
+     }
+@@ -1479,11 +1468,13 @@
+         return ["install", ...specs, "--prefix", installRoot, "--legacy-peer-deps"];
+     }
+     async installNpm(source, scope, temporary) {
++        denyPackageMutation();
+         const installRoot = this.getNpmInstallRoot(scope, temporary);
+         this.ensureNpmProject(installRoot);
+         await this.runNpmCommand(this.getNpmInstallArgs([source.spec], installRoot));
+     }
+     async uninstallNpm(source, scope) {
++        denyPackageMutation();
+         const installRoot = this.getNpmInstallRoot(scope, false);
+         if (!existsSync(installRoot)) {
+             return;
+@@ -1500,6 +1491,7 @@
+         await this.runNpmCommand(args);
+     }
+     async installGit(source, scope) {
++        denyPackageMutation();
+         const targetDir = this.getGitInstallPath(source, scope);
+         if (existsSync(targetDir)) {
+             if (source.ref) {
+@@ -1533,6 +1525,7 @@
+         }
+     }
+     async updateGit(source, scope) {
++        denyPackageMutation();
+         const targetDir = this.getGitInstallPath(source, scope);
+         if (!existsSync(targetDir)) {
+             await this.installGit(source, scope);
+@@ -1569,6 +1562,7 @@
+         }
+     }
+     async repairMissingGitDependencies(targetDir) {
++        denyPackageMutation();
+         if (!this.hasMissingGitDependencies(targetDir))
+             return;
+         await this.runNpmCommand(this.getGitDependencyInstallArgs(), { cwd: targetDir });
+@@ -1577,6 +1571,7 @@
+         return join(dirname(targetDir), `.${basename(targetDir)}.pi-update-incomplete`);
+     }
+     async cleanAndInstallGitDependencies(targetDir, markerPath) {
++        denyPackageMutation();
+         // Clean untracked files (extensions should be pristine). If this fails after
+         // deleting dependencies, repair them so the existing extension still loads.
+         try {
+@@ -1593,6 +1588,7 @@
+         rmSync(markerPath, { force: true });
+     }
+     async ensureGitRef(targetDir, fetchArgs, ref) {
++        denyPackageMutation();
+         // Fetch only the ref we will reset to, avoiding unrelated branch/tag noise.
+         await this.runCommand("git", fetchArgs, { cwd: targetDir });
+         const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
+@@ -1619,6 +1615,9 @@
+         await this.cleanAndInstallGitDependencies(targetDir, markerPath);
+     }
+     async refreshTemporaryGitSource(source, sourceStr) {
++        if (DEN_PACKAGE_MUTATION_DISABLED) {
++            return;
++        }
+         if (isOfflineModeEnabled()) {
+             return;
+         }
+@@ -1632,6 +1631,7 @@
+         }
+     }
+     async removeGit(source, scope) {
++        denyPackageMutation();
+         const targetDir = this.getGitInstallPath(source, scope);
+         rmSync(targetDir, { recursive: true, force: true });
+         rmSync(this.getGitUpdateMarkerPath(targetDir), { force: true });
+--- a/dist/core/agent-session-runtime.js
++++ b/dist/core/agent-session-runtime.js
+@@ -1,5 +1,6 @@
+-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+-import { basename, join, resolve } from "node:path";
++import { closeSync, copyFileSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, realpathSync, statSync } from "node:fs";
++import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
++import { ENV_SESSION_DIR } from "../config.js";
+ import { resolvePath } from "../utils/paths.js";
+ import { emitSessionShutdownEvent } from "./extensions/runner.js";
+ import { assertSessionCwdExists } from "./session-cwd.js";
+@@ -15,6 +16,47 @@
+         this.filePath = filePath;
+     }
+ }
++function captureSessionRoot() {
++    const configuredRoot = process.env[ENV_SESSION_DIR];
++    if (!configuredRoot)
++        return undefined;
++    try {
++        const canonicalPath = realpathSync(configuredRoot);
++        const root = statSync(canonicalPath);
++        return root.isDirectory() ? { canonicalPath, dev: root.dev, ino: root.ino } : undefined;
++    }
++    catch {
++        return undefined;
++    }
++}
++const DEN_SESSION_ROOT = captureSessionRoot();
++function canonicalSessionTarget(sessionPath) {
++    if (!DEN_SESSION_ROOT)
++        throw new Error("Pi session directory was not available at startup");
++    const root = statSync(DEN_SESSION_ROOT.canonicalPath);
++    if (!root.isDirectory() || root.dev !== DEN_SESSION_ROOT.dev || root.ino !== DEN_SESSION_ROOT.ino)
++        throw new Error("Pi session directory changed after startup");
++    const alias = lstatSync(sessionPath);
++    if (!alias.isFile() || alias.isSymbolicLink())
++        throw new Error("Pi session target must be an existing regular file");
++    const canonicalPath = realpathSync(sessionPath);
++    const relation = relative(DEN_SESSION_ROOT.canonicalPath, canonicalPath);
++    if (relation === "" || relation === ".." || relation.startsWith(`..${sep}`) || isAbsolute(relation))
++        throw new Error("Pi session target escapes the configured directory");
++    const target = lstatSync(canonicalPath);
++    if (!target.isFile() || target.isSymbolicLink())
++        throw new Error("Pi session target must be an existing regular file");
++    const fd = openSync(canonicalPath, "r");
++    try {
++        const opened = fstatSync(fd);
++        if (!opened.isFile() || opened.dev !== target.dev || opened.ino !== target.ino)
++            throw new Error("Pi session target changed while opening");
++    }
++    finally {
++        closeSync(fd);
++    }
++    return canonicalPath;
++}
+ function extractUserMessageText(content) {
+     if (typeof content === "string") {
+         return content;
+@@ -126,12 +168,13 @@
+         }
+     }
+     async switchSession(sessionPath, options) {
+-        const beforeResult = await this.emitBeforeSwitch("resume", sessionPath);
++        const canonicalSessionPath = canonicalSessionTarget(sessionPath);
++        const beforeResult = await this.emitBeforeSwitch("resume", canonicalSessionPath);
+         if (beforeResult.cancelled) {
+             return beforeResult;
+         }
+         const previousSessionFile = this.session.sessionFile;
+-        const sessionManager = SessionManager.open(sessionPath, undefined, options?.cwdOverride);
++        const sessionManager = SessionManager.open(canonicalSessionPath, undefined, options?.cwdOverride);
+         assertSessionCwdExists(sessionManager, this.cwd);
+         await this.teardownCurrent("resume", sessionManager.getSessionFile());
+         this.apply(await this.createRuntime({
