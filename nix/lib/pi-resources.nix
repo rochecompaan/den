@@ -12,7 +12,10 @@ let
   ];
   argumentsFor = resource: lib.concatMap (entry: [ resource.flag "${entry}" ]) resource.entries;
   resourceArgs = lib.concatMap argumentsFor classes;
+  resourceInputs = lib.concatMap (resource: resource.entries) classes;
   diagnosticInputs = lib.concatMap (resource: map (entry: "${resource.kind}:${entry}") resource.entries) classes;
+  resourceClosure = pkgs.linkFarm "pi-configured-resources"
+    (lib.imap0 (index: entry: { name = toString index; path = entry; }) resourceInputs);
   extraInputs = map (entry: "${entry}/bin/pi") extraPkgs;
   diagnosticsCheck = pkgs.runCommand "pi-resource-validation"
     { nativeBuildInputs = [ pkgs.coreutils pkgs.findutils pkgs.gnugrep pkgs.jq ]; }
@@ -81,5 +84,5 @@ let
 in
 {
   inherit resourceArgs diagnosticsCheck;
-  closureInputs = [ diagnosticsCheck ];
+  closureInputs = [ diagnosticsCheck resourceClosure ];
 }

@@ -68,8 +68,21 @@ set -euo pipefail
 [[ $(<"$DEN_NATIVE_HOST_ROOT/claude-startup.complete") == complete ]]
 [[ -f $DEN_NATIVE_HOST_ROOT/fence-capabilities.complete ]]
 [[ $(<"$DEN_NATIVE_HOST_ROOT/fence-capabilities.complete") == complete ]]
-printf 'go\n' >> "$DEN_FAKE_EVENT_LOG"
+printf 'claude\n' >> "$DEN_FAKE_EVENT_LOG"
+printf 'complete\n' > "$DEN_NATIVE_HOST_ROOT/claude-suite.complete"
 FAKE_GO
+
+printf '#!%s\n' "$BASH" > "$root/pi-native-tests"
+cat >> "$root/pi-native-tests" <<'FAKE_PI_GO'
+set -euo pipefail
+[[ $DEN_NATIVE_PI == /* && -x $DEN_NATIVE_PI ]]
+[[ $DEN_NATIVE_PI_SANDBOX == /* && -x $DEN_NATIVE_PI_SANDBOX ]]
+[[ $DEN_NATIVE_PI_MANIFEST == /* && -f $DEN_NATIVE_PI_MANIFEST ]]
+[[ $DEN_NATIVE_PI_PACKAGE_ROOT == /* && -d $DEN_NATIVE_PI_PACKAGE_ROOT ]]
+[[ $DEN_NATIVE_PI_RESOURCE_FIXTURE == /* && -f $DEN_NATIVE_PI_RESOURCE_FIXTURE ]]
+printf 'pi\n' >> "$DEN_FAKE_EVENT_LOG"
+printf 'complete\n' > "$DEN_NATIVE_HOST_ROOT/pi-suite.complete"
+FAKE_PI_GO
 
 printf '#!%s\n' "$BASH" > "$root/resolver-helper"
 cat >> "$root/resolver-helper" <<'FAKE_MARKER'
@@ -77,7 +90,14 @@ exit 0
 FAKE_MARKER
 cp "$root/resolver-helper" "$root/sandbox-exec"
 chmod +x "$root/settings-merge" "$root/claude-startup" "$root/fence-capabilities" \
-  "$root/native-tests" "$root/resolver-helper" "$root/sandbox-exec"
+  "$root/native-tests" "$root/pi-native-tests" "$root/resolver-helper" "$root/sandbox-exec"
+
+printf '#!/usr/bin/env bash\nexit 0\n' > "$root/pi"
+cp "$root/pi" "$root/pi-sandbox"
+chmod +x "$root/pi" "$root/pi-sandbox"
+printf '{}\n' > "$root/pi-manifest.json"
+mkdir "$root/pi-package-root"
+printf 'fixture\n' > "$root/pi-resource-fixture"
 
 mkdir -p "$root/home" "$root/runtime/den-native-enforcement"
 printf 'host-user data\n' > "$root/runtime/den-native-enforcement/host-user-marker"
@@ -88,6 +108,12 @@ export DEN_NATIVE_SETTINGS_MERGE=$root/settings-merge
 export DEN_NATIVE_CLAUDE_STARTUP=$root/claude-startup
 export DEN_NATIVE_FENCE_CAPABILITIES=$root/fence-capabilities
 export DEN_NATIVE_TEST_BINARY=$root/native-tests
+export DEN_NATIVE_PI_TEST_BINARY=$root/pi-native-tests
+export DEN_NATIVE_PI=$root/pi
+export DEN_NATIVE_PI_SANDBOX=$root/pi-sandbox
+export DEN_NATIVE_PI_MANIFEST=$root/pi-manifest.json
+export DEN_NATIVE_PI_PACKAGE_ROOT=$root/pi-package-root
+export DEN_NATIVE_PI_RESOURCE_FIXTURE=$root/pi-resource-fixture
 export DEN_NATIVE_RESOLVER_HELPER=$root/resolver-helper
 export DEN_NATIVE_SANDBOX_EXEC=$root/sandbox-exec
 export DEN_FAKE_EVENT_LOG=$root/events
@@ -116,7 +142,7 @@ if [[ $status -ne 0 ]]; then
   cat "$root/success.stderr" >&2
   exit 1
 fi
-[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence\nresolver\ngo' ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence\nresolver\nclaude\npi' ]]
 assert_runner_cleanup
 
 run_runner startup-failure env -u DEN_FAKE_FENCE_STATUS \

@@ -202,6 +202,10 @@ pkgs.runCommand "package-api"
           defaultPath: "", defaultWritablePaths: [],
           exports: [{kind: "environment", name: "CLAUDE_CONFIG_DIR", exportDefault: false}]
         }] and
+        (.agent | keys) == [
+          "argumentPolicy", "commandName", "environment", "executable", "mandatoryArgs", "name",
+          "packageDirectory", "reservedCommands", "reservedFlags", "resourceArgs", "securityAdapter"
+        ] and
         .docker == {enable: false, socketPath: null, hostPorts: [], clientPrograms: []} and
         .podman == {enable: false, socketPath: null, hostPorts: [], clientPrograms: []}
       ' "$defaultManifest"
@@ -245,6 +249,10 @@ pkgs.runCommand "package-api"
           defaultPath: "", defaultWritablePaths: [],
           exports: [{kind: "environment", name: "CLAUDE_CONFIG_DIR", exportDefault: false}]
         }] and
+        (.agent | keys) == [
+          "argumentPolicy", "commandName", "environment", "executable", "mandatoryArgs", "name",
+          "packageDirectory", "reservedCommands", "reservedFlags", "resourceArgs", "securityAdapter"
+        ] and
         .docker == {
           enable: true,
           socketPath: "/tmp/docker.sock",

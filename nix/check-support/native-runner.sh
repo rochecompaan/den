@@ -7,6 +7,12 @@ if [[ $# -ne 0 ]]; then
 fi
 
 : "${DEN_NATIVE_TEST_BINARY:?packaged native test binary is required}"
+: "${DEN_NATIVE_PI_TEST_BINARY:?packaged Pi native test binary is required}"
+: "${DEN_NATIVE_PI:?packaged Pi binary is required}"
+: "${DEN_NATIVE_PI_SANDBOX:?packaged Pi sandbox is required}"
+: "${DEN_NATIVE_PI_MANIFEST:?packaged Pi manifest is required}"
+: "${DEN_NATIVE_PI_PACKAGE_ROOT:?packaged Pi package root is required}"
+: "${DEN_NATIVE_PI_RESOURCE_FIXTURE:?packaged Pi resource fixture is required}"
 : "${DEN_NATIVE_HOST_SYSTEM:?packaged host system is required}"
 : "${DEN_NATIVE_SETTINGS_MERGE:?packaged Claude settings merge fixture is required}"
 
@@ -33,6 +39,14 @@ case "$DEN_NATIVE_HOST_SYSTEM" in
     exit 2
     ;;
 esac
+
+require_suite_completion() {
+  local suite=$1 completion=$DEN_NATIVE_HOST_ROOT/$2
+  if [[ ! -f $completion ]] || ! cmp -s <(printf 'complete\n') "$completion"; then
+    printf '%s suite did not produce its exact completion artifact\n' "$suite" >&2
+    exit 1
+  fi
+}
 
 printf 'executing Claude settings merge fixture as the invoking host user\n'
 settings_merge_output=$("$DEN_NATIVE_SETTINGS_MERGE")
@@ -114,7 +128,13 @@ if [[ $DEN_NATIVE_HOST_SYSTEM == *-darwin ]]; then
 
   test_status=0
   if "$DEN_NATIVE_TEST_BINARY" -test.count=1 -test.timeout=2m; then
-    test_status=0
+    require_suite_completion Claude claude-suite.complete
+    if "$DEN_NATIVE_PI_TEST_BINARY" -test.count=1 -test.timeout=2m; then
+      require_suite_completion Pi pi-suite.complete
+      test_status=0
+    else
+      test_status=$?
+    fi
   else
     test_status=$?
   fi
@@ -155,5 +175,8 @@ mkdir -m 1777 "$namespace_tmp"
   "$DEN_NATIVE_MOUNT" --bind "$2" /etc/nsswitch.conf
   "$DEN_NATIVE_MOUNT" --bind "$3" /tmp
   export TMPDIR=/tmp
-  exec "$DEN_NATIVE_TEST_BINARY" -test.count=1 -test.timeout=2m
+  "$DEN_NATIVE_TEST_BINARY" -test.count=1 -test.timeout=2m
+  cmp -s <(printf "complete\\n") "$DEN_NATIVE_HOST_ROOT/claude-suite.complete"
+  "$DEN_NATIVE_PI_TEST_BINARY" -test.count=1 -test.timeout=2m
+  cmp -s <(printf "complete\\n") "$DEN_NATIVE_HOST_ROOT/pi-suite.complete"
 ' den-native "$resolver" "$nsswitch" "$namespace_tmp"

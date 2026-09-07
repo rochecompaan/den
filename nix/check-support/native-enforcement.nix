@@ -1,4 +1,4 @@
-{ inputs, pkgs, claude, claudeStartup ? null }:
+{ inputs, pkgs, claude, claudeStartup ? null, piFixture ? import ./pi-native-fixture.nix { inherit inputs pkgs; } }:
 
 let
   fence = (import ../lib/fence.nix { inherit pkgs; }).package;
@@ -153,7 +153,7 @@ let
         argumentPolicy = "claude";
         mandatoryArgs = [ ];
         resourceArgs = [ ];
-        reservedFlags = [ ];
+        reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" ];
         reservedCommands = [ ];
         environment = { scrub = [ ]; set = { }; };
         packageDirectory = null;
@@ -221,6 +221,24 @@ let
       runHook postInstall
     '';
   };
+  piNativeTests = pkgs.buildGoModule {
+    pname = "den-pi-native-tests";
+    version = "0.1.0";
+    src = ../..;
+    vendorHash = denGoVendorHash;
+    env.CGO_ENABLED = "0";
+    doCheck = false;
+    buildPhase = ''
+      runHook preBuild
+      go test -c -tags=native -o den-pi-native-tests ./tests/native/pi
+      runHook postBuild
+    '';
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 den-pi-native-tests "$out/bin/den-pi-native-tests"
+      runHook postInstall
+    '';
+  };
 in
 assert pkgs.lib.assertMsg
   (!pkgs.stdenv.isDarwin ||
@@ -236,7 +254,13 @@ pkgs.writeShellApplication {
   text = ''
     export DEN_NATIVE_HOST_SYSTEM=${pkgs.stdenv.hostPlatform.system}
     export DEN_NATIVE_TEST_BINARY=${nativeTests}/bin/den-native-tests
+    export DEN_NATIVE_PI_TEST_BINARY=${piNativeTests}/bin/den-pi-native-tests
     export DEN_NATIVE_CLAUDE=${claude}/bin/claude
+    export DEN_NATIVE_PI=${piFixture.pi}/bin/pi
+    export DEN_NATIVE_PI_SANDBOX=${piFixture.sandbox}/bin/pi
+    export DEN_NATIVE_PI_MANIFEST=${piFixture.manifest}
+    export DEN_NATIVE_PI_PACKAGE_ROOT=${piFixture.packageRoot}
+    export DEN_NATIVE_PI_RESOURCE_FIXTURE=${piFixture.resourceFixture}
     export DEN_NATIVE_SANDBOX=${fixtureSandbox}/bin/claude
     export DEN_NATIVE_MANIFEST=${fixtureSandbox.denManifest}
     export DEN_NATIVE_LAUNCHER=${launcher}/bin/den-launcher

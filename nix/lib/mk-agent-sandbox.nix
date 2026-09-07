@@ -27,7 +27,18 @@ let
   adapterRuntimePackages = adapter.runtimePackages;
   adapterClosureOnlyPackages = adapter.closureOnlyPackages;
   output = adapter.output;
-  agent = adapter.agent // { commandName = output.commandName; };
+  agent = builtins.intersectAttrs {
+    name = null;
+    executable = null;
+    argumentPolicy = null;
+    mandatoryArgs = null;
+    resourceArgs = null;
+    reservedFlags = null;
+    reservedCommands = null;
+    environment = null;
+    packageDirectory = null;
+    securityAdapter = null;
+  } adapter.agent // { commandName = output.commandName; };
   stateBindings = adapter.stateBindings;
   safeBasename = name: builtins.isString name && name != "" && name != "." && name != ".."
     && !(lib.hasInfix "/" name) && !(lib.hasInfix "\n" name) && !(lib.hasInfix "\r" name);

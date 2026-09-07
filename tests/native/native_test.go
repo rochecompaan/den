@@ -66,7 +66,18 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	os.Exit(m.Run())
+	if status := m.Run(); status != 0 {
+		os.Exit(status)
+	}
+	root := os.Getenv("DEN_NATIVE_HOST_ROOT")
+	if root == "" {
+		fmt.Fprintln(os.Stderr, "native enforcement requires DEN_NATIVE_HOST_ROOT for completion")
+		os.Exit(1)
+	}
+	if err := os.WriteFile(filepath.Join(root, "claude-suite.complete"), []byte("complete\n"), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "write Claude suite completion:", err)
+		os.Exit(1)
+	}
 }
 
 func TestClaudeStartupCompletionContract(t *testing.T) {
@@ -362,7 +373,8 @@ exec %s "$@"
 		t.Fatal(err)
 	}
 	result := launchWithManifest(t, fixture, func(document map[string]any) {
-		document["explicitConfigDir"] = state
+		bindings := document["stateBindings"].([]any)
+		bindings[0].(map[string]any)["explicitPath"] = state
 		document["aclProbe"] = []any{wrapper}
 	}, "marker", marker)
 	if result.err == nil || fileExists(marker) || !strings.Contains(result.stderr, "custom configuration directory changed before launch") {
