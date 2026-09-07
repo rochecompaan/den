@@ -140,14 +140,33 @@ let
     podman = { };
     adapter = {
       runtimePackages = [ fixtureAgent ];
+      closureOnlyPackages = [ ];
+      output = {
+        packageName = "claude";
+        commandName = "claude";
+        manifestName = "claude-manifest.json";
+        mainProgram = "claude";
+      };
       agent = {
         name = "native-fixture";
         executable = "${fixtureAgent}/bin/den-native-agent";
+        argumentPolicy = "claude";
         mandatoryArgs = [ ];
+        resourceArgs = [ ];
         reservedFlags = [ ];
-        configEnvironment = "CLAUDE_CONFIG_DIR";
-        darwinSettings = "";
+        reservedCommands = [ ];
+        environment = { scrub = [ ]; set = { }; };
+        packageDirectory = null;
+        securityAdapter = null;
       };
+      stateBindings = [{
+        name = "config";
+        explicitPath = null;
+        inheritedEnvironment = "CLAUDE_CONFIG_DIR";
+        defaultPath = "";
+        defaultWritablePaths = [ ];
+        exports = [{ kind = "environment"; name = "CLAUDE_CONFIG_DIR"; exportDefault = false; }];
+      }];
     };
   };
   unrelatedStoreFile = pkgs.writeText "den-native-unrelated" "must remain unreadable\n";

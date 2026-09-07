@@ -13,7 +13,26 @@ let
       manifestName = "test-agent-manifest.json";
       mainProgram = "test-agent";
     };
-    agent.executable = "${dependency}/bin/dependency";
+    agent = {
+      name = "test-agent";
+      executable = "${dependency}/bin/dependency";
+      argumentPolicy = "claude";
+      mandatoryArgs = [ ];
+      resourceArgs = [ ];
+      reservedFlags = [ ];
+      reservedCommands = [ ];
+      environment = { scrub = [ ]; set = { }; };
+      packageDirectory = null;
+      securityAdapter = null;
+    };
+    stateBindings = [{
+      name = "config";
+      explicitPath = null;
+      inheritedEnvironment = "TEST_AGENT_CONFIG_DIR";
+      defaultPath = "";
+      defaultWritablePaths = [ ];
+      exports = [{ kind = "environment"; name = "TEST_AGENT_CONFIG_DIR"; exportDefault = false; }];
+    }];
   };
   withOutput = output: mkAgentSandbox {
     adapter = adapter // { inherit output; };
