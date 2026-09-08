@@ -197,6 +197,16 @@ grep -F 'Darwin Fence capability fixture did not produce its completion artifact
   "$root/fence-malformed-completion.stderr"
 assert_runner_cleanup
 
+run_runner pi-startup-relative-path env -C "$root" -u DEN_FAKE_STARTUP_STATUS -u DEN_FAKE_FENCE_STATUS \
+  -u DEN_FAKE_FENCE_SKIP_COMPLETION -u DEN_FAKE_PI_STARTUP_STATUS \
+  -u DEN_FAKE_PI_STARTUP_SKIP_COMPLETION -u DEN_FAKE_PI_STARTUP_EXTRA_NEWLINE \
+  DEN_NATIVE_PI_STARTUP=./pi-startup
+[[ $status -eq 1 ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == '' ]]
+grep -F 'Darwin Pi startup fixture must be an absolute executable path' \
+  "$root/pi-startup-relative-path.stderr"
+assert_runner_cleanup
+
 run_runner pi-startup-failure env -u DEN_FAKE_STARTUP_STATUS -u DEN_FAKE_FENCE_STATUS \
   -u DEN_FAKE_FENCE_SKIP_COMPLETION DEN_FAKE_PI_STARTUP_STATUS=29
 [[ $status -eq 29 ]]

@@ -187,6 +187,7 @@ if [[ $status -ne 0 ]]; then
   exit 1
 fi
 grep -Fq 'derivation show --recursive .#checks.x86_64-darwin.native-enforcement' "$DEN_FAKE_NIX_LOG"
+grep -Fq 'derivation show --recursive .#checks.aarch64-darwin.native-enforcement' "$DEN_FAKE_NIX_LOG"
 grep -Fq 'derivation show --recursive .#checks.aarch64-darwin.claude-startup' "$DEN_FAKE_NIX_LOG"
 
 nested_forbidden='{"derivations":{"pi-startup.drv":{"name":"pi-darwin-startup"},"pi-tests.drv":{"name":"den-pi-native-tests"},"pi-launcher.drv":{"name":"den-native-pi-launcher"},"parent.drv":{"inputDrvs":{"child.drv":{"outputs":["out"]}}},"child.drv":{"structuredAttrs":{"__impureHostDeps":["/bin/sh","/bin/ls"]}}},"version":3}'

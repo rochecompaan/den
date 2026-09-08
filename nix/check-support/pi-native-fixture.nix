@@ -123,6 +123,7 @@ let
 in
 {
   inherit pi resourceFixture sandbox launcher fence fenceInputRecorder forbiddenPiExtraPackageCheck;
+  node = pi.nodejs;
   manifest = sandbox.denManifest;
   packageRoot = pi.packageRoot;
 }

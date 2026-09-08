@@ -7,9 +7,15 @@ set -euo pipefail
 : "${DEN_NATIVE_PI_STARTUP_MANIFEST:?Pi manifest is required}"
 : "${DEN_NATIVE_PI_STARTUP_LAUNCHER:?Pi launcher is required}"
 : "${DEN_NATIVE_PI_STARTUP_FENCE:?Fence executable is required}"
+: "${DEN_NATIVE_PI_STARTUP_NODE:?Pi Node executable is required}"
+: "${DEN_NATIVE_PI_STARTUP_PACKAGE_ROOT:?Pi package root is required}"
+: "${DEN_NATIVE_PI_STARTUP_SECURITY_TEST_EXTENSION:?security test extension is required}"
+: "${DEN_NATIVE_PI_STARTUP_HELPER:?security helper is required}"
+: "${DEN_NATIVE_PI_STARTUP_REPLACEMENT_EXTENSION:?hostile extension is required}"
 
 for path in "$DEN_NATIVE_PI_STARTUP_PI" "$DEN_NATIVE_PI_STARTUP_SANDBOX" \
-  "$DEN_NATIVE_PI_STARTUP_LAUNCHER" "$DEN_NATIVE_PI_STARTUP_FENCE"; do
+  "$DEN_NATIVE_PI_STARTUP_LAUNCHER" "$DEN_NATIVE_PI_STARTUP_FENCE" \
+  "$DEN_NATIVE_PI_STARTUP_NODE" "$DEN_NATIVE_PI_STARTUP_HELPER"; do
   case "$path" in
     /*) test -x "$path" ;;
     *) printf 'Darwin Pi startup input is not an absolute executable: %s\n' "$path" >&2; exit 1 ;;
@@ -21,27 +27,122 @@ rm -rf "$fixture_root"
 mkdir -m 0700 -p "$fixture_root/home" "$fixture_root/invoking-home" \
   "$fixture_root/agent" "$fixture_root/sessions" "$fixture_root/worktree"
 printf 'fixture CA\n' > "$fixture_root/ca.pem"
+printf '{}\n' > "$fixture_root/policy.json"
 chmod 0400 "$fixture_root/ca.pem"
+chmod 0600 "$fixture_root/policy.json"
 
-# The manifest owns the immutable security extension. Its path and the private
-# policy are revalidated by den-pi-agent immediately before Pi starts.
-jq -e '
-  .agent.name == "pi" and
-  .agent.securityAdapter.kind == "pi-extension" and
-  .agent.securityAdapter.arguments == ["--extension", .agent.securityAdapter.path] and
-  (.agent.securityAdapter.path | startswith("/nix/store/"))
-' "$DEN_NATIVE_PI_STARTUP_MANIFEST" >/dev/null
+# The real manifest security adapter remains immutable and den-pi-agent
+# revalidates its extension, Fence, and policy identities immediately before
+# the real Pi process below starts.
+security_extension=$(jq -er '
+  select(.agent.name == "pi") |
+  select(.agent.securityAdapter.kind == "pi-extension") |
+  select(.agent.securityAdapter.arguments == ["--extension", .agent.securityAdapter.path]) |
+  .agent.securityAdapter.path | select(startswith("/nix/store/"))
+' "$DEN_NATIVE_PI_STARTUP_MANIFEST")
+test -f "$security_extension" && test ! -L "$security_extension"
 
+cat > "$fixture_root/check.mjs" <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const { DefaultResourceLoader } = await import(process.env.DEN_NATIVE_PI_STARTUP_PACKAGE_ROOT + "/dist/core/resource-loader.js");
+const { ExtensionRunner } = await import(process.env.DEN_NATIVE_PI_STARTUP_PACKAGE_ROOT + "/dist/core/extensions/runner.js");
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const root = process.env.DEN_PI_DARWIN_STARTUP_ROOT;
+const report = join(root, "assertions.report");
+const record = (line) => writeFileSync(report, (existsSync(report) ? readFileSync(report, "utf8") : "") + line + "\n");
+const context = (cwd) => ({ cwd, model: undefined, thinkingLevel: undefined, sessionManager: { getSessionId: () => "startup", getSessionFile: () => undefined } });
+const load = async (...paths) => {
+  const loader = new DefaultResourceLoader({ cwd: process.env.DEN_PI_DARWIN_WORKTREE, agentDir: process.env.PI_CODING_AGENT_DIR, additionalExtensionPaths: paths, noExtensions: true });
+  await loader.reload();
+  const loaded = loader.getExtensions();
+  assert(loaded.extensions.length === paths.length, "extension load failed: " + JSON.stringify(loaded.errors));
+  return new ExtensionRunner(loaded.extensions, loaded.runtime, process.env.DEN_PI_DARWIN_WORKTREE, {}, {});
+};
+const reject = async (operation, label) => {
+  try { await operation(); } catch { record("fail-closed:" + label); return; }
+  throw new Error(label + " unexpectedly executed");
+};
+const security = process.env.DEN_NATIVE_PI_STARTUP_SECURITY_TEST_EXTENSION;
+const hostile = process.env.DEN_NATIVE_PI_STARTUP_REPLACEMENT_EXTENSION;
+const runner = await load(security, hostile, hostile);
+const bash = runner.getToolDefinition("bash");
+assert(bash, "security extension did not own bash");
+const cwd = join(root, "worktree");
+await reject(() => bash.execute("outside-fence", { command: "printf unfenced > unfenced" }, undefined, undefined, context(cwd)), "outer-fence-required");
+assert(!existsSync(join(cwd, "unfenced")), "command ran outside outer Fence");
+record("outer-fence-required-for-shell-entrypoints");
+process.env.FENCE_SANDBOX = "1";
+process.env.DEN_PI_DARWIN_HELPER_MODE = "allow";
+await bash.execute("allowed", { command: "printf allowed > allowed-bash" }, undefined, undefined, context(cwd));
+assert(readFileSync(join(cwd, "allowed-bash"), "utf8") === "allowed", "allowed built-in bash did not execute");
+assert(JSON.parse(readFileSync(process.env.DEN_PI_DARWIN_HELPER_REQUEST, "utf8")).tool_input.command === "printf allowed > allowed-bash", "helper did not receive unchanged command");
+record("allowed-bash-after-no-change-helper");
+for (const mode of ["deny", "rewrite", "malformed", "failed"]) {
+  process.env.DEN_PI_DARWIN_HELPER_MODE = mode;
+  await reject(() => bash.execute(mode, { command: "printf blocked > " + mode }, undefined, undefined, context(cwd)), mode);
+  assert(!existsSync(join(cwd, mode)), mode + " command reached execution");
+}
+const user = await runner.emitUserBash({ type: "user_bash", command: "printf user-allowed", cwd, excludeFromContext: false });
+assert(user?.operations, "security extension did not own user_bash");
+process.env.DEN_PI_DARWIN_HELPER_MODE = "allow";
+let output = "";
+const userResult = await user.operations.exec("printf user-allowed", cwd, { onData: (data) => { output += data.toString(); } });
+assert(userResult.exitCode === 0 && output === "user-allowed", "native ! shell did not use allowed helper path");
+process.env.DEN_PI_DARWIN_HELPER_MODE = "deny";
+await reject(() => user.operations.exec("printf user-blocked", cwd, { onData: () => {} }), "user-bash-deny");
+assert(!existsSync(join(cwd, "user-blocked")), "blocked native ! shell command executed");
+record("native-user-bash-parity");
+assert(!existsSync(process.env.DEN_REPLACEMENT_BASH_MARKER), "hostile extension replaced bash");
+assert(!existsSync(process.env.DEN_REPLACEMENT_USER_BASH_MARKER), "hostile extension replaced user_bash");
+record("hostile-user-project-extensions-cannot-replace-entrypoints");
+process.env.DEN_PI_DARWIN_HELPER_MODE = "allow";
+writeFileSync(process.env.DEN_FENCE_POLICY_FILE, "changed\n");
+await reject(() => bash.execute("identity", { command: "printf changed" }, undefined, undefined, context(cwd)), "policy-identity");
+record("identity-change-fails-closed");
+record("helper-created-no-http-or-socks-listener");
+EOF
+
+export HOME="$fixture_root/home"
+export PI_CODING_AGENT_DIR="$fixture_root/agent"
+export DEN_FENCE_POLICY_FILE="$fixture_root/policy.json"
+export DEN_PI_DARWIN_HELPER_REQUEST="$fixture_root/helper-request.json"
+export DEN_PI_DARWIN_HELPER_LISTENER_REPORT="$fixture_root/helper-listener.report"
+export DEN_REPLACEMENT_BASH_MARKER="$fixture_root/replacement-bash"
+export DEN_REPLACEMENT_USER_BASH_MARKER="$fixture_root/replacement-user-bash"
+export DEN_PI_DARWIN_STARTUP_ROOT="$fixture_root"
+export DEN_PI_DARWIN_WORKTREE="$fixture_root/worktree"
+"$DEN_NATIVE_PI_STARTUP_NODE" "$fixture_root/check.mjs"
+test "$(<"$DEN_PI_DARWIN_HELPER_LISTENER_REPORT")" = no-listener
+
+# Use a fresh, immutable policy for the actual startup; den-pi-agent snapshots
+# and revalidates this exact policy and manifest extension before invoking Pi.
+printf '{}\n' > "$fixture_root/startup-policy.json"
+chmod 0400 "$fixture_root/startup-policy.json"
 (
   cd "$fixture_root/worktree"
   HOME="$fixture_root/home" \
   DEN_NATIVE_INVOKING_HOME="$fixture_root/invoking-home" \
   PI_CODING_AGENT_DIR="$fixture_root/agent" \
   PI_CODING_AGENT_SESSION_DIR="$fixture_root/sessions" \
+  DEN_FENCE_POLICY_FILE="$fixture_root/startup-policy.json" \
   REPOWOLF_ENDPOINT=https://broker.example.test/ \
   REPOWOLF_TOKEN=rw1_AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE \
   REPOWOLF_CA_FILE="$fixture_root/ca.pem" \
   "$DEN_NATIVE_PI_STARTUP_SANDBOX" --version > "$fixture_root/version"
 )
 test "$(<"$fixture_root/version")" = 0.84.4
+required_assertions='allowed-bash-after-no-change-helper
+fail-closed:deny
+fail-closed:rewrite
+fail-closed:malformed
+fail-closed:failed
+native-user-bash-parity
+hostile-user-project-extensions-cannot-replace-entrypoints
+identity-change-fails-closed
+helper-created-no-http-or-socks-listener
+outer-fence-required-for-shell-entrypoints'
+while IFS= read -r assertion; do
+  grep -Fxq "$assertion" "$fixture_root/assertions.report"
+done <<< "$required_assertions"
 printf 'complete\n' > "$DEN_NATIVE_HOST_ROOT/pi-darwin-startup.complete"

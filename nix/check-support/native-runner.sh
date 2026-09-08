@@ -33,7 +33,10 @@ case "$DEN_NATIVE_HOST_SYSTEM" in
     : "${DEN_NATIVE_FENCE_CAPABILITIES:?packaged Darwin Fence capability fixture is required}"
     : "${DEN_NATIVE_SANDBOX_EXEC:?Darwin sandbox-exec path is required}"
     test -x "$DEN_NATIVE_CLAUDE_STARTUP"
-    test -x "$DEN_NATIVE_PI_STARTUP"
+    case "$DEN_NATIVE_PI_STARTUP" in
+      /*) test -x "$DEN_NATIVE_PI_STARTUP" ;;
+      *) printf 'Darwin Pi startup fixture must be an absolute executable path\n' >&2; exit 1 ;;
+    esac
     test -x "$DEN_NATIVE_FENCE_CAPABILITIES"
     test -x "$DEN_NATIVE_SANDBOX_EXEC"
     ;;

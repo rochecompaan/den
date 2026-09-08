@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -26,8 +27,23 @@ func requirePiDarwinStartupCompletion(root string) error {
 }
 
 func TestPiDarwinStartupFixtureCompleted(t *testing.T) {
-	if err := requirePiDarwinStartupCompletion(os.Getenv("DEN_NATIVE_HOST_ROOT")); err != nil {
+	root := os.Getenv("DEN_NATIVE_HOST_ROOT")
+	if err := requirePiDarwinStartupCompletion(root); err != nil {
 		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, "pi-darwin-startup", "assertions.report"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, assertion := range []string{
+		"allowed-bash-after-no-change-helper", "fail-closed:deny", "fail-closed:rewrite",
+		"fail-closed:malformed", "fail-closed:failed", "native-user-bash-parity",
+		"hostile-user-project-extensions-cannot-replace-entrypoints", "identity-change-fails-closed",
+		"helper-created-no-http-or-socks-listener", "outer-fence-required-for-shell-entrypoints",
+	} {
+		if !strings.Contains("\n"+string(contents), "\n"+assertion+"\n") {
+			t.Fatalf("Darwin Pi startup assertion %q is missing from %q", assertion, contents)
+		}
 	}
 }
 
