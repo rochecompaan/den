@@ -83,7 +83,7 @@ pkgs.runCommand "pi-package"
     ! ${pkgs.gnugrep}/bin/grep -R -F -q -- "$credential" "$pi"
 
     cat > "$TMPDIR/session-switch.mjs" <<'EOF'
-    import { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+    import { mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
     import { join } from "node:path";
 
     const sessionRoot = process.env.PI_CODING_AGENT_SESSION_DIR;
@@ -103,6 +103,7 @@ pkgs.runCommand "pi-package"
     let loadedCwd;
     const currentSession = {
       sessionFile: undefined,
+      sessionManager: { getSessionDir: () => sessionRoot },
       extensionRunner: {
         hasHandlers: (event) => event === "session_before_switch",
         emit: async (event) => {
@@ -127,6 +128,49 @@ pkgs.runCommand "pi-package"
     if (loadedCwd !== trustedCwd) {
       throw new Error(`atomic replacement session was read: ''${loadedCwd}`);
     }
+
+    const importDir = join(sessionRoot, "import-source");
+    mkdirSync(importDir);
+    const importSource = join(importDir, "import.jsonl");
+    const importDestination = join(sessionRoot, "import.jsonl");
+    const importOutside = join(process.env.TMPDIR, "import-outside.jsonl");
+    writeFileSync(importSource, session("import-source", trustedCwd));
+    writeFileSync(importOutside, session("import-outside", hostileCwd));
+    const importOutsideBefore = readFileSync(importOutside, "utf8");
+    const importAlias = join(sessionRoot, "import-alias.jsonl");
+    symlinkSync(importOutside, importAlias);
+    const importCurrentSession = {
+      sessionFile: undefined,
+      sessionManager: { getSessionDir: () => sessionRoot },
+      extensionRunner: { hasHandlers: () => false },
+      abort: async () => {},
+      dispose: () => {},
+    };
+    const importRuntime = new AgentSessionRuntime(
+      importCurrentSession,
+      { cwd: trustedCwd, agentDir: process.env.TMPDIR },
+      async ({ sessionManager }) => ({ session: importCurrentSession, services: { cwd: sessionManager.getCwd(), agentDir: process.env.TMPDIR }, diagnostics: [] }),
+    );
+    let importAliasRejected = false;
+    try {
+      await importRuntime.importFromJsonl(importAlias);
+    } catch (error) {
+      if (!String(error).includes("Pi session target must be an existing regular file")) throw error;
+      importAliasRejected = true;
+    }
+    if (!importAliasRejected) throw new Error("import source symlink was followed");
+    if (readFileSync(importOutside, "utf8") !== importOutsideBefore) throw new Error("import source symlink changed outside bytes");
+
+    symlinkSync(importOutside, importDestination);
+    let importRejected = false;
+    try {
+      await importRuntime.importFromJsonl(importSource);
+    } catch (error) {
+      if (!String(error).includes("Pi session target must be an existing regular file")) throw error;
+      importRejected = true;
+    }
+    if (!importRejected) throw new Error("import destination symlink was followed");
+    if (readFileSync(importOutside, "utf8") !== importOutsideBefore) throw new Error("import destination symlink changed outside bytes");
     EOF
     PI_CODING_AGENT_SESSION_DIR="$TMPDIR/sessions" \
       PI_SESSION_RUNTIME="${pi.packageRoot}/dist/core/agent-session-runtime.js" \

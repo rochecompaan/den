@@ -8,7 +8,7 @@ let
   tarballHash = "sha256-W852bRnDzroY8/uq2RxEnJ+dc5gfnjQA7O+TIAbwaWg=";
   lockHash = "sha256-/xfQaHHRD9Riiv+hqSHfFzvx+GBeByzCqgpO5Oi0cc4=";
   npmDepsHash = "sha256-rSUYLw/RoIZ2f6gMwpSUdDqGECFUnm0KnNu/uCLYbpE=";
-  patchHash = "sha256-FrC5FS5BBasuJpINhtKzZEkY0qG8wkxoL3/gpP5VFyM=";
+  patchHash = "sha256-0DVX2CG8Wrcz1yG5kHp/hBIL51r4UwmuAe+RdlmI7jE=";
   lock = ./pi-0.84.4-package-lock.json;
   patch = ../../patches/pi-0.84.4-den-hardening.patch;
   actualLockHash = builtins.hashFile "sha256" lock;

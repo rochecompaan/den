@@ -225,6 +225,135 @@ export default function () { writeFileSync(%s, %s); }
 	}
 }
 
+func TestPiStartupSelectorsRejectPreexistingSessionAliases(t *testing.T) {
+	const (
+		partialID = "deadbeef"
+		fullID    = "deadbeef-0000-4000-8000-000000000001"
+	)
+	for _, selector := range []struct {
+		name       string
+		arguments  []string
+		mustReject bool
+	}{
+		{name: "session", arguments: []string{"--session", partialID}, mustReject: true},
+		{name: "fork", arguments: []string{"--fork", partialID}, mustReject: true},
+		{name: "continue", arguments: []string{"--continue"}},
+		{name: "session_id", arguments: []string{"--session-id", fullID}},
+	} {
+		t.Run(selector.name, func(t *testing.T) {
+			fixture := newPiFixture(t)
+			hostileCwd := filepath.Join(fixture.worktree, "selector-hostile")
+			if err := os.Mkdir(hostileCwd, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			outside := filepath.Join(fixture.worktree, "selector-outside.jsonl")
+			writeSessionFixture(t, outside, 3, fullID, hostileCwd, "outside-alias", "selector-entry")
+			if err := os.Symlink(outside, filepath.Join(fixture.sessionDir, "selector-alias.jsonl")); err != nil {
+				t.Fatal(err)
+			}
+			arguments := append([]string{"--mode", "rpc"}, selector.arguments...)
+			result := fixture.sandbox("", arguments...)
+			if selector.mustReject {
+				if result.err == nil || !strings.Contains(result.stderr, "No session found matching") {
+					t.Fatalf("pre-existing %s alias was not rejected before startup: %v\n%s%s", selector.name, result.err, result.stdout, result.stderr)
+				}
+				return
+			}
+			if result.err != nil {
+				t.Fatalf("%s fallback failed: %v\n%s%s", selector.name, result.err, result.stdout, result.stderr)
+			}
+			report, _ := os.ReadFile(fixture.reportPath())
+			if reportHasLine(report, "session-entry:outside-alias") || strings.Contains(string(report), "session-start:startup:selector-hostile:") {
+				t.Fatalf("%s followed a pre-existing session alias: %s", selector.name, report)
+			}
+		})
+	}
+}
+
+func TestPiSwitchReplacementCannotRedirectMigrationOrPersistence(t *testing.T) {
+	for _, version := range []int{1, 3} {
+		for _, replacement := range []string{"symlink", "regular"} {
+			t.Run(fmt.Sprintf("version_%d_%s", version, replacement), func(t *testing.T) {
+				fixture := newPiFixture(t)
+				target := filepath.Join(fixture.sessionDir, fmt.Sprintf("switch-v%d.jsonl", version))
+				outside := filepath.Join(fixture.worktree, fmt.Sprintf("switch-v%d-outside.jsonl", version))
+				writeSessionFixture(t, target, version, fmt.Sprintf("00000000-0000-4000-8000-00000000000%d", version), fixture.worktree, "trusted-loaded", "trusted-entry")
+				writeSessionFixture(t, outside, 3, fmt.Sprintf("10000000-0000-4000-8000-00000000000%d", version), fixture.worktree, "outside-loaded", "outside-entry")
+				before, err := os.ReadFile(outside)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request, _ := json.Marshal(map[string]string{"id": "switch-persist", "type": "prompt", "message": "/native-switch swap-persist " + target})
+				result := fixture.run(os.Getenv("DEN_NATIVE_PI_SANDBOX"), rpcInput(string(request)),
+					[]string{"DEN_PI_SWAP_TARGET=" + target, "DEN_PI_SWAP_OUTSIDE=" + outside, "DEN_PI_SWAP_KIND=" + replacement}, "--mode", "rpc")
+				requireRPCResponse(t, result, "switch-persist", true, "")
+				requireReportLines(t, fixture.reportPath(), "session-target-swapped", "session-swap-persist-rejected:identity")
+				after, err := os.ReadFile(outside)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(after) != string(before) {
+					t.Fatalf("after-callback switch migration or persistence modified replacement source for %s", replacement)
+				}
+				report, _ := os.ReadFile(fixture.reportPath())
+				if reportHasLine(report, "session-switch-loaded:outside-loaded") {
+					t.Fatal("switch loaded the replacement session entries")
+				}
+			})
+		}
+	}
+}
+
+func TestPiBeforeForkReplacementIsRejectedBeforeReopen(t *testing.T) {
+	for _, replacement := range []string{"symlink", "regular"} {
+		t.Run(replacement, func(t *testing.T) {
+			fixture := newPiFixture(t)
+			const sessionID = "abcdef01-0000-4000-8000-000000000001"
+			target := filepath.Join(fixture.sessionDir, "fork-source.jsonl")
+			outside := filepath.Join(fixture.worktree, "fork-outside.jsonl")
+			writeSessionFixture(t, target, 3, sessionID, fixture.worktree, "trusted-fork", "fork-entry")
+			writeSessionFixture(t, outside, 3, "abcdef02-0000-4000-8000-000000000001", fixture.worktree, "outside-fork", "fork-entry")
+			request, _ := json.Marshal(map[string]string{"id": "fork-replace", "type": "prompt", "message": "/native-switch fork-replace fork-entry"})
+			result := fixture.run(os.Getenv("DEN_NATIVE_PI_SANDBOX"), rpcInput(string(request)),
+				[]string{"DEN_PI_FORK_SWAP_TARGET=" + target, "DEN_PI_FORK_SWAP_OUTSIDE=" + outside, "DEN_PI_SWAP_KIND=" + replacement},
+				"--mode", "rpc", "--session", "abcdef01")
+			requireRPCResponse(t, result, "fork-replace", true, "")
+			requireReportLines(t, fixture.reportPath(), "session-fork-target-swapped", "session-fork-rejected:identity")
+			if report, _ := os.ReadFile(fixture.reportPath()); reportHasLine(report, "session-fork-loaded:outside-fork") {
+				t.Fatal("fork reopened the callback replacement session")
+			}
+		})
+	}
+}
+
+func TestPiNativeResumeDiscoveryRejectsPreexistingAlias(t *testing.T) {
+	fixture := newPiFixture(t)
+	target := writeSession(t, fixture.sessionDir, "selector.jsonl", "selector", fixture.worktree)
+	outside := filepath.Join(fixture.worktree, "discovery-outside.jsonl")
+	writeSessionFixture(t, outside, 3, "feedface-0000-4000-8000-000000000001", fixture.worktree, "outside-discovery", "outside-entry")
+	file, err := os.OpenFile(outside, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, writeErr := fmt.Fprintln(file, `{"type":"session_info","id":"outside-name","parentId":"outside-entry","timestamp":"2026-09-05T00:00:01.000Z","name":"pi8evil"}`)
+	if closeErr := file.Close(); writeErr != nil || closeErr != nil {
+		t.Fatalf("write discovery alias: %v / %v", writeErr, closeErr)
+	}
+	if err := os.Symlink(outside, filepath.Join(fixture.sessionDir, "discovery-alias.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	runNativeResume(t, fixture, target, "worktree", false, "DEN_PI_FORBIDDEN_DISCOVERY_NAME=pi8evil")
+}
+
+func writeSessionFixture(t *testing.T, path string, version int, sessionID, cwd, marker, entryID string) {
+	t.Helper()
+	contents := fmt.Sprintf("{\"type\":\"session\",\"version\":%d,\"id\":%q,\"timestamp\":\"2026-09-05T00:00:00.000Z\",\"cwd\":%q}\n", version, sessionID, cwd)
+	contents += fmt.Sprintf("{\"type\":\"custom\",\"customType\":\"den-session-fixture\",\"data\":{\"marker\":%q},\"id\":%q,\"parentId\":null,\"timestamp\":\"2026-09-05T00:00:00.000Z\"}\n", marker, entryID)
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPiRPCSessionSwitchContainmentAndOrdering(t *testing.T) {
 	fixture := newPiFixture(t)
 	valid := writeSession(t, fixture.sessionDir, "valid.jsonl", "valid", fixture.worktree)
@@ -300,22 +429,17 @@ func TestPiRPCSessionSwitchContainmentAndOrdering(t *testing.T) {
 	}
 }
 
-func TestPiSessionTargetSwapUsesValidatedBytes(t *testing.T) {
+func TestPiSessionSwitchLoadsDistinctValidatedEntries(t *testing.T) {
 	fixture := newPiFixture(t)
 	trustedCwd := filepath.Join(fixture.worktree, "trusted-cwd")
-	hostileCwd := filepath.Join(fixture.worktree, "hostile-cwd")
-	for _, path := range []string{trustedCwd, hostileCwd} {
-		if err := os.Mkdir(path, 0o700); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.Mkdir(trustedCwd, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	target := writeSession(t, fixture.sessionDir, "swap.jsonl", "trusted", trustedCwd)
-	outside := writeSession(t, fixture.worktree, "hostile.jsonl", "hostile", hostileCwd)
-	runNativeResume(t, fixture, target, "trusted-cwd", false, "DEN_PI_SWAP_TARGET="+target, "DEN_PI_SWAP_OUTSIDE="+outside)
-	requireReportLines(t, fixture.reportPath(), "session-target-swapped", "session-start:resume:trusted-cwd:true:sessions")
-	if report, _ := os.ReadFile(fixture.reportPath()); reportHasLine(report, "session-start:resume:hostile-cwd:true:sessions") {
-		t.Fatal("Pi reopened attacker-replaced session bytes")
-	}
+	target := filepath.Join(fixture.sessionDir, "validated-entry.jsonl")
+	writeSessionFixture(t, target, 3, "00000000-0000-4000-8000-000000000001", trustedCwd, "trusted-loaded", "trusted-entry")
+	runNativeResume(t, fixture, target, "trusted-cwd", false)
+	requireReportLines(t, fixture.reportPath(), "session-before:validated-entry.jsonl",
+		"session-start:resume:trusted-cwd:true:sessions", "session-entry:trusted-loaded")
 }
 
 func TestPiExtensionMutationCannotChangeCapturedSessionRoot(t *testing.T) {
@@ -540,6 +664,11 @@ func runNativeResume(t *testing.T, fixture *piFixture, target, cwd string, repla
 		}
 	}
 	wait("native selector discovery", func() bool { return strings.Contains(output.String(), name) })
+	for _, entry := range extra {
+		if forbidden, ok := strings.CutPrefix(entry, "DEN_PI_FORBIDDEN_DISCOVERY_NAME="); ok && strings.Contains(output.String(), forbidden) {
+			t.Fatalf("native selector discovered a pre-existing session alias %q\n%s", forbidden, output.String())
+		}
+	}
 	if replace {
 		outside := filepath.Join(fixture.worktree, "unparsed-outside.jsonl")
 		if err := os.WriteFile(outside, []byte("must not be parsed\n"), 0o600); err != nil {

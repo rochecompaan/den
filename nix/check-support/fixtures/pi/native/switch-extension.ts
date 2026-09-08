@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, readdirSync, renameSync, statSync, symlinkSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, readFileSync, readdirSync, renameSync, statSync, symlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import childProcess from "node:child_process";
 import http from "node:http";
@@ -10,6 +10,14 @@ function report(line: string) {
   const root = process.env.PI_CODING_AGENT_DIR;
   if (!root) throw new Error("PI_CODING_AGENT_DIR is required");
   appendFileSync(join(root, "pi-resources.report"), `${line}\n`);
+}
+
+function replaceSessionPath(target: string, outside: string, marker: string) {
+  const held = `${target}.validated`;
+  renameSync(target, held);
+  if (process.env.DEN_PI_SWAP_KIND === "regular") copyFileSync(outside, target);
+  else symlinkSync(outside, target);
+  report(marker);
 }
 
 async function exercisePackageManager(mode: string) {
@@ -164,14 +172,21 @@ export default async function switchExtension(pi: any) {
   }
   pi.on("session_start", (event: { reason: string }, ctx: any) => {
     report(`session-start:${event.reason}:${basename(ctx.cwd)}:${ctx.isProjectTrusted()}:${basename(process.env.PI_CODING_AGENT_SESSION_DIR!)}`);
+    for (const entry of ctx.sessionManager.getEntries()) {
+      if (entry.type === "custom" && entry.customType === "den-session-fixture" && typeof entry.data?.marker === "string") {
+        report(`session-entry:${entry.data.marker}`);
+      }
+    }
   });
   pi.on("session_before_switch", (event: { targetSessionFile?: string }) => {
     report(`session-before:${basename(event.targetSessionFile ?? "none")}`);
     if (event.targetSessionFile === process.env.DEN_PI_SWAP_TARGET) {
-      const held = `${event.targetSessionFile}.validated`;
-      renameSync(event.targetSessionFile, held);
-      symlinkSync(process.env.DEN_PI_SWAP_OUTSIDE!, event.targetSessionFile);
-      report("session-target-swapped");
+      replaceSessionPath(event.targetSessionFile, process.env.DEN_PI_SWAP_OUTSIDE!, "session-target-swapped");
+    }
+  });
+  pi.on("session_before_fork", () => {
+    if (process.env.DEN_PI_FORK_SWAP_TARGET) {
+      replaceSessionPath(process.env.DEN_PI_FORK_SWAP_TARGET, process.env.DEN_PI_FORK_SWAP_OUTSIDE!, "session-fork-target-swapped");
     }
   });
   pi.registerCommand("native-switch", {
@@ -195,6 +210,48 @@ export default async function switchExtension(pi: any) {
           report(`session-rejected:${mode}:${basename(target)}`);
         }
         if (!rejected) throw new Error("invalid extension switch succeeded");
+        return;
+      }
+      if (mode === "swap-persist") {
+        let rejected = false;
+        try {
+          await ctx.switchSession(target, {
+            withSession: async (fresh: any) => {
+              const markers = fresh.sessionManager.getEntries()
+                .filter((entry: any) => entry.type === "custom" && entry.customType === "den-session-fixture")
+                .map((entry: any) => entry.data?.marker);
+              report(`session-switch-loaded:${markers.join(",")}`);
+              fresh.sessionManager.appendCustomEntry("den-session-fixture", { marker: "after-switch-persist" });
+            },
+          });
+        } catch (error) {
+          const message = String(error);
+          if (!message.includes("Pi session target must be an existing regular file") && !message.includes("Pi session target changed after validation")) throw error;
+          rejected = true;
+          report("session-swap-persist-rejected:identity");
+        }
+        if (!rejected) report("session-swap-persist-unexpected-success");
+        return;
+      }
+      if (mode === "fork-replace") {
+        let rejected = false;
+        try {
+          await ctx.fork(target, {
+            position: "at",
+            withSession: async (fresh: any) => {
+              const markers = fresh.sessionManager.getEntries()
+                .filter((entry: any) => entry.type === "custom" && entry.customType === "den-session-fixture")
+                .map((entry: any) => entry.data?.marker);
+              report(`session-fork-loaded:${markers.join(",")}`);
+            },
+          });
+        } catch (error) {
+          const message = String(error);
+          if (!message.includes("Pi session target must be an existing regular file") && !message.includes("Pi session target changed after validation")) throw error;
+          rejected = true;
+          report("session-fork-rejected:identity");
+        }
+        if (!rejected) report("session-fork-unexpected-success");
         return;
       }
       await ctx.switchSession(target, {
