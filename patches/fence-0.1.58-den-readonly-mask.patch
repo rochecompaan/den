@@ -4,7 +4,7 @@
 +	linuxLateMountMaskDirReadOnly
 @@ -41 +42,7 @@
 -	if p.hasStrictAncestor(path, linuxLateMountMaskDir) {
-+	if kind == linuxLateMountMaskDir && p.hasDescendant(path, linuxLateMountReadOnly) {
++	if kind == linuxLateMountMaskDir && p.hasContainedReadOnly(path) {
 +		kind = linuxLateMountMaskDirReadOnly
 +	}
 +	if kind == linuxLateMountReadOnly && p.promoteContainingMaskDir(path) {
@@ -34,9 +34,9 @@
 +	return false
 +}
 +
-+func (p *linuxLateMountPlanner) hasDescendant(path string, kind linuxLateMountKind) bool {
++func (p *linuxLateMountPlanner) hasContainedReadOnly(path string) bool {
 +	for _, mount := range p.mounts {
-+		if mount.Kind == kind && mount.Path != path && linuxPathContains(path, mount.Path) {
++		if mount.Kind == linuxLateMountReadOnly && linuxPathContains(path, mount.Path) {
 +			return true
 +		}
 +	}
@@ -51,7 +51,26 @@
 +		return 4
 --- a/internal/sandbox/linux_test.go
 +++ b/internal/sandbox/linux_test.go
-@@ -697,6 +697,3 @@
+@@ -632,2 +632,16 @@
+-	if mounts[0].Path != "/tmp/secret" || mounts[0].Kind != linuxLateMountMaskDir {
+-		t.Fatalf("expected masked ancestor to win, got %#v", mounts)
++	if mounts[0].Path != "/tmp/secret" || mounts[0].Kind != linuxLateMountMaskDirReadOnly {
++		t.Fatalf("expected read-only masked ancestor to win, got %#v", mounts)
++	}
++}
++
++func TestLinuxLateMountPlanner_ReadOnlyThenMaskDirPreservesReadOnlyMask(t *testing.T) {
++	planner := newLinuxLateMountPlanner()
++	planner.Add("/tmp/secret", linuxLateMountReadOnly)
++	planner.Add("/tmp/secret", linuxLateMountMaskDir)
++
++	mounts := planner.Mounts()
++	if len(mounts) != 1 {
++		t.Fatalf("expected a single mount, got %#v", mounts)
++	}
++	if mounts[0].Path != "/tmp/secret" || mounts[0].Kind != linuxLateMountMaskDirReadOnly {
++		t.Fatalf("expected read-only masked directory, got %#v", mounts)
+@@ -697,6 +711,3 @@
 -	rebindFragment := ShellQuote([]string{"--ro-bind", secretDir, secretDir})
 -	if !strings.Contains(cmd, maskFragment) {
 -		t.Fatalf("expected denyRead directory mask in command: %s", cmd)
@@ -61,7 +80,7 @@
 +	remountFragment := ShellQuote([]string{"--remount-ro", secretDir})
 +	if !strings.Contains(cmd, maskFragment) || !strings.Contains(cmd, remountFragment) {
 +		t.Fatalf("expected read-only denyRead directory mask in command: %s", cmd)
-@@ -739,6 +736,3 @@
+@@ -739,6 +750,3 @@
 -	rebindFragment := ShellQuote([]string{"--ro-bind", secretFile, secretFile})
 -	if !strings.Contains(cmd, maskFragment) {
 -		t.Fatalf("expected denyRead directory mask in command: %s", cmd)

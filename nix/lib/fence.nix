@@ -8,7 +8,7 @@ let
   expectedVersion = "0.1.58";
   expectedSourceHash = "sha256-ACe3N4bXYJW6QDQHtRChFWOTXTZTbEUbZ4d8cuFRqMY=";
   expectedPatchHash = "4be4f0266a0a79da10002893752ea8185915f6ecfb146513946bde8a96e41e2a";
-  expectedReadOnlyMaskPatchHash = "440a5162ff4a3d2c8a3566d0ae018c166c03f86be54f74d5a9cfece65dc4def0";
+  expectedReadOnlyMaskPatchHash = "750d15f9c6eee70f916de3044c60d937f9d67c39c0178da1a4da8acf8d6b990b";
   upstreamPatches = upstream.patches or [ ];
   patchHash = builtins.hashFile "sha256" patch;
   readOnlyMaskPatchHash = builtins.hashFile "sha256" readOnlyMaskPatch;
@@ -32,7 +32,7 @@ let
     checkPhase = ''
       runHook preCheck
       go test ./cmd/fence -count=1
-      go test ./internal/sandbox -run '^(TestEnsureSandboxTMPDIRHonorsDenFenceTMPDIR|TestGenerateProxyEnvVars|TestWrapCommandMacOS_PinsSandboxExecAbsolutePath|TestWrapCommandLinuxWithOptions_DenyReadDirectoryWinsOverSamePathDenyWrite|TestWrapCommandLinuxWithOptions_DenyReadDirectoryWinsOverChildDenyWrite)$' -count=1
+      go test ./internal/sandbox -run '^(TestEnsureSandboxTMPDIRHonorsDenFenceTMPDIR|TestGenerateProxyEnvVars|TestWrapCommandMacOS_PinsSandboxExecAbsolutePath|TestLinuxLateMountPlanner_MaskedAncestorWinsOverChildReadOnly|TestLinuxLateMountPlanner_ReadOnlyThenMaskDirPreservesReadOnlyMask|TestWrapCommandLinuxWithOptions_DenyReadDirectoryWinsOverSamePathDenyWrite|TestWrapCommandLinuxWithOptions_DenyReadDirectoryWinsOverChildDenyWrite)$' -count=1
       runHook postCheck
     '';
     passthru = (old.passthru or { }) // {

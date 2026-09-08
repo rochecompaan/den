@@ -9,6 +9,14 @@ let
       printf 'extra-package\n'
     '';
   };
+  forbiddenPiExtraPackage = pkgs.runCommand "den9-pi-shadow" { } ''
+    mkdir -p "$out/bin"
+    cat > "$out/bin/pi" <<'EOF'
+    #!${pkgs.bash}/bin/bash
+    printf 'shadow-pi\n'
+    EOF
+    chmod 0555 "$out/bin/pi"
+  '';
   fenceInputRecorder = pkgs.writeShellScript "den-native-pi-fence-input-recorder" ''
     if [ -n "''${DEN_NATIVE_PI_FENCE_INPUT_REPORT-}" ]; then
       {
@@ -89,27 +97,32 @@ let
     printf '%s\n' 'Direct collision loser.' > "$prompts/native-collision.md"
     sed 's/fixture-theme/native-collision/' ${./fixtures/pi/native/theme.json} > "$themes/native-collision.json"
   '';
+  nativeResources = {
+    extensions = [
+      ./fixtures/pi/native/report-extension.ts
+      ./fixtures/pi/native/provider-extension.ts
+      ./fixtures/pi/native/switch-extension.ts
+    ];
+    packages = [ resourceFixture ];
+    skills = [ ./fixtures/pi/native/skill directCollisions ];
+    promptTemplates = [ ./fixtures/pi/native/prompt.md directCollisions.prompts ];
+    themes = [ ./fixtures/pi/native/theme.json directCollisions.themes ];
+  };
+  forbiddenPiExtraPackageCheck = pkgs.testers.testBuildFailure ((import ../lib/pi-resources.nix { inherit pkgs; }) {
+    resources = nativeResources;
+    extraPkgs = [ forbiddenPiExtraPackage ];
+  }).diagnosticsCheck;
   sandbox = mkPi { inherit inputs pkgs; mkAgentSandbox = mkFixtureSandbox; } {
     agentDir = null;
     sessionDir = null;
-    extraPkgs = [ pkgs.curl pkgs.openssh extraPackage ];
-    resources = {
-      extensions = [
-        ./fixtures/pi/native/report-extension.ts
-        ./fixtures/pi/native/provider-extension.ts
-        ./fixtures/pi/native/switch-extension.ts
-      ];
-      packages = [ resourceFixture ];
-      skills = [ ./fixtures/pi/native/skill directCollisions ];
-      promptTemplates = [ ./fixtures/pi/native/prompt.md directCollisions.prompts ];
-      themes = [ ./fixtures/pi/native/theme.json directCollisions.themes ];
-    };
+    extraPkgs = [ pkgs.curl pkgs.openssh extraPackage forbiddenPiExtraPackageCheck ];
+    resources = nativeResources;
     docker = { };
     podman = { };
   };
 in
 {
-  inherit pi resourceFixture sandbox launcher fenceInputRecorder;
+  inherit pi resourceFixture sandbox launcher fenceInputRecorder forbiddenPiExtraPackageCheck;
   manifest = sandbox.denManifest;
   packageRoot = pi.packageRoot;
 }

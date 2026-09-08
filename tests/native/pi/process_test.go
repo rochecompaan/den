@@ -75,23 +75,23 @@ func TestPiExactRuntimeEnvironmentAndScrubbing(t *testing.T) {
 }
 func jsonString(value string) string { encoded, _ := json.Marshal(value); return string(encoded) }
 
-func TestPiWrapperPrecedesExtraPackage(t *testing.T) {
+func TestPiWrapperPrecedesAllowedExtraPackage(t *testing.T) {
 	fixture := newPiFixture(t)
 	result := fixture.sandbox("", "--version")
 	if result.err != nil || strings.TrimSpace(result.stdout) != "0.84.4" {
-		t.Fatalf("extra package replaced wrapper: %v %s%s", result.err, result.stdout, result.stderr)
+		t.Fatalf("allowed extra package replaced wrapper: %v %s%s", result.err, result.stdout, result.stderr)
 	}
-	// The fixture supplies an actual conflicting extra package. Verify that it is
-	// present rather than letting the precedence assertion pass vacuously.
 	fixture.enforcementProbe(t, `
- const fake = run("den9-extra-present", []);
- assert.equal(fake.status, 0, "conflicting extra package must be installed");
- assert.equal(fake.stdout, "extra-package\n"); record("extra-package-present");
+ const extra = run("den9-extra-present", []);
+ assert.equal(extra.status, 0, "allowed extra package must be installed");
+ assert.equal(extra.stdout, "extra-package\n"); record("allowed-extra-package-present");
  `, nil)
 }
 
 func TestPiExtensionProcessesKeepOuterControls(t *testing.T) {
 	fixture := newPiFixture(t)
+	network := startPiNetwork(t, fixture)
+	network.requireTCPListener(t)
 	outside := filepath.Join(fixture.root, "process-secret")
 	if err := os.WriteFile(outside, []byte("den9-process-secret"), 0o600); err != nil {
 		t.Fatal(err)
@@ -108,6 +108,9 @@ func TestPiExtensionProcessesKeepOuterControls(t *testing.T) {
  `, nil)
 	if data, err := os.ReadFile(filepath.Join(fixture.worktree, "child-control")); err != nil || string(data) != "allowed" {
 		t.Fatal("extension control did not run")
+	}
+	if network.tcpConnections.Load() != 0 {
+		t.Fatal("extension child reached live direct TCP listener")
 	}
 	requireNoCredential(t, result, "den9-process-secret")
 }

@@ -258,7 +258,7 @@ assert fence == fenceInfo.package;
 assert fenceInfo.version == "0.1.58";
 assert fenceInfo.sourceHash == "sha256-ACe3N4bXYJW6QDQHtRChFWOTXTZTbEUbZ4d8cuFRqMY=";
 assert fenceInfo.patchHash == "4be4f0266a0a79da10002893752ea8185915f6ecfb146513946bde8a96e41e2a";
-assert fenceInfo.readOnlyMaskPatchHash == "440a5162ff4a3d2c8a3566d0ae018c166c03f86be54f74d5a9cfece65dc4def0";
+assert fenceInfo.readOnlyMaskPatchHash == "750d15f9c6eee70f916de3044c60d937f9d67c39c0178da1a4da8acf8d6b990b";
 assert fenceInfo.capabilities.claudePreToolUse;
 assert fenceInfo.capabilities.denFenceTmpdir;
 assert fenceInfo.capabilities.strictDenyRead;

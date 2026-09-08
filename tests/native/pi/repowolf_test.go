@@ -121,6 +121,23 @@ func startPiNetwork(t *testing.T, fixture *piFixture) *piNetwork {
 	return network
 }
 
+func (network *piNetwork) requireTCPListener(t *testing.T) {
+	t.Helper()
+	connection, err := net.DialTimeout("tcp", "127.0.0.1:38416", time.Second)
+	if err != nil {
+		t.Fatalf("live direct TCP listener is unavailable: %v", err)
+	}
+	_ = connection.Close()
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		if network.tcpConnections.Load() != 0 {
+			network.tcpConnections.Store(0)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("live direct TCP listener did not record its control connection")
+}
+
 func TestPiRepoWolfHelpersAreTheOnlyGitHubRoute(t *testing.T) {
 	fixture := newPiFixture(t)
 	network := startPiNetwork(t, fixture)
