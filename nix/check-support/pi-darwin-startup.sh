@@ -140,40 +140,44 @@ prestart_launch() {
     DEN_NATIVE_INVOKING_HOME="$fixture_root/invoking-home" \
     PI_CODING_AGENT_DIR="$fixture_root/agent" \
     PI_CODING_AGENT_SESSION_DIR="$fixture_root/sessions" \
-    DEN_PI_DARWIN_PI_START_MARKER="$fixture_root/pi-started" \
+    DEN_PI_DARWIN_PI_START_MARKER="$fixture_root/worktree/pi-started" \
     REPOWOLF_ENDPOINT=https://broker.example.test/ \
     REPOWOLF_TOKEN=rw1_AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE \
     REPOWOLF_CA_FILE="$fixture_root/ca.pem" \
-    "$sandbox" --mode rpc < /dev/null > "$output"
+    "$sandbox" --mode rpc < /dev/null > "$output" 2>&1
   )
 }
 expect_prestart_rejection() {
-  local sandbox=$1 label=$2
-  rm -f "$fixture_root/pi-started"
+  local sandbox=$1 label=$2 diagnostic=$3
+  rm -f "$fixture_root/worktree/pi-started"
   if prestart_launch "$sandbox" "$fixture_root/$label-version"; then
     printf '%s identity mismatch reached Pi launch\n' "$label" >&2
     exit 1
   fi
-  test ! -e "$fixture_root/pi-started"
+  test ! -e "$fixture_root/worktree/pi-started"
+  grep -Fqx "$diagnostic" "$fixture_root/$label-version"
   printf 'prestart-%s-mismatch-fails-before-launch\n' "$label" >> "$fixture_root/assertions.report"
+  printf 'prestart-%s-identity-diagnostic\n' "$label" >> "$fixture_root/assertions.report"
 }
 
 # Both negatives cross the packaged sandbox, den-launcher, and real outer
 # Fence. Their marker is written by a real Pi extension only if Pi begins
 # loading extensions, so its absence proves rejection before Pi starts.
-expect_prestart_rejection "$DEN_NATIVE_PI_STARTUP_PRESTART_EXTENSION_MISMATCH_SANDBOX" extension
-expect_prestart_rejection "$DEN_NATIVE_PI_STARTUP_PRESTART_POLICY_MISMATCH_SANDBOX" policy
+expect_prestart_rejection "$DEN_NATIVE_PI_STARTUP_PRESTART_EXTENSION_MISMATCH_SANDBOX" extension \
+  'Pi command security extension identity changed'
+expect_prestart_rejection "$DEN_NATIVE_PI_STARTUP_PRESTART_POLICY_MISMATCH_SANDBOX" policy \
+  'Pi command security input changed'
 printf 'outer Fence synthetic secret\n' > "$fixture_root/outside-secret"
 chmod 0600 "$fixture_root/outside-secret"
 export DEN_PI_DARWIN_EXPECT_OUTER_FENCE=1
 export DEN_PI_DARWIN_OUTSIDE="$fixture_root/outside-secret"
-export DEN_PI_DARWIN_DIRECT_REPORT="$fixture_root/direct-extension.report"
-rm -f "$fixture_root/pi-started"
+export DEN_PI_DARWIN_DIRECT_REPORT="$fixture_root/worktree/direct-extension.report"
+rm -f "$fixture_root/worktree/pi-started"
 prestart_launch "$DEN_NATIVE_PI_STARTUP_SANDBOX" "$fixture_root/version"
 unset DEN_PI_DARWIN_EXPECT_OUTER_FENCE DEN_PI_DARWIN_OUTSIDE DEN_PI_DARWIN_DIRECT_REPORT
 test ! -s "$fixture_root/version"
-test "$(<"$fixture_root/pi-started")" = started
-test "$(<"$fixture_root/direct-extension.report")" = denied
+printf 'started\n' | cmp - "$fixture_root/worktree/pi-started"
+printf 'denied\n' | cmp - "$fixture_root/worktree/direct-extension.report"
 printf 'direct-extension-process-outer-fence-constrained\n' >> "$fixture_root/assertions.report"
 required_assertions='allowed-bash-after-no-change-helper
 fail-closed:deny
@@ -187,7 +191,9 @@ helper-created-no-http-or-socks-listener
 outer-fence-required-for-shell-entrypoints
 direct-extension-process-outer-fence-constrained
 prestart-extension-mismatch-fails-before-launch
-prestart-policy-mismatch-fails-before-launch'
+prestart-policy-mismatch-fails-before-launch
+prestart-extension-identity-diagnostic
+prestart-policy-identity-diagnostic'
 while IFS= read -r assertion; do
   grep -Fxq "$assertion" "$fixture_root/assertions.report"
 done <<< "$required_assertions"

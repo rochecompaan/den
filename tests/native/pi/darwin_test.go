@@ -43,12 +43,21 @@ func TestPiDarwinStartupFixtureCompleted(t *testing.T) {
 		"helper-created-no-http-or-socks-listener", "outer-fence-required-for-shell-entrypoints",
 		"direct-extension-process-outer-fence-constrained",
 		"prestart-extension-mismatch-fails-before-launch", "prestart-policy-mismatch-fails-before-launch",
+		"prestart-extension-identity-diagnostic", "prestart-policy-identity-diagnostic",
 	} {
 		if !strings.Contains("\n"+string(contents), "\n"+assertion+"\n") {
 			t.Fatalf("Darwin Pi startup assertion %q is missing from %q", assertion, contents)
 		}
 	}
-	direct, err := os.ReadFile(filepath.Join(root, "pi-darwin-startup", "direct-extension.report"))
+	worktree := filepath.Join(root, "pi-darwin-startup", "worktree")
+	started, err := os.ReadFile(filepath.Join(worktree, "pi-started"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(started) != "started\n" {
+		t.Fatalf("unexpected Pi startup marker: %q", started)
+	}
+	direct, err := os.ReadFile(filepath.Join(worktree, "direct-extension.report"))
 	if err != nil {
 		t.Fatal(err)
 	}
