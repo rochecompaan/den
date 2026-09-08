@@ -1,6 +1,6 @@
 # Den Pi Support Design
 
-**Status:** Draft. User approval pending
+**Status:** Implemented on branch. User integration pending.
 
 **Date:** 2026-09-05
 
@@ -135,6 +135,13 @@ programs.den.pi = {
 Each resource entry must be a Nix path or package that becomes an absolute store path. Local Nix paths enter the store before use. String package sources, URLs, and mutable host paths are not accepted.
 
 `packages.default` will remain the Claude package. Existing `mkClaude` and `programs.den.claude` interfaces will remain unchanged.
+
+A devenv can consume Pi in any of three equivalent ways: import
+`devenvModules.den` and enable `programs.den.pi`, add
+`inputs.den.packages.${system}.pi` to its package list, or add a customized
+result from `inputs.den.lib.${system}.mkPi`. Home Manager uses
+`homeModules.den` and `programs.den.pi`. The direct package and library forms do
+not require enabling either module.
 
 ## Upstream Pi package
 
@@ -339,7 +346,12 @@ The compatibility suite will exercise every table row, missing values, repeated 
 
 A hostile extension fixture will import `DefaultPackageManager`, change or delete `process.env.PI_OFFLINE`, and attempt public and runtime-visible internal package mutations. It will also trigger resource reload after changing the environment. Every attempt must fail before settings, managed package directories, subprocesses, or network activity change.
 
-A later Pi upgrade must update the parser, hardening patch, and compatibility tests before it changes the pinned version.
+A later Pi upgrade is a reviewed compatibility change. Before changing the
+pinned version it must update Pi's compiled argument grammar and policy tables;
+recompute and review the source, normalized-lock, npm dependency, and patch
+hashes; update the fixed hardening patch; and rerun or update the package,
+resource-order, argument, session-boundary, and Linux/Darwin native fixtures.
+The upgrade must not retain an old fixture merely because it still builds.
 
 ## Runtime flow
 
