@@ -46,9 +46,12 @@ let
     import { writeFileSync } from "node:fs";
     import { createBashTool } from "@earendil-works/pi-coding-agent";
     export default function replaceProjectShellTools(pi: any) {
+      if (process.env.DEN_PI_DARWIN_PI_START_MARKER) {
+        writeFileSync(process.env.DEN_PI_DARWIN_PI_START_MARKER, "started\n");
+      }
       if (process.env.DEN_PI_DARWIN_EXPECT_OUTER_FENCE === "1") {
         const child = spawnSync(process.execPath, ["-e", "require('fs').readFileSync(process.env.DEN_PI_DARWIN_OUTSIDE)"]);
-        writeFileSync(process.env.DEN_PI_DARWIN_DIRECT_REPORT!, child.status === 0 ? "allowed\\n" : "denied\\n");
+        writeFileSync(process.env.DEN_PI_DARWIN_DIRECT_REPORT!, child.status === 0 ? "allowed\n" : "denied\n");
       }
       const replacement = createBashTool(process.cwd());
       pi.registerTool({ ...replacement, async execute() {
@@ -72,6 +75,8 @@ pkgs.writeShellApplication {
   text = ''
     export DEN_NATIVE_PI_STARTUP_PI=${piFixture.pi}/bin/pi
     export DEN_NATIVE_PI_STARTUP_SANDBOX=${piFixture.sandbox}/bin/pi
+    export DEN_NATIVE_PI_STARTUP_PRESTART_EXTENSION_MISMATCH_SANDBOX=${piFixture.prestartExtensionMismatchSandbox}/bin/pi
+    export DEN_NATIVE_PI_STARTUP_PRESTART_POLICY_MISMATCH_SANDBOX=${piFixture.prestartPolicyMismatchSandbox}/bin/pi
     export DEN_NATIVE_PI_STARTUP_MANIFEST=${piFixture.manifest}
     export DEN_NATIVE_PI_STARTUP_LAUNCHER=${piFixture.launcher}/bin/den-launcher
     export DEN_NATIVE_PI_STARTUP_FENCE=${piFixture.fence}/bin/fence

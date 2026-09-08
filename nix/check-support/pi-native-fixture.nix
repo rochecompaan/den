@@ -108,6 +108,31 @@ let
     promptTemplates = [ ./fixtures/pi/native/prompt.md directCollisions.prompts ];
     themes = [ ./fixtures/pi/native/theme.json directCollisions.themes ];
   };
+  prestartMismatchExtension = pkgs.writeText "den-pi-prestart-mismatch.ts" ''
+    import { writeFileSync } from "node:fs";
+    export default function () {
+      writeFileSync(process.env.DEN_PI_DARWIN_PI_START_MARKER!, "started\n");
+    }
+  '';
+  prestartExtensionMismatchTestInputs = {
+    adapterExtension = prestartMismatchExtension;
+  };
+  prestartPolicyMismatchTestInputs = {
+    policyIdentity = "fixture-policy-identity-mismatch";
+  };
+  prestartMismatchAdapter = (import ../lib/mk-pi.nix {
+    inherit inputs pkgs;
+    isDarwin = true;
+    mkAgentSandbox = value: value;
+    darwinSecurityTestInputs = prestartExtensionMismatchTestInputs;
+  }) {
+    agentDir = null;
+    sessionDir = null;
+    extraPkgs = [ ];
+    resources = { };
+    docker = { };
+    podman = { };
+  };
   forbiddenPiExtraPackageCheck = pkgs.testers.testBuildFailure ((import ../lib/pi-resources.nix { inherit pkgs; }) {
     resources = nativeResources;
     extraPkgs = [ forbiddenPiExtraPackage ];
@@ -120,9 +145,34 @@ let
     docker = { };
     podman = { };
   };
+  prestartExtensionMismatchSandbox = (import ../lib/mk-pi.nix {
+    inherit inputs pkgs;
+    mkAgentSandbox = mkFixtureSandbox;
+    darwinSecurityTestInputs = prestartExtensionMismatchTestInputs;
+  }) {
+    agentDir = null;
+    sessionDir = null;
+    extraPkgs = [ pkgs.curl pkgs.openssh extraPackage forbiddenPiExtraPackageCheck ];
+    resources = nativeResources;
+    docker = { };
+    podman = { };
+  };
+  prestartPolicyMismatchSandbox = (import ../lib/mk-pi.nix {
+    inherit inputs pkgs;
+    mkAgentSandbox = mkFixtureSandbox;
+    darwinSecurityTestInputs = prestartPolicyMismatchTestInputs;
+  }) {
+    agentDir = null;
+    sessionDir = null;
+    extraPkgs = [ pkgs.curl pkgs.openssh extraPackage forbiddenPiExtraPackageCheck ];
+    resources = nativeResources;
+    docker = { };
+    podman = { };
+  };
 in
+assert prestartMismatchAdapter.adapter.agent.securityAdapter.path == prestartMismatchExtension;
 {
-  inherit pi resourceFixture sandbox launcher fence fenceInputRecorder forbiddenPiExtraPackageCheck;
+  inherit pi resourceFixture sandbox prestartExtensionMismatchSandbox prestartPolicyMismatchSandbox launcher fence fenceInputRecorder forbiddenPiExtraPackageCheck;
   node = pi.nodejs;
   manifest = sandbox.denManifest;
   packageRoot = pi.packageRoot;

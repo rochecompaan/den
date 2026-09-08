@@ -48,6 +48,13 @@ func TestPiDarwinStartupFixtureCompleted(t *testing.T) {
 			t.Fatalf("Darwin Pi startup assertion %q is missing from %q", assertion, contents)
 		}
 	}
+	direct, err := os.ReadFile(filepath.Join(root, "pi-darwin-startup", "direct-extension.report"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(direct) != "denied\n" {
+		t.Fatalf("unexpected direct-extension report: %q", direct)
+	}
 }
 
 func TestPiDarwinStartupCompletionContract(t *testing.T) {

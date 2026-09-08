@@ -4,6 +4,8 @@ set -euo pipefail
 : "${DEN_NATIVE_HOST_ROOT:?native host root is required}"
 : "${DEN_NATIVE_PI_STARTUP_PI:?Pi executable is required}"
 : "${DEN_NATIVE_PI_STARTUP_SANDBOX:?Pi sandbox is required}"
+: "${DEN_NATIVE_PI_STARTUP_PRESTART_EXTENSION_MISMATCH_SANDBOX:?Pi pre-start extension mismatch sandbox is required}"
+: "${DEN_NATIVE_PI_STARTUP_PRESTART_POLICY_MISMATCH_SANDBOX:?Pi pre-start policy mismatch sandbox is required}"
 : "${DEN_NATIVE_PI_STARTUP_MANIFEST:?Pi manifest is required}"
 : "${DEN_NATIVE_PI_STARTUP_LAUNCHER:?Pi launcher is required}"
 : "${DEN_NATIVE_PI_STARTUP_FENCE:?Fence executable is required}"
@@ -15,6 +17,8 @@ set -euo pipefail
 : "${DEN_NATIVE_PI_STARTUP_PROJECT_REPLACEMENT_EXTENSION:?project hostile extension is required}"
 
 for path in "$DEN_NATIVE_PI_STARTUP_PI" "$DEN_NATIVE_PI_STARTUP_SANDBOX" \
+  "$DEN_NATIVE_PI_STARTUP_PRESTART_EXTENSION_MISMATCH_SANDBOX" \
+  "$DEN_NATIVE_PI_STARTUP_PRESTART_POLICY_MISMATCH_SANDBOX" \
   "$DEN_NATIVE_PI_STARTUP_LAUNCHER" "$DEN_NATIVE_PI_STARTUP_FENCE" \
   "$DEN_NATIVE_PI_STARTUP_NODE" "$DEN_NATIVE_PI_STARTUP_HELPER"; do
   case "$path" in
@@ -41,9 +45,9 @@ chmod 0600 "$fixture_root/agent/extensions/user-hostile.ts" \
 printf '{"%s":true}\n' "$fixture_root/worktree" > "$fixture_root/agent/trust.json"
 chmod 0600 "$fixture_root/agent/trust.json"
 
-# The real manifest security adapter remains immutable and den-pi-agent
-# revalidates its extension, Fence, and policy identities immediately before
-# the real Pi process below starts.
+# The production manifest must retain its immutable security adapter. The
+# negative launches below prove real launcher-boundary rejection instead of
+# treating this shape check as that proof.
 security_extension=$(jq -er '
   select(.agent.name == "pi") |
   select(.agent.securityAdapter.kind == "pi-extension") |
@@ -51,9 +55,6 @@ security_extension=$(jq -er '
   .agent.securityAdapter.path | select(startswith("/nix/store/"))
 ' "$DEN_NATIVE_PI_STARTUP_MANIFEST")
 test -f "$security_extension" && test ! -L "$security_extension"
-expected_manifest=$fixture_root/expected-manifest.json
-cp "$DEN_NATIVE_PI_STARTUP_MANIFEST" "$expected_manifest"
-chmod 0400 "$expected_manifest"
 
 cat > "$fixture_root/check.mjs" <<'EOF'
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -105,7 +106,7 @@ let output = "";
 const userResult = await user.operations.exec("printf user-allowed", cwd, { onData: (data) => { output += data.toString(); } });
 assert(userResult.exitCode === 0 && output === "user-allowed", "native ! shell did not use allowed helper path");
 process.env.DEN_PI_DARWIN_HELPER_MODE = "deny";
-await reject(() => user.operations.exec("printf user-blocked", cwd, { onData: () => {} }), "user-bash-deny");
+await reject(() => user.operations.exec("printf user-blocked > user-blocked", cwd, { onData: () => {} }), "user-bash-deny");
 assert(!existsSync(join(cwd, "user-blocked")), "blocked native ! shell command executed");
 record("native-user-bash-parity");
 assert(!existsSync(process.env.DEN_REPLACEMENT_BASH_MARKER), "hostile extension replaced bash");
@@ -131,69 +132,47 @@ export DEN_PI_DARWIN_WORKTREE="$fixture_root/worktree"
 "$DEN_NATIVE_PI_STARTUP_NODE" "$fixture_root/check.mjs"
 test "$(<"$DEN_PI_DARWIN_HELPER_LISTENER_REPORT")" = no-listener
 
-# Use a fresh, immutable policy for the actual startup; den-pi-agent snapshots
-# and revalidates this exact policy and manifest extension before invoking Pi.
-printf '{}\n' > "$fixture_root/startup-policy.json"
-chmod 0400 "$fixture_root/startup-policy.json"
-expected_policy=$fixture_root/expected-startup-policy.json
-cp "$fixture_root/startup-policy.json" "$expected_policy"
-chmod 0400 "$expected_policy"
 prestart_launch() {
-  local manifest=$1 policy=$2 launched=$3 output=$4 extension
-  extension=$(jq -er '
-    select(.agent.name == "pi") |
-    select(.agent.securityAdapter.kind == "pi-extension") |
-    select(.agent.securityAdapter.arguments == ["--extension", .agent.securityAdapter.path]) |
-    .agent.securityAdapter.path
-  ' "$manifest")
-  test "$extension" = "$security_extension"
-  cmp -s "$manifest" "$expected_manifest"
-  cmp -s "$policy" "$expected_policy"
-  : > "$launched"
+  local sandbox=$1 output=$2
   (
     cd "$fixture_root/worktree"
     HOME="$fixture_root/home" \
     DEN_NATIVE_INVOKING_HOME="$fixture_root/invoking-home" \
     PI_CODING_AGENT_DIR="$fixture_root/agent" \
     PI_CODING_AGENT_SESSION_DIR="$fixture_root/sessions" \
-    DEN_FENCE_POLICY_FILE="$policy" \
+    DEN_PI_DARWIN_PI_START_MARKER="$fixture_root/pi-started" \
     REPOWOLF_ENDPOINT=https://broker.example.test/ \
     REPOWOLF_TOKEN=rw1_AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE \
     REPOWOLF_CA_FILE="$fixture_root/ca.pem" \
-    "$DEN_NATIVE_PI_STARTUP_SANDBOX" --mode rpc < /dev/null > "$output"
+    "$sandbox" --mode rpc < /dev/null > "$output"
   )
 }
-bad_extension_manifest=$fixture_root/bad-extension-manifest.json
-jq --arg replacement "$fixture_root/agent/extensions/user-hostile.ts" '
-  .agent.securityAdapter.path = $replacement |
-  .agent.securityAdapter.arguments = ["--extension", $replacement]
-' "$expected_manifest" > "$bad_extension_manifest"
-if prestart_launch "$bad_extension_manifest" "$fixture_root/startup-policy.json" \
-  "$fixture_root/bad-extension-launched" "$fixture_root/bad-extension-version"; then
-  printf 'mismatched extension identity reached Pi launch\n' >&2
-  exit 1
-fi
-test ! -e "$fixture_root/bad-extension-launched"
-printf 'prestart-extension-mismatch-fails-before-launch\n' >> "$fixture_root/assertions.report"
-rm "$fixture_root/startup-policy.json"
-printf 'changed\n' > "$fixture_root/startup-policy.json"
-if prestart_launch "$expected_manifest" "$fixture_root/startup-policy.json" \
-  "$fixture_root/bad-policy-launched" "$fixture_root/bad-policy-version"; then
-  printf 'mismatched policy identity reached Pi launch\n' >&2
-  exit 1
-fi
-test ! -e "$fixture_root/bad-policy-launched"
-printf 'prestart-policy-mismatch-fails-before-launch\n' >> "$fixture_root/assertions.report"
-cp "$expected_policy" "$fixture_root/startup-policy.json"
+expect_prestart_rejection() {
+  local sandbox=$1 label=$2
+  rm -f "$fixture_root/pi-started"
+  if prestart_launch "$sandbox" "$fixture_root/$label-version"; then
+    printf '%s identity mismatch reached Pi launch\n' "$label" >&2
+    exit 1
+  fi
+  test ! -e "$fixture_root/pi-started"
+  printf 'prestart-%s-mismatch-fails-before-launch\n' "$label" >> "$fixture_root/assertions.report"
+}
+
+# Both negatives cross the packaged sandbox, den-launcher, and real outer
+# Fence. Their marker is written by a real Pi extension only if Pi begins
+# loading extensions, so its absence proves rejection before Pi starts.
+expect_prestart_rejection "$DEN_NATIVE_PI_STARTUP_PRESTART_EXTENSION_MISMATCH_SANDBOX" extension
+expect_prestart_rejection "$DEN_NATIVE_PI_STARTUP_PRESTART_POLICY_MISMATCH_SANDBOX" policy
 printf 'outer Fence synthetic secret\n' > "$fixture_root/outside-secret"
 chmod 0600 "$fixture_root/outside-secret"
 export DEN_PI_DARWIN_EXPECT_OUTER_FENCE=1
 export DEN_PI_DARWIN_OUTSIDE="$fixture_root/outside-secret"
 export DEN_PI_DARWIN_DIRECT_REPORT="$fixture_root/direct-extension.report"
-prestart_launch "$expected_manifest" "$fixture_root/startup-policy.json" \
-  "$fixture_root/real-launch-started" "$fixture_root/version"
+rm -f "$fixture_root/pi-started"
+prestart_launch "$DEN_NATIVE_PI_STARTUP_SANDBOX" "$fixture_root/version"
 unset DEN_PI_DARWIN_EXPECT_OUTER_FENCE DEN_PI_DARWIN_OUTSIDE DEN_PI_DARWIN_DIRECT_REPORT
 test ! -s "$fixture_root/version"
+test "$(<"$fixture_root/pi-started")" = started
 test "$(<"$fixture_root/direct-extension.report")" = denied
 printf 'direct-extension-process-outer-fence-constrained\n' >> "$fixture_root/assertions.report"
 required_assertions='allowed-bash-after-no-change-helper

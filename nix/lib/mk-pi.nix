@@ -1,4 +1,4 @@
-{ inputs, pkgs, mkAgentSandbox ? import ./mk-agent-sandbox.nix { inherit inputs pkgs; }, isDarwin ? pkgs.stdenv.isDarwin }:
+{ inputs, pkgs, mkAgentSandbox ? import ./mk-agent-sandbox.nix { inherit inputs pkgs; }, isDarwin ? pkgs.stdenv.isDarwin, darwinSecurityTestInputs ? null }:
 
 args@{ agentDir ? null, sessionDir ? null, extraPkgs ? [ ], resources ? { }, docker ? { }, podman ? { }, ... }:
 let
@@ -12,6 +12,10 @@ let
   };
   securityExtension = pkgs.writeText "den-pi-security.ts"
     (builtins.replaceStrings [ "@fence@" ] [ "${fence}" ] (builtins.readFile ../pi/den-pi-security.ts));
+  adapterExtensionInjected = darwinSecurityTestInputs != null && darwinSecurityTestInputs ? adapterExtension;
+  securityAdapterExtension = if adapterExtensionInjected then darwinSecurityTestInputs.adapterExtension else securityExtension;
+  policyIdentityOverride = if darwinSecurityTestInputs != null && darwinSecurityTestInputs ? policyIdentity
+    then darwinSecurityTestInputs.policyIdentity else null;
   piAgentSource = builtins.replaceStrings [ "@pi@" ] [ "${pi}" ] (builtins.readFile ../pi/den-pi-agent.sh);
   darwinInputValidation = lib.optionalString isDarwin ''
     validate_security_input() {
@@ -24,8 +28,14 @@ let
     }
     : "''${DEN_FENCE_POLICY_FILE:?Pi command security policy is unavailable}"
     extension_identity=$(validate_security_input ${securityExtension})
+    if [ "$#" -lt 2 ] || [ "$1" != --extension ] || [ "$2" != ${lib.escapeShellArg "${securityExtension}"} ] || \
+      [ "$extension_identity" != "$(validate_security_input "$2")" ]; then
+      echo "Pi command security extension identity changed" >&2
+      exit 1
+    fi
     fence_identity=$(validate_security_input ${fence}/bin/fence)
     policy_identity=$(validate_security_input "$DEN_FENCE_POLICY_FILE")
+    ${lib.optionalString (policyIdentityOverride != null) "policy_identity=${lib.escapeShellArg policyIdentityOverride}"}
     revalidate_security_input() {
       expected=$1
       path=$2
@@ -62,7 +72,8 @@ mkAgentSandbox {
       mainProgram = "pi";
     };
     runtimePackages = [ ];
-    closureOnlyPackages = [ pi piAgent ] ++ lib.optional isDarwin securityExtension ++ normalizedResources.closureInputs;
+    closureOnlyPackages = [ pi piAgent ] ++ lib.optional isDarwin securityExtension
+      ++ lib.optional (isDarwin && adapterExtensionInjected) securityAdapterExtension ++ normalizedResources.closureInputs;
     protectedPathPatterns = [ "~/.pi/agent" "~/.agents" "~/.agents/skills" ];
     passthru = { resourceDiagnostics = normalizedResources.diagnosticsCheck; };
     agent = {
@@ -80,8 +91,8 @@ mkAgentSandbox {
       packageDirectory = { name = "PI_PACKAGE_DIR"; value = pi.packageRoot; };
       securityAdapter = if isDarwin then {
         kind = "pi-extension";
-        path = securityExtension;
-        arguments = [ "--extension" securityExtension ];
+        path = securityAdapterExtension;
+        arguments = [ "--extension" securityAdapterExtension ];
       } else null;
     };
     stateBindings = [
