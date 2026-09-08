@@ -50,7 +50,6 @@ pkgs.buildNpmPackage (finalAttrs: {
     mkdir -p "$packageRoot" "$out/bin"
     cp -R . "$packageRoot"
     makeWrapper ${pkgs.nodejs_22}/bin/node "$out/bin/pi" \
-      --set PATH "" \
       --add-flags "$packageRoot/dist/cli.js"
     runHook postInstall
   '';

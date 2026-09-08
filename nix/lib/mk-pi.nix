@@ -49,7 +49,7 @@ assert lib.assertMsg (fenceInfo.version == "0.1.58" &&
   "Pi requires Den's pinned Fence 0.1.58";
 assert lib.assertMsg (fenceInfo.capabilities.claudePreToolUse &&
   fenceInfo.capabilities.denFenceTmpdir && fenceInfo.capabilities.strictDenyRead &&
-  (if isDarwin then fenceInfo.capabilities.allowUnixSockets else fenceInfo.capabilities.argvRuntimePolicy))
+  (if isDarwin then fenceInfo.capabilities.allowUnixSockets else fenceInfo.capabilities.linuxReadOnlyDenyReadMasks && fenceInfo.capabilities.argvRuntimePolicy))
   "Fence lacks mandatory Pi security capabilities";
 mkAgentSandbox {
   inherit (options) extraPkgs docker podman;

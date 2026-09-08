@@ -2,6 +2,27 @@
 
 let
   mkPi = import ../lib/mk-pi.nix;
+  fence = (import ../lib/fence.nix { inherit pkgs; }).package;
+  extraPackage = pkgs.writeShellApplication {
+    name = "den9-extra-present";
+    text = ''
+      printf 'extra-package\n'
+    '';
+  };
+  fenceInputRecorder = pkgs.writeShellScript "den-native-pi-fence-input-recorder" ''
+    if [ -n "''${DEN_NATIVE_PI_FENCE_INPUT_REPORT-}" ]; then
+      {
+        printf 'HTTP_PROXY=%s\n' "''${HTTP_PROXY-}"
+        printf 'HTTPS_PROXY=%s\n' "''${HTTPS_PROXY-}"
+        printf 'ALL_PROXY=%s\n' "''${ALL_PROXY-}"
+        printf 'NO_PROXY=%s\n' "''${NO_PROXY-}"
+      } > "$DEN_NATIVE_PI_FENCE_INPUT_REPORT"
+    fi
+    if [ -n "''${DEN_NATIVE_PI_FENCE_POLICY_REPORT-}" ] && [ -n "''${DEN_FENCE_POLICY_FILE-}" ]; then
+      ${pkgs.coreutils}/bin/cp -- "$DEN_FENCE_POLICY_FILE" "$DEN_NATIVE_PI_FENCE_POLICY_REPORT"
+    fi
+    exec ${fence}/bin/fence "$@"
+  '';
   # Only this native fixture substitutes account-home discovery. The production
   # source and launcher derivation stay unchanged; drift fails the fixture build.
   launcher = (import ../packages/den-launcher.nix { inherit pkgs; }).overrideAttrs (old: {
@@ -24,7 +45,7 @@ let
   mkFixtureSandbox = args: (import ../lib/mk-agent-sandbox.nix { inherit inputs pkgs; }) (args // {
     dependencies = {
       inherit launcher;
-      fence = (import ../lib/fence.nix { inherit pkgs; }).package;
+      inherit fence;
       repoWolfClient = import ../packages/repowolf-client.nix { inherit inputs pkgs; };
       git = pkgs.gitMinimal;
       bash = pkgs.bash;
@@ -71,7 +92,7 @@ let
   sandbox = mkPi { inherit inputs pkgs; mkAgentSandbox = mkFixtureSandbox; } {
     agentDir = null;
     sessionDir = null;
-    extraPkgs = [ ];
+    extraPkgs = [ pkgs.curl pkgs.openssh extraPackage ];
     resources = {
       extensions = [
         ./fixtures/pi/native/report-extension.ts
@@ -88,7 +109,7 @@ let
   };
 in
 {
-  inherit pi resourceFixture sandbox launcher;
+  inherit pi resourceFixture sandbox launcher fenceInputRecorder;
   manifest = sandbox.denManifest;
   packageRoot = pi.packageRoot;
 }

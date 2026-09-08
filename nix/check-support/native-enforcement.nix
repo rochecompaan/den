@@ -262,6 +262,7 @@ pkgs.writeShellApplication {
     export DEN_NATIVE_PI_MANIFEST=${piFixture.manifest}
     export DEN_NATIVE_PI_PACKAGE_ROOT=${piFixture.packageRoot}
     export DEN_NATIVE_PI_RESOURCE_FIXTURE=${piFixture.resourceFixture}
+    export DEN_NATIVE_PI_FENCE_INPUT_RECORDER=${piFixture.fenceInputRecorder}
     export DEN_NATIVE_SANDBOX=${fixtureSandbox}/bin/claude
     export DEN_NATIVE_MANIFEST=${fixtureSandbox.denManifest}
     export DEN_NATIVE_LAUNCHER=${launcher}/bin/den-launcher

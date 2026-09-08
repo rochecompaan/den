@@ -29,7 +29,8 @@ let
     state=$root/state
     scratch=$root/scratch
     policyDir=$worktree/.den-policy
-    mkdir -m 0700 -p "$home/.npm/_logs" "$home/.fence" "$worktree" "$state" "$scratch" "$policyDir"
+    maskedDir=$worktree/deny-read-mask
+    mkdir -m 0700 -p "$home/.npm/_logs" "$home/.fence" "$worktree" "$state" "$scratch" "$policyDir" "$maskedDir"
     printf secret > "$home/secret"
     printf unchanged > "$home/.npm/_logs/implicit"
     printf unchanged > "$home/.fence/debug"
@@ -48,7 +49,7 @@ let
     jq -n \
       --argjson closure "$(cat closure.json)" \
       --arg home "$home" --arg worktree "$worktree" --arg state "$state" \
-      --arg scratch "$scratch" --arg policy "$policy" --arg policyDir "$policyDir" --arg ca "$ca" \
+      --arg scratch "$scratch" --arg policy "$policy" --arg policyDir "$policyDir" --arg maskedDir "$maskedDir" --arg ca "$ca" \
       '{
         allowPty: true,
         network: {
@@ -60,8 +61,8 @@ let
           allowRead: ($closure + [$worktree, $state, $scratch, $policy, $ca]),
           allowExecute: $closure,
           allowWrite: [$worktree, $state, $scratch],
-          denyRead: [$home + "/secret"],
-          denyWrite: ["~/.npm/_logs", "~/.fence/debug", "/tmp/fence", "/tmp/fence/**", "/private/tmp/fence", "/private/tmp/fence/**", $policy, $policyDir]
+          denyRead: [$home + "/secret", $maskedDir],
+          denyWrite: ["~/.npm/_logs", "~/.fence/debug", "/tmp/fence", "/tmp/fence/**", "/private/tmp/fence", "/private/tmp/fence/**", $policy, $policyDir, $maskedDir]
         },
         command: { deny: ["printf denied"], useDefaults: true, acceptSharedBinaryCannotRuntimeDeny: ["chroot"], runtimeExecPolicy: "argv" }
       }' > "$policy"
@@ -93,7 +94,7 @@ let
     mv "$policy.next" "$policy"
     chmod 0400 "$policy"
 
-    export HOME="$home" WORKTREE="$worktree" STATE="$state" SCRATCH="$scratch"
+    export HOME="$home" WORKTREE="$worktree" STATE="$state" SCRATCH="$scratch" MASKED_DIR="$maskedDir"
     export POLICY="$policy" CA="$ca"
     export TMPDIR="$scratch" DEN_FENCE_TMPDIR="$scratch"
     "$fence" --settings "$policy" --expose-host-path "$ca" -- ${pkgs.bash}/bin/bash -c '
@@ -105,12 +106,13 @@ let
       printf state > "$STATE/write"
       test "$(cat "$CA")" = ca-read-only
       if cat "$HOME/secret" >/dev/null 2>&1; then exit 20; fi
-      if cat ${pkgs.hello}/bin/hello >/dev/null 2>&1; then exit 21; fi
-      if printf changed > "$HOME/.npm/_logs/implicit" 2>/dev/null; then exit 22; fi
-      if printf changed > "$HOME/.fence/debug" 2>/dev/null; then exit 23; fi
-      if printf changed >> "$POLICY" 2>/dev/null; then exit 24; fi
-      if printf changed > "$(dirname "$POLICY")/other" 2>/dev/null; then exit 25; fi
-      if printf changed > "$CA" 2>/dev/null; then exit 26; fi
+      if printf escaped > "$MASKED_DIR/created" 2>/dev/null; then exit 21; fi
+      if cat ${pkgs.hello}/bin/hello >/dev/null 2>&1; then exit 22; fi
+      if printf changed > "$HOME/.npm/_logs/implicit" 2>/dev/null; then exit 23; fi
+      if printf changed > "$HOME/.fence/debug" 2>/dev/null; then exit 24; fi
+      if printf changed >> "$POLICY" 2>/dev/null; then exit 25; fi
+      if printf changed > "$(dirname "$POLICY")/other" 2>/dev/null; then exit 26; fi
+      if printf changed > "$CA" 2>/dev/null; then exit 27; fi
     '
     "$fence" --settings "$policy" --expose-host-path "$ca" -c 'test "$TMPDIR" = "$SCRATCH"; test "$DEN_FENCE_TMPDIR" = "$SCRATCH"; printf nested > "$TMPDIR/nested"'
     test "$(cat "$scratch/outer")" = outer
@@ -256,10 +258,11 @@ assert fence == fenceInfo.package;
 assert fenceInfo.version == "0.1.58";
 assert fenceInfo.sourceHash == "sha256-ACe3N4bXYJW6QDQHtRChFWOTXTZTbEUbZ4d8cuFRqMY=";
 assert fenceInfo.patchHash == "4be4f0266a0a79da10002893752ea8185915f6ecfb146513946bde8a96e41e2a";
+assert fenceInfo.readOnlyMaskPatchHash == "440a5162ff4a3d2c8a3566d0ae018c166c03f86be54f74d5a9cfece65dc4def0";
 assert fenceInfo.capabilities.claudePreToolUse;
 assert fenceInfo.capabilities.denFenceTmpdir;
 assert fenceInfo.capabilities.strictDenyRead;
-assert if pkgs.stdenv.isDarwin then fenceInfo.capabilities.allowUnixSockets else fenceInfo.capabilities.argvRuntimePolicy;
+assert if pkgs.stdenv.isDarwin then fenceInfo.capabilities.allowUnixSockets else fenceInfo.capabilities.linuxReadOnlyDenyReadMasks && fenceInfo.capabilities.argvRuntimePolicy;
 if pkgs.stdenv.isLinux then
   pkgs.runCommand "fence-capabilities"
     {

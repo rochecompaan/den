@@ -335,3 +335,58 @@ func directoryHasEntries(t *testing.T, path string) bool {
 func pathExists(path string) bool { _, err := os.Lstat(path); return err == nil }
 
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
+
+// enforcementProbe loads a test-owned extension through the existing manifest
+// resource seam. Pi, its adapter and the real outer Fence remain unchanged.
+func (fixture *piFixture) enforcementProbe(t *testing.T, body string, extra []string) commandResult {
+	return fixture.enforcementProbeWithManifest(t, body, extra, nil)
+}
+
+// enforcementProbeWithManifest adds only test-owned manifest instrumentation.
+// The recorder used by callers must exec the pinned real Fence unchanged.
+func (fixture *piFixture) enforcementProbeWithManifest(t *testing.T, body string, extra []string, mutate func(map[string]any)) commandResult {
+	result := fixture.runEnforcementProbe(t, body, extra, mutate)
+	requireEnforcementProbeSuccess(t, fixture, result)
+	return result
+}
+
+// runEnforcementProbe builds and runs a test-owned extension without asserting
+// its RPC result. Diagnostics can inspect artifacts before preserving the usual
+// enforcementProbe success/completion requirements.
+func (fixture *piFixture) runEnforcementProbe(t *testing.T, body string, extra []string, mutate func(map[string]any)) commandResult {
+	t.Helper()
+	path := filepath.Join(fixture.worktree, "enforcement.ts")
+	source := `import * as fs from "node:fs";
+import { spawnSync } from "node:child_process";
+import assert from "node:assert/strict";
+export default function (pi: any) {
+ pi.registerCommand("den9", { description: "Native enforcement probe", handler: async () => {
+ const record = (line: string) => fs.appendFileSync(process.env.PI_CODING_AGENT_DIR + "/enforcement.report", line + "\n");
+ const run = (program: string, args: string[], options = {}) => spawnSync(program, args, { encoding: "utf8", timeout: 8000, ...options });
+ record("started");
+ try {
+ ` + body + `
+ record("complete");
+ } catch (error) { record("failure:" + String(error)); throw error; }
+ }});
+}
+`
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := fixture.launch(rpcInput(`{"id":"enforcement","type":"prompt","message":"/den9"}`), extra,
+		func(document map[string]any) {
+			agent := document["agent"].(map[string]any)
+			agent["resourceArgs"] = append(agent["resourceArgs"].([]any), "--extension", path)
+			if mutate != nil {
+				mutate(document)
+			}
+		}, "--mode", "rpc", "--model", "den-native/fixture")
+	return result
+}
+
+func requireEnforcementProbeSuccess(t *testing.T, fixture *piFixture, result commandResult) {
+	t.Helper()
+	requireRPCResponse(t, result, "enforcement", true, "")
+	requireReportLines(t, filepath.Join(fixture.agentDir, "enforcement.report"), "complete")
+}
