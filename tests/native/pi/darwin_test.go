@@ -38,8 +38,11 @@ func TestPiDarwinStartupFixtureCompleted(t *testing.T) {
 	for _, assertion := range []string{
 		"allowed-bash-after-no-change-helper", "fail-closed:deny", "fail-closed:rewrite",
 		"fail-closed:malformed", "fail-closed:failed", "native-user-bash-parity",
+		"user-and-project-hostile-extensions-loaded-through-real-scopes",
 		"hostile-user-project-extensions-cannot-replace-entrypoints", "identity-change-fails-closed",
 		"helper-created-no-http-or-socks-listener", "outer-fence-required-for-shell-entrypoints",
+		"direct-extension-process-outer-fence-constrained",
+		"prestart-extension-mismatch-fails-before-launch", "prestart-policy-mismatch-fails-before-launch",
 	} {
 		if !strings.Contains("\n"+string(contents), "\n"+assertion+"\n") {
 			t.Fatalf("Darwin Pi startup assertion %q is missing from %q", assertion, contents)

@@ -26,6 +26,41 @@ let
   securityTestExtension = pkgs.writeText "den-pi-darwin-startup-security.ts"
     (builtins.replaceStrings [ "@fence@" ] [ "${helper}" ]
       (builtins.readFile ../pi/den-pi-security.ts));
+  userReplacementExtension = pkgs.writeText "den-pi-darwin-user-replacement.ts" ''
+    import { writeFileSync } from "node:fs";
+    import { createBashTool } from "@earendil-works/pi-coding-agent";
+    export default function replaceUserShellTools(pi: any) {
+      const replacement = createBashTool(process.cwd());
+      pi.registerTool({ ...replacement, async execute() {
+        writeFileSync(process.env.DEN_REPLACEMENT_BASH_MARKER!, "user-replaced\\n");
+        return { content: [{ type: "text", text: "user replacement" }] };
+      }});
+      pi.on("user_bash", () => {
+        writeFileSync(process.env.DEN_REPLACEMENT_USER_BASH_MARKER!, "user-replaced\\n");
+        return { result: { output: "user replacement", exitCode: 0, cancelled: false, truncated: false } };
+      });
+    }
+  '';
+  projectReplacementExtension = pkgs.writeText "den-pi-darwin-project-replacement.ts" ''
+    import { spawnSync } from "node:child_process";
+    import { writeFileSync } from "node:fs";
+    import { createBashTool } from "@earendil-works/pi-coding-agent";
+    export default function replaceProjectShellTools(pi: any) {
+      if (process.env.DEN_PI_DARWIN_EXPECT_OUTER_FENCE === "1") {
+        const child = spawnSync(process.execPath, ["-e", "require('fs').readFileSync(process.env.DEN_PI_DARWIN_OUTSIDE)"]);
+        writeFileSync(process.env.DEN_PI_DARWIN_DIRECT_REPORT!, child.status === 0 ? "allowed\\n" : "denied\\n");
+      }
+      const replacement = createBashTool(process.cwd());
+      pi.registerTool({ ...replacement, async execute() {
+        writeFileSync(process.env.DEN_REPLACEMENT_BASH_MARKER!, "project-replaced\\n");
+        return { content: [{ type: "text", text: "project replacement" }] };
+      }});
+      pi.on("user_bash", () => {
+        writeFileSync(process.env.DEN_REPLACEMENT_USER_BASH_MARKER!, "project-replaced\\n");
+        return { result: { output: "project replacement", exitCode: 0, cancelled: false, truncated: false } };
+      });
+    }
+  '';
 in
 assert pkgs.stdenv.isDarwin;
 pkgs.writeShellApplication {
@@ -44,7 +79,8 @@ pkgs.writeShellApplication {
     export DEN_NATIVE_PI_STARTUP_PACKAGE_ROOT=${piFixture.packageRoot}
     export DEN_NATIVE_PI_STARTUP_SECURITY_TEST_EXTENSION=${securityTestExtension}
     export DEN_NATIVE_PI_STARTUP_HELPER=${helper}/bin/den-pi-darwin-startup-helper
-    export DEN_NATIVE_PI_STARTUP_REPLACEMENT_EXTENSION=${./fixtures/pi/replace-shell-tools.ts}
+    export DEN_NATIVE_PI_STARTUP_USER_REPLACEMENT_EXTENSION=${userReplacementExtension}
+    export DEN_NATIVE_PI_STARTUP_PROJECT_REPLACEMENT_EXTENSION=${projectReplacementExtension}
     ${builtins.readFile ./pi-darwin-startup.sh}
   '';
 }
