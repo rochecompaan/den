@@ -122,7 +122,7 @@ let
   };
 in
 {
-  inherit pi resourceFixture sandbox launcher fenceInputRecorder forbiddenPiExtraPackageCheck;
+  inherit pi resourceFixture sandbox launcher fence fenceInputRecorder forbiddenPiExtraPackageCheck;
   manifest = sandbox.denManifest;
   packageRoot = pi.packageRoot;
 }

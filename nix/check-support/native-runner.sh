@@ -29,9 +29,11 @@ case "$DEN_NATIVE_HOST_SYSTEM" in
   *-darwin)
     : "${DEN_NATIVE_RESOLVER_HELPER:?packaged resolver helper is required}"
     : "${DEN_NATIVE_CLAUDE_STARTUP:?packaged Darwin Claude startup fixture is required}"
+    : "${DEN_NATIVE_PI_STARTUP:?packaged Darwin Pi startup fixture is required}"
     : "${DEN_NATIVE_FENCE_CAPABILITIES:?packaged Darwin Fence capability fixture is required}"
     : "${DEN_NATIVE_SANDBOX_EXEC:?Darwin sandbox-exec path is required}"
     test -x "$DEN_NATIVE_CLAUDE_STARTUP"
+    test -x "$DEN_NATIVE_PI_STARTUP"
     test -x "$DEN_NATIVE_FENCE_CAPABILITIES"
     test -x "$DEN_NATIVE_SANDBOX_EXEC"
     ;;
@@ -123,6 +125,13 @@ if [[ $DEN_NATIVE_HOST_SYSTEM == *-darwin ]]; then
   completion=$DEN_NATIVE_HOST_ROOT/fence-capabilities.complete
   if [[ ! -f $completion ]] || ! cmp -s <(printf 'complete\n') "$completion"; then
     printf 'Darwin Fence capability fixture did not produce its completion artifact\n' >&2
+    exit 1
+  fi
+  printf 'executing Darwin Pi startup fixture as the invoking host user\n'
+  "$DEN_NATIVE_PI_STARTUP"
+  completion=$DEN_NATIVE_HOST_ROOT/pi-darwin-startup.complete
+  if [[ ! -f $completion ]] || ! cmp -s <(printf 'complete\n') "$completion"; then
+    printf 'Darwin Pi startup fixture did not produce its exact completion artifact\n' >&2
     exit 1
   fi
   start_resolver_helper /usr/bin/sudo -n "$DEN_NATIVE_RESOLVER_HELPER"

@@ -72,12 +72,8 @@ if [[ $1 == build && $* == *packages.*.claude* ]]; then
   printf '%s\n' 'event build claude' >&2
   exit
 fi
-if [[ $1 == build && $* == *checks.*.claude-startup* ]]; then
-  printf '%s\n' 'build claude-startup' >> "$DEN_FAKE_EVENT_LOG"
-  exit
-fi
-if [[ $1 == build && $* == *checks.*.launcher-unit* ]]; then
-  printf '%s\n' 'build launcher-unit' >> "$DEN_FAKE_EVENT_LOG"
+if [[ $1 == build && $* == *packages.*.pi* ]]; then
+  printf '%s\n' 'build pi' >> "$DEN_FAKE_EVENT_LOG"
   exit
 fi
 if [[ $1 == build && $* == *native-enforcement* ]]; then
@@ -85,6 +81,13 @@ if [[ $1 == build && $* == *native-enforcement* ]]; then
   printf '%s\n' 'event build native-runner' >&2
   printf '%s\n' "$DEN_FAKE_RUNNER"
   exit
+fi
+if [[ $1 == build && $* == *checks.* ]]; then
+  for argument in "$@"; do
+    case "$argument" in
+      .#checks.*) printf 'build %s\n' "${argument##*.}" >> "$DEN_FAKE_EVENT_LOG"; exit ;;
+    esac
+  done
 fi
 FAKE_NIX
 chmod +x "$root/bin/nix"
@@ -94,6 +97,8 @@ export DEN_FAKE_RUNNER=$fake_runner
 export DEN_FAKE_EVENT_LOG=$root/events.log
 export DEN_FAKE_DERIVATION_JSON='{"derivations":{},"version":3}'
 export DEN_FAKE_NIX_LOG=$root/nix.log
+normal_checks=$'claude-startup\nlauncher-unit\npi-adapter\npi-module-api\npi-package\npi-package-api\npi-resources\npi-security-extension'
+darwin_pi_graph='{"derivations":{"pi-startup.drv":{"name":"pi-darwin-startup"},"pi-tests.drv":{"name":"den-pi-native-tests"},"pi-launcher.drv":{"name":"den-native-pi-launcher"}},"version":3}'
 
 run_driver() {
   local label=$1
@@ -128,11 +133,26 @@ if [[ $status -eq 0 ]]; then
 fi
 ! grep -Fq 'checks.x86_64-linux.native-enforcement' "$DEN_FAKE_NIX_LOG"
 
+run_driver missing-pi-check x86_64-linux 0 $'claude-startup\nlauncher-unit\npi-adapter\npi-module-api\npi-package\npi-package-api\npi-resources' "$darwin_pi_graph"
+if [[ $status -eq 0 ]]; then
+  printf 'driver accepted normal checks without pi-security-extension\n' >&2
+  exit 1
+fi
+! grep -Fq 'checks.x86_64-linux.native-enforcement' "$DEN_FAKE_NIX_LOG"
+
+missing_pi_startup_graph='{"derivations":{"pi-tests.drv":{"name":"den-pi-native-tests"},"pi-launcher.drv":{"name":"den-native-pi-launcher"}},"version":3}'
+run_driver missing-pi-startup-graph x86_64-linux 0 "$normal_checks" "$missing_pi_startup_graph"
+if [[ $status -eq 0 ]]; then
+  printf 'driver accepted Darwin graph without pi-darwin-startup\n' >&2
+  exit 1
+fi
+! grep -Fq 'checks.x86_64-linux.native-enforcement' "$DEN_FAKE_NIX_LOG"
+
 home_was_set=${HOME+x}
 home_value=${HOME-}
 unset HOME
 export DEN_CI_DISK_TELEMETRY=1 DEN_FAKE_DF_STATUS=47 DEN_FAKE_DU_STATUS=48
-run_driver darwin-telemetry aarch64-darwin 0 $'claude-startup\nlauncher-unit'
+run_driver darwin-telemetry aarch64-darwin 0 "$normal_checks" "$darwin_pi_graph"
 unset DEN_CI_DISK_TELEMETRY DEN_FAKE_DF_STATUS DEN_FAKE_DU_STATUS
 if [[ -n $home_was_set ]]; then
   export HOME=$home_value
@@ -148,29 +168,29 @@ actual=$(grep -E '^(darwin disk telemetry phase=|event (build|execute))' \
 
 for system in x86_64-linux aarch64-linux x86_64-darwin aarch64-darwin; do
   label=${system//_/-}
-  run_driver "$label" "$system" 0 $'claude-startup\nlauncher-unit'
+  run_driver "$label" "$system" 0 "$normal_checks" "$darwin_pi_graph"
   if [[ $status -ne 0 ]]; then
     cat "$root/$label.stderr" >&2
     exit 1
   fi
-  expected=$'build claude\nbuild native-runner\nexecute native-runner\nbuild claude-startup\nbuild launcher-unit'
-  actual=$(grep -E '^(build claude|build claude-startup|build launcher-unit|build native-runner|execute native-runner)$' \
+  expected=$'build claude\nbuild pi\nbuild native-runner\nexecute native-runner\nbuild claude-startup\nbuild launcher-unit\nbuild pi-adapter\nbuild pi-module-api\nbuild pi-package\nbuild pi-package-api\nbuild pi-resources\nbuild pi-security-extension'
+  actual=$(grep -E '^(build claude|build pi|build claude-startup|build launcher-unit|build pi-adapter|build pi-module-api|build pi-package|build pi-package-api|build pi-resources|build pi-security-extension|build native-runner|execute native-runner)$' \
     "$DEN_FAKE_EVENT_LOG")
   [[ $actual == "$expected" ]]
   ! grep -Fq 'config show allowed-impure-host-deps' "$DEN_FAKE_NIX_LOG"
 done
 
-safe_runtime_literal='{"derivations":{"fixture.drv":{"env":{"builderScript":"exec /bin/ls -lde /tmp/state"}}},"version":3}'
-run_driver darwin-safe-runtime-literal aarch64-darwin 0 $'claude-startup\nlauncher-unit' "$safe_runtime_literal"
+safe_runtime_literal='{"derivations":{"pi-startup.drv":{"name":"pi-darwin-startup"},"pi-tests.drv":{"name":"den-pi-native-tests"},"pi-launcher.drv":{"name":"den-native-pi-launcher"},"fixture.drv":{"env":{"builderScript":"exec /bin/ls -lde /tmp/state"}}},"version":3}'
+run_driver darwin-safe-runtime-literal aarch64-darwin 0 "$normal_checks" "$safe_runtime_literal"
 if [[ $status -ne 0 ]]; then
   cat "$root/darwin-safe-runtime-literal.stderr" >&2
   exit 1
 fi
-grep -Fq 'derivation show --recursive .#checks.aarch64-darwin.claude-startup .#checks.aarch64-darwin.native-enforcement' \
-  "$DEN_FAKE_NIX_LOG"
+grep -Fq 'derivation show --recursive .#checks.x86_64-darwin.native-enforcement' "$DEN_FAKE_NIX_LOG"
+grep -Fq 'derivation show --recursive .#checks.aarch64-darwin.claude-startup' "$DEN_FAKE_NIX_LOG"
 
-nested_forbidden='{"derivations":{"parent.drv":{"inputDrvs":{"child.drv":{"outputs":["out"]}}},"child.drv":{"structuredAttrs":{"__impureHostDeps":["/bin/sh","/bin/ls"]}}},"version":3}'
-run_driver darwin-nested-forbidden aarch64-darwin 0 $'claude-startup\nlauncher-unit' "$nested_forbidden"
+nested_forbidden='{"derivations":{"pi-startup.drv":{"name":"pi-darwin-startup"},"pi-tests.drv":{"name":"den-pi-native-tests"},"pi-launcher.drv":{"name":"den-native-pi-launcher"},"parent.drv":{"inputDrvs":{"child.drv":{"outputs":["out"]}}},"child.drv":{"structuredAttrs":{"__impureHostDeps":["/bin/sh","/bin/ls"]}}},"version":3}'
+run_driver darwin-nested-forbidden aarch64-darwin 0 "$normal_checks" "$nested_forbidden"
 if [[ $status -eq 0 ]]; then
   printf 'driver accepted nested forbidden Darwin impure host dependency\n' >&2
   exit 1

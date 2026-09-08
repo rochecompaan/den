@@ -1,4 +1,4 @@
-{ inputs, pkgs, claude, claudeStartup ? null, piFixture ? import ./pi-native-fixture.nix { inherit inputs pkgs; } }:
+{ inputs, pkgs, claude, claudeStartup ? null, piFixture ? import ./pi-native-fixture.nix { inherit inputs pkgs; }, piDarwinStartup ? null }:
 
 let
   fence = (import ../lib/fence.nix { inherit pkgs; }).package;
@@ -243,7 +243,9 @@ in
 assert pkgs.lib.assertMsg
   (!pkgs.stdenv.isDarwin ||
     (claudeStartup != null &&
+     piDarwinStartup != null &&
      (claudeStartup.denHostFixturePlatform or null) == "darwin" &&
+     (piDarwinStartup.denHostFixturePlatform or null) == "darwin" &&
      (fenceCapabilities.denHostFixturePlatform or null) == "darwin"))
   "Darwin native enforcement requires the packaged Darwin host fixtures";
 pkgs.writeShellApplication {
@@ -275,6 +277,7 @@ pkgs.writeShellApplication {
     export DEN_NATIVE_RESOLVER_HELPER=${resolverHelper}/bin/den-native-resolver-helper
     ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
       export DEN_NATIVE_CLAUDE_STARTUP=${claudeStartup}/bin/claude-startup
+      export DEN_NATIVE_PI_STARTUP=${piDarwinStartup}/bin/pi-darwin-startup
       export DEN_NATIVE_FENCE_CAPABILITIES=${fenceCapabilities}/bin/fence-capabilities
       export DEN_NATIVE_SANDBOX_EXEC=/usr/bin/sandbox-exec
       export DEN_NATIVE_ACL_PROBE=${aclProbeDarwin}/bin/den-acl-probe
