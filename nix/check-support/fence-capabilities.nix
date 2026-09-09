@@ -259,10 +259,11 @@ assert fenceInfo.version == "0.1.58";
 assert fenceInfo.sourceHash == "sha256-ACe3N4bXYJW6QDQHtRChFWOTXTZTbEUbZ4d8cuFRqMY=";
 assert fenceInfo.patchHash == "4be4f0266a0a79da10002893752ea8185915f6ecfb146513946bde8a96e41e2a";
 assert fenceInfo.readOnlyMaskPatchHash == "750d15f9c6eee70f916de3044c60d937f9d67c39c0178da1a4da8acf8d6b990b";
+assert fenceInfo.bootstrapAttestationPatchHash == "d1f3f8d31ceb276998e5df0dd476e9e56ea7cd79517cf2bc0330bb498036c15f";
 assert fenceInfo.capabilities.claudePreToolUse;
 assert fenceInfo.capabilities.denFenceTmpdir;
 assert fenceInfo.capabilities.strictDenyRead;
-assert if pkgs.stdenv.isDarwin then fenceInfo.capabilities.allowUnixSockets else fenceInfo.capabilities.linuxReadOnlyDenyReadMasks && fenceInfo.capabilities.argvRuntimePolicy;
+assert if pkgs.stdenv.isDarwin then fenceInfo.capabilities.allowUnixSockets else fenceInfo.capabilities.linuxReadOnlyDenyReadMasks && fenceInfo.capabilities.argvRuntimePolicy && fenceInfo.capabilities.attestedBootstrapTransitions;
 if pkgs.stdenv.isLinux then
   pkgs.runCommand "fence-capabilities"
     {

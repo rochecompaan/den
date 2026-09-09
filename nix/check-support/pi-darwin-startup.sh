@@ -29,9 +29,13 @@ done
 
 fixture_root=$DEN_NATIVE_HOST_ROOT/pi-darwin-startup
 rm -rf "$fixture_root"
-mkdir -m 0700 -p "$fixture_root/home" "$fixture_root/invoking-home" \
+mkdir -p "$fixture_root/home" "$fixture_root/invoking-home" \
   "$fixture_root/agent/extensions" "$fixture_root/sessions" \
   "$fixture_root/worktree/.pi/extensions"
+chmod 0700 "$fixture_root" "$fixture_root/home" "$fixture_root/invoking-home" \
+  "$fixture_root/agent" "$fixture_root/agent/extensions" \
+  "$fixture_root/sessions" "$fixture_root/worktree" \
+  "$fixture_root/worktree/.pi" "$fixture_root/worktree/.pi/extensions"
 printf 'fixture CA\n' > "$fixture_root/ca.pem"
 printf '{}\n' > "$fixture_root/policy.json"
 chmod 0400 "$fixture_root/ca.pem"

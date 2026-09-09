@@ -1,0 +1,711 @@
+--- a/internal/sandbox/linux.go
++++ b/internal/sandbox/linux.go
+@@ -873 +873 @@ export FENCE_SANDBOX=1
+-		wrapperArgs := []string{bootstrapExecs.Fence, "--landlock-apply"}
++		wrapperArgs := []string{bootstrapExecs.Fence, linuxLandlockApplyMode}
+@@ -1532,5 +1532,5 @@ func WrapCommandLinuxWithOptions(cfg *config.Config, command string, bridge *Lin
+-			BwrapArgs:                              bwrapArgs,
+-			Config:                                 cfg,
+-			Debug:                                  opts.Debug,
+-			SeccompFilterPath:                      seccompFilterPath,
+-			AllowedMultithreadedBootstrapContinues: linuxArgvExecMultithreadedBootstrapContinueBudget(useLandlockWrapper),
++			BwrapArgs:            bwrapArgs,
++			Config:               cfg,
++			Debug:                opts.Debug,
++			SeccompFilterPath:    seccompFilterPath,
++			BootstrapTransitions: linuxArgvExecBootstrapTransitions(useLandlockWrapper, shellFlag, innerScript, command),
+--- a/internal/sandbox/runtime_exec_argv_linux.go
++++ b/internal/sandbox/runtime_exec_argv_linux.go
+@@ -16,0 +17 @@ import (
++	"slices"
+@@ -32,0 +34 @@ const (
++	linuxLandlockApplyMode  = "--landlock-apply"
+@@ -40,5 +42,5 @@ type linuxArgvExecPlan struct {
+-	BwrapArgs                              []string       `json:"bwrapArgs"`
+-	Config                                 *config.Config `json:"config,omitempty"`
+-	Debug                                  bool           `json:"debug,omitempty"`
+-	SeccompFilterPath                      string         `json:"seccompFilterPath,omitempty"`
+-	AllowedMultithreadedBootstrapContinues int            `json:"allowedMultithreadedBootstrapContinues"`
++	BwrapArgs            []string                           `json:"bwrapArgs"`
++	Config               *config.Config                     `json:"config,omitempty"`
++	Debug                bool                               `json:"debug,omitempty"`
++	SeccompFilterPath    string                             `json:"seccompFilterPath,omitempty"`
++	BootstrapTransitions []linuxArgvExecBootstrapTransition `json:"bootstrapTransitions"`
+@@ -46,0 +49,22 @@ type linuxArgvExecPlan struct {
++type linuxArgvExecBootstrapTransition struct {
++	SourceMode     string   `json:"sourceMode"`
++	TargetExecPath string   `json:"targetExecPath"`
++	TargetArgv     []string `json:"targetArgv"`
++}
++
++type linuxBootstrapProcessInfo struct {
++	TrustedExecutable bool
++	Argv              []string
++}
++
++type linuxBootstrapProcessInfoFunc func(int) (linuxBootstrapProcessInfo, error)
++type linuxSeccompNotifSendFunc func(int, *linuxSeccompNotifResp) error
++
++type linuxBootstrapAttestationResult uint8
++
++const (
++	linuxBootstrapNotAttempted linuxBootstrapAttestationResult = iota
++	linuxBootstrapAttestationAccepted
++	linuxBootstrapAttestationRejected
++)
++
+@@ -73,2 +97,3 @@ type linuxRuntimeExecDecision struct {
+-	Allow   bool
+-	Message string
++	Allow                       bool
++	Message                     string
++	AttestedBootstrapTransition bool
+@@ -78 +103,4 @@ type linuxArgvExecSupervisorState struct {
+-	remainingMultithreadedBootstrapContinues int
++	bootstrapTransitions    []linuxArgvExecBootstrapTransition
++	nextBootstrapTransition int
++	debug                   bool
++	bootstrapProcessInfo    linuxBootstrapProcessInfoFunc
+@@ -124,2 +152,2 @@ func RunLinuxArgvExecRunnerFromEnv() (int, error) {
+-	if plan.AllowedMultithreadedBootstrapContinues <= 0 {
+-		return 1, errors.New("linux argv exec plan has no multithreaded bootstrap continue budget")
++	if err := validateLinuxArgvExecBootstrapTransitions(plan.BootstrapTransitions); err != nil {
++		return 1, err
+@@ -221 +249,3 @@ func RunLinuxArgvExecRunnerFromEnv() (int, error) {
+-		remainingMultithreadedBootstrapContinues: plan.AllowedMultithreadedBootstrapContinues,
++		bootstrapTransitions: append([]linuxArgvExecBootstrapTransition(nil), plan.BootstrapTransitions...),
++		debug:                plan.Debug,
++		bootstrapProcessInfo: readLinuxBootstrapProcessInfo,
+@@ -581 +611 @@ func runLinuxArgvExecSupervisor(
+-		if err := linuxSendSeccompNotifResp(listenerFD, resp); err != nil {
++		if err := sendLinuxRuntimeExecDecision(listenerFD, resp, decision, state, nil); err != nil {
+@@ -672,5 +702 @@ func evaluateLinuxRuntimeExecDecisionForCandidate(
+-	if decision := verifyLinuxRuntimeExecSafeToContinue(pid, execPath, argv, state, threadCountFunc); !decision.Allow {
+-		return decision
+-	}
+-
+-	return linuxRuntimeExecDecision{Allow: true}
++	return verifyLinuxRuntimeExecSafeToContinue(pid, execPath, argv, state, threadCountFunc)
+@@ -717,0 +744,19 @@ func verifyLinuxRuntimeExecSafeToContinue(
++	// Consume an exact trusted bootstrap transition even when the kernel
++	// observes its source as single-threaded. Recording every transition keeps
++	// the sequence stable across nondeterministic Go runtime thread teardown.
++	attestation, attestationFailure := attestLinuxBootstrapTransition(state, pid, execPath, argv)
++	switch attestation {
++	case linuxBootstrapAttestationAccepted:
++		return linuxRuntimeExecDecision{Allow: true, AttestedBootstrapTransition: true}
++	case linuxBootstrapAttestationRejected:
++		return linuxRuntimeExecDecision{
++			Allow: false,
++			Message: fmt.Sprintf(
++				"[fence:linux] Runtime exec policy blocked exec=%q argv=%s: bootstrap attestation failed: %s",
++				execPath,
++				quoteRuntimeArgv(argv),
++				attestationFailure,
++			),
++		}
++	}
++
+@@ -731,3 +775,0 @@ func verifyLinuxRuntimeExecSafeToContinue(
+-		if consumeLinuxMultithreadedBootstrapContinue(state, execPath) {
+-			return linuxRuntimeExecDecision{Allow: true}
+-		}
+@@ -747,3 +789,17 @@ func verifyLinuxRuntimeExecSafeToContinue(
+-func consumeLinuxMultithreadedBootstrapContinue(state *linuxArgvExecSupervisorState, execPath string) bool {
+-	if state == nil || state.remainingMultithreadedBootstrapContinues <= 0 || !isLinuxBootstrapExecPath(execPath) {
+-		return false
++func linuxArgvExecBootstrapTransitions(
++	useLandlockWrapper bool,
++	shellFlag string,
++	innerScript string,
++	command string,
++) []linuxArgvExecBootstrapTransition {
++	transitions := []linuxArgvExecBootstrapTransition{{
++		SourceMode:     linuxArgvExecShimMode,
++		TargetExecPath: linuxBootstrapShellPath,
++		TargetArgv:     []string{linuxBootstrapShellPath, shellFlag, innerScript},
++	}}
++	if useLandlockWrapper {
++		transitions = append(transitions, linuxArgvExecBootstrapTransition{
++			SourceMode:     linuxLandlockApplyMode,
++			TargetExecPath: linuxBootstrapShellPath,
++			TargetArgv:     []string{linuxBootstrapShellPath, shellFlag, command},
++		})
+@@ -751,2 +807 @@ func consumeLinuxMultithreadedBootstrapContinue(state *linuxArgvExecSupervisorSt
+-	state.remainingMultithreadedBootstrapContinues--
+-	return true
++	return transitions
+@@ -755,4 +810,3 @@ func consumeLinuxMultithreadedBootstrapContinue(state *linuxArgvExecSupervisorSt
+-func linuxArgvExecMultithreadedBootstrapContinueBudget(useLandlockWrapper bool) int {
+-	budget := 1 // shim -> staged shell
+-	if useLandlockWrapper {
+-		budget++ // landlock wrapper -> staged shell
++func validateLinuxArgvExecBootstrapTransitions(transitions []linuxArgvExecBootstrapTransition) error {
++	if len(transitions) < 1 || len(transitions) > 2 {
++		return fmt.Errorf("linux argv exec plan has invalid bootstrap transition count %d", len(transitions))
+@@ -760 +814,133 @@ func linuxArgvExecMultithreadedBootstrapContinueBudget(useLandlockWrapper bool)
+-	return budget
++	for i, transition := range transitions {
++		expectedMode := linuxArgvExecShimMode
++		if i == 1 {
++			expectedMode = linuxLandlockApplyMode
++		}
++		if transition.SourceMode != expectedMode {
++			return fmt.Errorf("linux argv exec plan bootstrap transition %d has invalid source mode %q", i, transition.SourceMode)
++		}
++		if transition.TargetExecPath != linuxBootstrapShellPath || len(transition.TargetArgv) == 0 || transition.TargetArgv[0] != linuxBootstrapShellPath {
++			return fmt.Errorf("linux argv exec plan bootstrap transition %d does not target the staged shell", i)
++		}
++	}
++	return nil
++}
++
++func attestLinuxBootstrapTransition(
++	state *linuxArgvExecSupervisorState,
++	pid int,
++	execPath string,
++	argv []string,
++) (linuxBootstrapAttestationResult, string) {
++	if state == nil {
++		if execPath == linuxBootstrapShellPath {
++			return linuxBootstrapAttestationRejected, "missing supervisor state"
++		}
++		return linuxBootstrapNotAttempted, ""
++	}
++	if state.nextBootstrapTransition >= len(state.bootstrapTransitions) {
++		if execPath == linuxBootstrapShellPath {
++			return linuxBootstrapAttestationRejected, "unexpected or duplicate bootstrap transition"
++		}
++		return linuxBootstrapNotAttempted, ""
++	}
++	transition := state.bootstrapTransitions[state.nextBootstrapTransition]
++
++	processInfo := state.bootstrapProcessInfo
++	if processInfo == nil {
++		processInfo = readLinuxBootstrapProcessInfo
++	}
++	current, err := processInfo(pid)
++	if err != nil {
++		return linuxBootstrapAttestationRejected, fmt.Sprintf("unable to inspect source process: %v", err)
++	}
++	if !current.TrustedExecutable {
++		if execPath == transition.TargetExecPath {
++			return linuxBootstrapAttestationRejected, "source executable is not the staged Fence"
++		}
++		return linuxBootstrapNotAttempted, ""
++	}
++
++	// A staged Fence process can only reach this supervisor while performing
++	// the immutable shim or Landlock handoff. Treat every other target or argv
++	// from that executable as a malformed transition, even with one thread.
++	if execPath != transition.TargetExecPath {
++		return linuxBootstrapAttestationRejected, "target executable does not match the staged transition"
++	}
++	if !slices.Equal(argv, transition.TargetArgv) {
++		return linuxBootstrapAttestationRejected, "target argv does not match the staged transition"
++	}
++
++	expectedCurrentArgv := []string{linuxBootstrapFencePath, transition.SourceMode}
++	if state.debug {
++		expectedCurrentArgv = append(expectedCurrentArgv, "--debug")
++	}
++	expectedCurrentArgv = append(expectedCurrentArgv, "--")
++	expectedCurrentArgv = append(expectedCurrentArgv, transition.TargetArgv...)
++	if !slices.Equal(current.Argv, expectedCurrentArgv) {
++		return linuxBootstrapAttestationRejected, "source mode or argv does not match the staged transition"
++	}
++
++	return linuxBootstrapAttestationAccepted, ""
++}
++
++func commitLinuxAttestedBootstrapTransition(state *linuxArgvExecSupervisorState) {
++	state.nextBootstrapTransition++
++}
++
++func readLinuxBootstrapProcessInfo(pid int) (linuxBootstrapProcessInfo, error) {
++	return readLinuxBootstrapProcessInfoAt(fmt.Sprintf("/proc/%d", pid))
++}
++
++func readLinuxBootstrapProcessInfoAt(procRoot string) (linuxBootstrapProcessInfo, error) {
++	currentExecutable, err := os.Stat(filepath.Join(procRoot, "exe"))
++	if err != nil {
++		return linuxBootstrapProcessInfo{}, fmt.Errorf("inspect current executable: %w", err)
++	}
++	stagedExecutable, err := os.Stat(procRoot + "/root" + linuxBootstrapFencePath)
++	if err != nil {
++		return linuxBootstrapProcessInfo{}, fmt.Errorf("inspect staged Fence executable: %w", err)
++	}
++
++	cmdline, err := os.Open(filepath.Join(procRoot, "cmdline"))
++	if err != nil {
++		return linuxBootstrapProcessInfo{}, fmt.Errorf("open current argv: %w", err)
++	}
++	defer func() { _ = cmdline.Close() }()
++	maxBytes := int64(linuxArgvExecMaxArgs * (linuxArgvExecMaxStringBytes + 1))
++	rawArgv, err := io.ReadAll(io.LimitReader(cmdline, maxBytes+1))
++	if err != nil {
++		return linuxBootstrapProcessInfo{}, fmt.Errorf("read current argv: %w", err)
++	}
++	if int64(len(rawArgv)) > maxBytes {
++		return linuxBootstrapProcessInfo{}, errors.New("current argv exceeds inspection limit")
++	}
++	currentArgv, err := parseLinuxProcCmdline(rawArgv)
++	if err != nil {
++		return linuxBootstrapProcessInfo{}, err
++	}
++	return linuxBootstrapProcessInfo{
++		TrustedExecutable: os.SameFile(currentExecutable, stagedExecutable),
++		Argv:              currentArgv,
++	}, nil
++}
++
++func parseLinuxProcCmdline(raw []byte) ([]string, error) {
++	if len(raw) == 0 || raw[len(raw)-1] != 0 {
++		return nil, errors.New("current argv is empty or unterminated")
++	}
++	fields := bytes.Split(raw[:len(raw)-1], []byte{0})
++	if len(fields) == 0 || len(fields[0]) == 0 {
++		return nil, errors.New("current argv has no executable")
++	}
++	if len(fields) > linuxArgvExecMaxArgs {
++		return nil, errors.New("current argv has too many arguments")
++	}
++	argv := make([]string, 0, len(fields))
++	for _, field := range fields {
++		if len(field) > linuxArgvExecMaxStringBytes {
++			return nil, errors.New("current argv argument exceeds inspection limit")
++		}
++		argv = append(argv, string(field))
++	}
++	return argv, nil
+@@ -770,0 +957,19 @@ func linuxSendSeccompNotifResp(listenerFD int, resp *linuxSeccompNotifResp) erro
++func sendLinuxRuntimeExecDecision(
++	listenerFD int,
++	resp *linuxSeccompNotifResp,
++	decision linuxRuntimeExecDecision,
++	state *linuxArgvExecSupervisorState,
++	send linuxSeccompNotifSendFunc,
++) error {
++	if send == nil {
++		send = linuxSendSeccompNotifResp
++	}
++	if err := send(listenerFD, resp); err != nil {
++		return err
++	}
++	if decision.Allow && decision.AttestedBootstrapTransition {
++		commitLinuxAttestedBootstrapTransition(state)
++	}
++	return nil
++}
++
+--- a/internal/sandbox/runtime_exec_argv_linux_test.go
++++ b/internal/sandbox/runtime_exec_argv_linux_test.go
+@@ -5,0 +6,3 @@ import (
++	"bytes"
++	"errors"
++	"fmt"
+@@ -7,0 +11 @@ import (
++	"slices"
+@@ -11,0 +16 @@ import (
++	"golang.org/x/sys/unix"
+@@ -136 +141 @@ func TestMatchRuntimeExecPolicy_AllowOverridesDeny(t *testing.T) {
+-func TestEvaluateLinuxRuntimeExecDecisionForCandidate_BootstrapExecStillChecksContinueSafety(t *testing.T) {
++func TestEvaluateLinuxRuntimeExecDecisionForCandidate_OrdinaryExecStillChecksContinueSafety(t *testing.T) {
+@@ -140,2 +145,2 @@ func TestEvaluateLinuxRuntimeExecDecisionForCandidate_BootstrapExecStillChecksCo
+-		linuxBootstrapShellPath,
+-		[]string{"shell"},
++		"/usr/bin/echo",
++		[]string{"echo", "ordinary command"},
+@@ -150 +155 @@ func TestEvaluateLinuxRuntimeExecDecisionForCandidate_BootstrapExecStillChecksCo
+-		t.Fatal("expected bootstrap exec to run CONTINUE safety checks")
++		t.Fatal("expected ordinary exec to run CONTINUE safety checks")
+@@ -153 +158 @@ func TestEvaluateLinuxRuntimeExecDecisionForCandidate_BootstrapExecStillChecksCo
+-		t.Fatal("expected multithreaded bootstrap exec to be blocked")
++		t.Fatal("expected multithreaded ordinary exec to be blocked")
+@@ -160 +165,10 @@ func TestEvaluateLinuxRuntimeExecDecisionForCandidate_BootstrapExecStillChecksCo
+-func TestEvaluateLinuxRuntimeExecDecisionForCandidate_FirstBootstrapExecUsesConfiguredAllowance(t *testing.T) {
++func TestEvaluateLinuxRuntimeExecDecisionForCandidate_AttestedBootstrapSequenceSurvivesThreadCountVariation(t *testing.T) {
++	shimTarget := []string{linuxBootstrapShellPath, "-c", "bootstrap script"}
++	landlockTarget := []string{linuxBootstrapShellPath, "-c", "agent command"}
++	current := linuxBootstrapProcessInfo{
++		TrustedExecutable: true,
++		Argv: []string{
++			linuxBootstrapFencePath, linuxArgvExecShimMode, "--",
++			linuxBootstrapShellPath, "-c", "bootstrap script",
++		},
++	}
+@@ -162 +176,5 @@ func TestEvaluateLinuxRuntimeExecDecisionForCandidate_FirstBootstrapExecUsesConf
+-		remainingMultithreadedBootstrapContinues: 1,
++		bootstrapTransitions: []linuxArgvExecBootstrapTransition{
++			{SourceMode: linuxArgvExecShimMode, TargetExecPath: linuxBootstrapShellPath, TargetArgv: shimTarget},
++			{SourceMode: linuxLandlockApplyMode, TargetExecPath: linuxBootstrapShellPath, TargetArgv: landlockTarget},
++		},
++		bootstrapProcessInfo: func(int) (linuxBootstrapProcessInfo, error) { return current, nil },
+@@ -166,8 +184,18 @@ func TestEvaluateLinuxRuntimeExecDecisionForCandidate_FirstBootstrapExecUsesConf
+-		1234,
+-		linuxBootstrapShellPath,
+-		[]string{"shell"},
+-		nil,
+-		state,
+-		func(int) (int, error) {
+-			return 2, nil
+-		},
++		1234, linuxBootstrapShellPath, shimTarget, nil, state,
++		func(int) (int, error) { return 1, nil },
++	)
++	if !decision.Allow || !decision.AttestedBootstrapTransition || state.nextBootstrapTransition != 0 {
++		t.Fatalf("single-threaded shim transition was not pending attestation: decision=%#v next=%d", decision, state.nextBootstrapTransition)
++	}
++	commitLinuxAttestedBootstrapTransition(state)
++	if state.nextBootstrapTransition != 1 {
++		t.Fatalf("shim transition was not committed after response: next=%d", state.nextBootstrapTransition)
++	}
++
++	current.Argv = []string{
++		linuxBootstrapFencePath, linuxLandlockApplyMode, "--",
++		linuxBootstrapShellPath, "-c", "agent command",
++	}
++	decision = evaluateLinuxRuntimeExecDecisionForCandidate(
++		1234, linuxBootstrapShellPath, landlockTarget, nil, state,
++		func(int) (int, error) { return 2, nil },
+@@ -175,2 +203,2 @@ func TestEvaluateLinuxRuntimeExecDecisionForCandidate_FirstBootstrapExecUsesConf
+-	if !decision.Allow {
+-		t.Fatalf("expected first multithreaded bootstrap exec to use configured allowance, got: %s", decision.Message)
++	if !decision.Allow || !decision.AttestedBootstrapTransition || state.nextBootstrapTransition != 1 {
++		t.Fatalf("multithreaded Landlock transition was not pending attestation: decision=%#v next=%d", decision, state.nextBootstrapTransition)
+@@ -178,2 +206,3 @@ func TestEvaluateLinuxRuntimeExecDecisionForCandidate_FirstBootstrapExecUsesConf
+-	if state.remainingMultithreadedBootstrapContinues != 0 {
+-		t.Fatal("expected multithreaded bootstrap allowance to be consumed")
++	commitLinuxAttestedBootstrapTransition(state)
++	if state.nextBootstrapTransition != 2 {
++		t.Fatalf("Landlock transition was not committed after response: next=%d", state.nextBootstrapTransition)
+@@ -183,19 +212,126 @@ func TestEvaluateLinuxRuntimeExecDecisionForCandidate_FirstBootstrapExecUsesConf
+-func TestEvaluateLinuxRuntimeExecDecisionForCandidate_BootstrapAllowanceCanCoverLandlockFlow(t *testing.T) {
+-	state := &linuxArgvExecSupervisorState{
+-		remainingMultithreadedBootstrapContinues: 2,
+-	}
+-	threadCountFunc := func(int) (int, error) {
+-		return 2, nil
+-	}
+-
+-	for i := 0; i < 2; i++ {
+-		decision := evaluateLinuxRuntimeExecDecisionForCandidate(
+-			1234,
+-			linuxBootstrapShellPath,
+-			[]string{"shell"},
+-			nil,
+-			state,
+-			threadCountFunc,
+-		)
+-		if !decision.Allow {
+-			t.Fatalf("expected bootstrap allowance %d to be accepted, got: %s", i+1, decision.Message)
++func TestSendLinuxRuntimeExecDecision_CommitsOnlyAfterSuccessfulResponse(t *testing.T) {
++	tests := []struct {
++		name      string
++		decision  linuxRuntimeExecDecision
++		sendErr   error
++		wantNext  int
++		wantError bool
++	}{
++		{
++			name: "attested success", decision: linuxRuntimeExecDecision{Allow: true, AttestedBootstrapTransition: true},
++			wantNext: 1,
++		},
++		{
++			name: "stale response", decision: linuxRuntimeExecDecision{Allow: true, AttestedBootstrapTransition: true},
++			sendErr: unix.ENOENT, wantError: true,
++		},
++		{
++			name: "send failure", decision: linuxRuntimeExecDecision{Allow: true, AttestedBootstrapTransition: true},
++			sendErr: unix.EIO, wantError: true,
++		},
++		{
++			name: "ordinary success", decision: linuxRuntimeExecDecision{Allow: true},
++		},
++		{
++			name: "denied response success", decision: linuxRuntimeExecDecision{AttestedBootstrapTransition: true},
++		},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			state := &linuxArgvExecSupervisorState{
++				bootstrapTransitions: []linuxArgvExecBootstrapTransition{{
++					SourceMode: linuxArgvExecShimMode,
++				}},
++			}
++			response := &linuxSeccompNotifResp{ID: 99}
++			senderCalled := false
++			err := sendLinuxRuntimeExecDecision(42, response, tt.decision, state,
++				func(listenerFD int, got *linuxSeccompNotifResp) error {
++					senderCalled = true
++					if listenerFD != 42 || got != response {
++						t.Fatalf("sender received fd=%d response=%p, want fd=42 response=%p", listenerFD, got, response)
++					}
++					if state.nextBootstrapTransition != 0 {
++						t.Fatalf("transition committed before response send: next=%d", state.nextBootstrapTransition)
++					}
++					return tt.sendErr
++				},
++			)
++			if !senderCalled {
++				t.Fatal("response sender was not called")
++			}
++			if (err != nil) != tt.wantError || (tt.sendErr != nil && !errors.Is(err, tt.sendErr)) {
++				t.Fatalf("sendLinuxRuntimeExecDecision() error = %v, want %v", err, tt.sendErr)
++			}
++			if state.nextBootstrapTransition != tt.wantNext {
++				t.Fatalf("next transition = %d, want %d", state.nextBootstrapTransition, tt.wantNext)
++			}
++		})
++	}
++}
++
++func TestEvaluateLinuxRuntimeExecDecisionForCandidate_RejectsInvalidBootstrapAttestations(t *testing.T) {
++	target := []string{linuxBootstrapShellPath, "-c", "bootstrap script"}
++	transition := linuxArgvExecBootstrapTransition{
++		SourceMode: linuxArgvExecShimMode, TargetExecPath: linuxBootstrapShellPath, TargetArgv: target,
++	}
++	exactCurrentArgv := []string{
++		linuxBootstrapFencePath, linuxArgvExecShimMode, "--",
++		linuxBootstrapShellPath, "-c", "bootstrap script",
++	}
++	tests := []struct {
++		name        string
++		execPath    string
++		argv        []string
++		trusted     bool
++		currentArgv []string
++		processErr  error
++		message     string
++	}{
++		{
++			name: "wrong_mode", execPath: linuxBootstrapShellPath, argv: target, trusted: true,
++			currentArgv: []string{linuxBootstrapFencePath, linuxLandlockApplyMode, "--", linuxBootstrapShellPath, "-c", "bootstrap script"},
++			message:     "source mode or argv does not match the staged transition",
++		},
++		{
++			name: "wrong_target_executable", execPath: "/tmp/fence/bin/other",
++			argv: []string{"/tmp/fence/bin/other", "-c", "bootstrap script"}, trusted: true, currentArgv: exactCurrentArgv,
++			message: "target executable does not match the staged transition",
++		},
++		{
++			name: "wrong_target_argv", execPath: linuxBootstrapShellPath,
++			argv: []string{linuxBootstrapShellPath, "-c", "different script"}, trusted: true, currentArgv: exactCurrentArgv,
++			message: "target argv does not match the staged transition",
++		},
++		{
++			name: "untrusted_executable", execPath: linuxBootstrapShellPath, argv: target, trusted: false, currentArgv: exactCurrentArgv,
++			message: "source executable is not the staged Fence",
++		},
++		{
++			name: "inspection_error", execPath: linuxBootstrapShellPath, argv: target, processErr: errors.New("fixture inspection failure"),
++			message: "unable to inspect source process",
++		},
++	}
++	for _, tt := range tests {
++		for _, threadCount := range []int{1, 2} {
++			t.Run(fmt.Sprintf("%s_threads_%d", tt.name, threadCount), func(t *testing.T) {
++				state := &linuxArgvExecSupervisorState{
++					bootstrapTransitions: []linuxArgvExecBootstrapTransition{transition},
++					bootstrapProcessInfo: func(int) (linuxBootstrapProcessInfo, error) {
++						return linuxBootstrapProcessInfo{TrustedExecutable: tt.trusted, Argv: tt.currentArgv}, tt.processErr
++					},
++				}
++				decision := evaluateLinuxRuntimeExecDecisionForCandidate(
++					1234, tt.execPath, tt.argv, nil, state,
++					func(int) (int, error) { return threadCount, nil },
++				)
++				if decision.Allow {
++					t.Fatal("invalid bootstrap transition was allowed")
++				}
++				if !strings.Contains(decision.Message, tt.message) {
++					t.Fatalf("rejection message = %q, want reason %q", decision.Message, tt.message)
++				}
++				if state.nextBootstrapTransition != 0 {
++					t.Fatal("invalid bootstrap transition consumed the attestation")
++				}
++			})
+@@ -203,0 +340 @@ func TestEvaluateLinuxRuntimeExecDecisionForCandidate_BootstrapAllowanceCanCover
++}
+@@ -205,2 +342,28 @@ func TestEvaluateLinuxRuntimeExecDecisionForCandidate_BootstrapAllowanceCanCover
+-	if state.remainingMultithreadedBootstrapContinues != 0 {
+-		t.Fatalf("expected bootstrap allowance budget to be exhausted, got %d", state.remainingMultithreadedBootstrapContinues)
++func TestEvaluateLinuxRuntimeExecDecisionForCandidate_RejectsOutOfOrderBootstrapTransition(t *testing.T) {
++	shimTarget := []string{linuxBootstrapShellPath, "-c", "bootstrap script"}
++	landlockTarget := []string{linuxBootstrapShellPath, "-c", "agent command"}
++	for _, threadCount := range []int{1, 2} {
++		t.Run(fmt.Sprintf("threads_%d", threadCount), func(t *testing.T) {
++			state := &linuxArgvExecSupervisorState{
++				bootstrapTransitions: []linuxArgvExecBootstrapTransition{
++					{SourceMode: linuxArgvExecShimMode, TargetExecPath: linuxBootstrapShellPath, TargetArgv: shimTarget},
++					{SourceMode: linuxLandlockApplyMode, TargetExecPath: linuxBootstrapShellPath, TargetArgv: landlockTarget},
++				},
++				bootstrapProcessInfo: func(int) (linuxBootstrapProcessInfo, error) {
++					return linuxBootstrapProcessInfo{TrustedExecutable: true, Argv: []string{
++						linuxBootstrapFencePath, linuxLandlockApplyMode, "--",
++						linuxBootstrapShellPath, "-c", "agent command",
++					}}, nil
++				},
++			}
++			decision := evaluateLinuxRuntimeExecDecisionForCandidate(
++				1234, linuxBootstrapShellPath, landlockTarget, nil, state,
++				func(int) (int, error) { return threadCount, nil },
++			)
++			if decision.Allow {
++				t.Fatal("out-of-order bootstrap transition was allowed")
++			}
++			if state.nextBootstrapTransition != 0 {
++				t.Fatal("out-of-order bootstrap transition consumed the attestation")
++			}
++		})
+@@ -207,0 +371 @@ func TestEvaluateLinuxRuntimeExecDecisionForCandidate_BootstrapAllowanceCanCover
++}
+@@ -209,10 +373,50 @@ func TestEvaluateLinuxRuntimeExecDecisionForCandidate_BootstrapAllowanceCanCover
+-	decision := evaluateLinuxRuntimeExecDecisionForCandidate(
+-		1234,
+-		linuxBootstrapShellPath,
+-		[]string{"shell"},
+-		nil,
+-		state,
+-		threadCountFunc,
+-	)
+-	if decision.Allow {
+-		t.Fatal("expected third multithreaded bootstrap exec to be blocked after budget is exhausted")
++func TestEvaluateLinuxRuntimeExecDecisionForCandidate_RejectsDuplicateBootstrapTransition(t *testing.T) {
++	target := []string{linuxBootstrapShellPath, "-c", "bootstrap script"}
++	for _, threadCount := range []int{1, 2} {
++		t.Run(fmt.Sprintf("threads_%d", threadCount), func(t *testing.T) {
++			state := &linuxArgvExecSupervisorState{
++				bootstrapTransitions: []linuxArgvExecBootstrapTransition{{
++					SourceMode: linuxArgvExecShimMode, TargetExecPath: linuxBootstrapShellPath, TargetArgv: target,
++				}},
++				bootstrapProcessInfo: func(int) (linuxBootstrapProcessInfo, error) {
++					return linuxBootstrapProcessInfo{TrustedExecutable: true, Argv: []string{
++						linuxBootstrapFencePath, linuxArgvExecShimMode, "--",
++						linuxBootstrapShellPath, "-c", "bootstrap script",
++					}}, nil
++				},
++			}
++			first := evaluateLinuxRuntimeExecDecisionForCandidate(
++				1234, linuxBootstrapShellPath, target, nil, state,
++				func(int) (int, error) { return threadCount, nil },
++			)
++			if !first.Allow || !first.AttestedBootstrapTransition {
++				t.Fatalf("first exact bootstrap transition was rejected: %#v", first)
++			}
++			commitLinuxAttestedBootstrapTransition(state)
++			duplicate := evaluateLinuxRuntimeExecDecisionForCandidate(
++				1234, linuxBootstrapShellPath, target, nil, state,
++				func(int) (int, error) { return threadCount, nil },
++			)
++			if duplicate.Allow {
++				t.Fatal("duplicate bootstrap transition was allowed")
++			}
++			if !strings.Contains(duplicate.Message, "unexpected or duplicate bootstrap transition") {
++				t.Fatalf("duplicate rejection message = %q", duplicate.Message)
++			}
++		})
++	}
++}
++
++func TestValidateLinuxArgvExecBootstrapTransitionsRejectsInvalidSequence(t *testing.T) {
++	target := []string{linuxBootstrapShellPath, "-c", "bootstrap script"}
++	for name, transitions := range map[string][]linuxArgvExecBootstrapTransition{
++		"missing":           nil,
++		"wrong first mode":  {{SourceMode: linuxLandlockApplyMode, TargetExecPath: linuxBootstrapShellPath, TargetArgv: target}},
++		"wrong target path": {{SourceMode: linuxArgvExecShimMode, TargetExecPath: "/tmp/fence/bin/other", TargetArgv: target}},
++		"wrong argv zero":   {{SourceMode: linuxArgvExecShimMode, TargetExecPath: linuxBootstrapShellPath, TargetArgv: []string{"other"}}},
++	} {
++		t.Run(name, func(t *testing.T) {
++			if err := validateLinuxArgvExecBootstrapTransitions(transitions); err == nil {
++				t.Fatal("invalid bootstrap transition sequence was accepted")
++			}
++		})
+@@ -222,3 +426,6 @@ func TestEvaluateLinuxRuntimeExecDecisionForCandidate_BootstrapAllowanceCanCover
+-func TestLinuxArgvExecMultithreadedBootstrapContinueBudget(t *testing.T) {
+-	if got := linuxArgvExecMultithreadedBootstrapContinueBudget(false); got != 1 {
+-		t.Fatalf("linuxArgvExecMultithreadedBootstrapContinueBudget(false) = %d, want 1", got)
++func TestReadLinuxBootstrapProcessInfoAt_VerifiesExecutableIdentityAndArgv(t *testing.T) {
++	procRoot := t.TempDir()
++	currentExecutable := filepath.Join(procRoot, "current-fence")
++	stagedExecutable := filepath.Join(procRoot, "root", strings.TrimPrefix(linuxBootstrapFencePath, "/"))
++	if err := os.MkdirAll(filepath.Dir(stagedExecutable), 0o700); err != nil {
++		t.Fatal(err)
+@@ -226,2 +433,75 @@ func TestLinuxArgvExecMultithreadedBootstrapContinueBudget(t *testing.T) {
+-	if got := linuxArgvExecMultithreadedBootstrapContinueBudget(true); got != 2 {
+-		t.Fatalf("linuxArgvExecMultithreadedBootstrapContinueBudget(true) = %d, want 2", got)
++	if err := os.WriteFile(currentExecutable, []byte("fence"), 0o700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Symlink(currentExecutable, filepath.Join(procRoot, "exe")); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Link(currentExecutable, stagedExecutable); err != nil {
++		t.Fatal(err)
++	}
++	wantArgv := []string{linuxBootstrapFencePath, linuxArgvExecShimMode, "--", linuxBootstrapShellPath, "-c", "command"}
++	if err := os.WriteFile(filepath.Join(procRoot, "cmdline"), append([]byte(strings.Join(wantArgv, "\x00")), 0), 0o600); err != nil {
++		t.Fatal(err)
++	}
++
++	info, err := readLinuxBootstrapProcessInfoAt(procRoot)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !info.TrustedExecutable || !slices.Equal(info.Argv, wantArgv) {
++		t.Fatalf("trusted process info = %#v, want argv %v", info, wantArgv)
++	}
++
++	if err := os.Remove(stagedExecutable); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(stagedExecutable, []byte("replacement"), 0o700); err != nil {
++		t.Fatal(err)
++	}
++	info, err = readLinuxBootstrapProcessInfoAt(procRoot)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if info.TrustedExecutable {
++		t.Fatal("different staged executable identity was trusted")
++	}
++}
++
++func TestReadLinuxBootstrapProcessInfoAt_RejectsOversizedCmdline(t *testing.T) {
++	procRoot := t.TempDir()
++	currentExecutable := filepath.Join(procRoot, "current-fence")
++	stagedExecutable := filepath.Join(procRoot, "root", strings.TrimPrefix(linuxBootstrapFencePath, "/"))
++	if err := os.MkdirAll(filepath.Dir(stagedExecutable), 0o700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(currentExecutable, []byte("fence"), 0o700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Symlink(currentExecutable, filepath.Join(procRoot, "exe")); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Link(currentExecutable, stagedExecutable); err != nil {
++		t.Fatal(err)
++	}
++	maxBytes := linuxArgvExecMaxArgs * (linuxArgvExecMaxStringBytes + 1)
++	if err := os.WriteFile(filepath.Join(procRoot, "cmdline"), bytes.Repeat([]byte{'x'}, maxBytes+1), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := readLinuxBootstrapProcessInfoAt(procRoot); err == nil || !strings.Contains(err.Error(), "current argv exceeds inspection limit") {
++		t.Fatalf("oversized cmdline error = %v", err)
++	}
++}
++
++func TestParseLinuxProcCmdlineRejectsMalformedInput(t *testing.T) {
++	for name, raw := range map[string][]byte{
++		"empty":              nil,
++		"unterminated":       []byte("fence\x00--mode"),
++		"missing executable": {0},
++		"argument too long":  append(bytes.Repeat([]byte{'x'}, linuxArgvExecMaxStringBytes+1), 0),
++		"too many arguments": bytes.Repeat([]byte{'x', 0}, linuxArgvExecMaxArgs+1),
++	} {
++		t.Run(name, func(t *testing.T) {
++			if _, err := parseLinuxProcCmdline(raw); err == nil {
++				t.Fatal("malformed cmdline was accepted")
++			}
++		})

@@ -20,7 +20,7 @@ func TestPiStateSelectionPrecedenceAndDefaultCreation(t *testing.T) {
 		fixture := newPiFixture(t)
 		result := fixture.rpc([]string{"--model", "den-native/fixture"},
 			`{"id":"inherited","type":"prompt","message":"state selection"}`)
-		requireStateLaunch(t, result, fixture.agentDir, fixture.sessionDir)
+		requireStateLaunch(t, result, "inherited", fixture.agentDir, fixture.sessionDir)
 	})
 
 	t.Run("explicit_over_inherited", func(t *testing.T) {
@@ -37,8 +37,8 @@ func TestPiStateSelectionPrecedenceAndDefaultCreation(t *testing.T) {
 				bindings := document["stateBindings"].([]any)
 				bindings[0].(map[string]any)["explicitPath"] = explicitAgent
 				bindings[1].(map[string]any)["explicitPath"] = explicitSessions
-			}, "--mode", "rpc")
-		requireStateLaunch(t, result, explicitAgent, explicitSessions)
+			}, "--mode", "rpc", "--model", "den-native/fixture")
+		requireStateLaunch(t, result, "explicit", explicitAgent, explicitSessions)
 		requireReportLines(t, filepath.Join(explicitAgent, "pi-resources.report"), "session-start:startup:worktree:true:explicit-sessions")
 		if pathExists(fixture.reportPath()) || directoryHasEntries(t, fixture.sessionDir) {
 			t.Fatal("inherited Pi state was used despite explicit state bindings")
@@ -54,8 +54,9 @@ func TestPiStateSelectionPrecedenceAndDefaultCreation(t *testing.T) {
 		defaultAgent := filepath.Join(defaultRoot, "agent")
 		defaultSessions := filepath.Join(defaultRoot, "sessions")
 		result := fixture.launch(rpcInput(`{"id":"default","type":"prompt","message":"state selection"}`),
-			[]string{"PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"}, nil, "--mode", "rpc")
-		requireStateLaunch(t, result, defaultAgent, defaultSessions)
+			[]string{"PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"}, nil,
+			"--mode", "rpc", "--model", "den-native/fixture")
+		requireStateLaunch(t, result, "default", defaultAgent, defaultSessions)
 	})
 }
 
@@ -702,11 +703,9 @@ func runNativeResume(t *testing.T, fixture *piFixture, target, cwd string, repla
 	}
 }
 
-func requireStateLaunch(t *testing.T, result commandResult, agentDir, sessionDir string) {
+func requireStateLaunch(t *testing.T, result commandResult, responseID, agentDir, sessionDir string) {
 	t.Helper()
-	if result.err != nil {
-		t.Fatalf("Pi state launch failed: %v\n%s%s", result.err, result.stdout, result.stderr)
-	}
+	requireRPCResponse(t, result, responseID, true, "")
 	if !pathExists(filepath.Join(agentDir, "pi-resources.report")) {
 		t.Fatalf("selected agent state was not writable: %s", agentDir)
 	}
