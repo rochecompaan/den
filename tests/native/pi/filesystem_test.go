@@ -41,7 +41,7 @@ func filesystemDiagnosticOutcomes(t *testing.T, path string) []string {
 		"native-tools-raw-read:",
 	}
 	if strings.HasSuffix(os.Getenv("DEN_NATIVE_HOST_SYSTEM"), "-darwin") {
-		prefixes = append(prefixes, "darwin-profile-ps-status:", "darwin-profile-allow-subpath:", "darwin-profile-deny-subpath:")
+		prefixes = append(prefixes, "darwin-profile-ps-status:", "darwin-profile-sandbox-exec:", "darwin-profile-protected-path:", "darwin-profile-allow-subpath:", "darwin-profile-deny-subpath:")
 	}
 	var outcomes []string
 	for _, line := range strings.Split(string(contents), "\n") {
@@ -149,10 +149,12 @@ func TestPiNativeFileToolsAndHomeAliasesStayInsideFence(t *testing.T) {
  }
  const firstProtectedPath = `+string(jsonString(denied[0]))+`;
  if (process.env.DEN_NATIVE_HOST_SYSTEM?.endsWith("-darwin")) {
-  const ps = run(process.env.DEN_NATIVE_PS!, ["-axo", "pid=,ppid=,command="]);
+  const ps = run(process.env.DEN_NATIVE_PS!, ["-ww", "-axo", "pid=,ppid=,command="]);
   const profile = (ps.stdout ?? "").replace(/\s+/g, " ");
   const protectedRoot = firstProtectedPath.slice(0, firstProtectedPath.lastIndexOf("/"));
   record("darwin-profile-ps-status:" + String(ps.status));
+  record("darwin-profile-sandbox-exec:" + (profile.includes("sandbox-exec -p") ? "present" : "absent"));
+  record("darwin-profile-protected-path:" + (profile.includes(protectedRoot) ? "present" : "absent"));
   record("darwin-profile-allow-subpath:" + (profile.includes("(allow file-read-data (subpath \"" + process.cwd() + "\")") ? "present" : "absent"));
   record("darwin-profile-deny-subpath:" + (profile.includes("(deny file-read* (subpath \"" + protectedRoot + "\")") ? "present" : "absent"));
  }
