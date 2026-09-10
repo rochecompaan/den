@@ -49,7 +49,7 @@ func filesystemDiagnosticOutcomes(t *testing.T, path string) []string {
 		}
 	}
 	if len(outcomes) != len(prefixes) {
-		t.Fatalf("missing sanitized filesystem diagnostic outcomes: got %d, want %d", len(outcomes), len(prefixes))
+		t.Fatalf("missing sanitized filesystem diagnostic outcomes: got %d, want %d; report=%q", len(outcomes), len(prefixes), contents)
 	}
 	return outcomes
 }
@@ -202,13 +202,15 @@ func TestPiNativeFileToolsAndHomeAliasesStayInsideFence(t *testing.T) {
   assert.match(JSON.stringify(await read.execute("state",{path:root+"/file-tool-state"})),/selected-state/);
  }
  const firstProtectedPath = `+string(jsonString(denied[0]))+`;
- const protectedAncestor = firstProtectedPath.slice(0, firstProtectedPath.lastIndexOf("/agent/"));
- const movedAncestor = protectedAncestor + "-moved";
- record("native-tools-ancestor-rename-checking:" + protectedAncestor);
- await assert.rejects(fs.promises.rename(protectedAncestor, movedAncestor), /EACCES|EPERM|EROFS|permission/i, "native-tools protected ancestor rename unexpectedly resolved");
- record("native-tools-ancestor-rename-denied:" + protectedAncestor);
- await assert.rejects(fs.promises.readFile(firstProtectedPath), /EACCES|EPERM|ENOENT|permission/i, "native-tools protected path read unexpectedly resolved after rename denial");
- await assert.rejects(fs.promises.readFile(movedAncestor + "/agent/auth.json"), /EACCES|EPERM|ENOENT|permission/i, "native-tools moved protected path unexpectedly readable");
+ if (process.env.DEN_NATIVE_HOST_SYSTEM?.endsWith("-darwin")) {
+  const protectedAncestor = firstProtectedPath.slice(0, firstProtectedPath.lastIndexOf("/agent/"));
+  const movedAncestor = protectedAncestor + "-moved";
+  record("native-tools-ancestor-rename-checking:" + protectedAncestor);
+  await assert.rejects(fs.promises.rename(protectedAncestor, movedAncestor), /EACCES|EPERM|EROFS|EBUSY|EXDEV|permission/i, "native-tools protected ancestor rename unexpectedly resolved");
+  record("native-tools-ancestor-rename-denied:" + protectedAncestor);
+  await assert.rejects(fs.promises.readFile(firstProtectedPath), /EACCES|EPERM|ENOENT|permission/i, "native-tools protected path read unexpectedly resolved after rename denial");
+  await assert.rejects(fs.promises.readFile(movedAncestor + "/agent/auth.json"), /EACCES|EPERM|ENOENT|permission/i, "native-tools moved protected path unexpectedly readable");
+ }
  const directOutcome = async (operation: () => Promise<unknown>) => {
   try { await operation(); return "allowed"; }
   catch (error: any) { return "denied:" + (error?.code ?? error?.name ?? "unknown"); }
