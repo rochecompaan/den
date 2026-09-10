@@ -49,7 +49,7 @@ func TestPiDarwinStartupFixtureCompleted(t *testing.T) {
 			t.Fatalf("Darwin Pi startup assertion %q is missing from %q", assertion, contents)
 		}
 	}
-	worktree := filepath.Join(root, "pi-darwin-startup", "worktree")
+	worktree := filepath.Join(root, "pi-darwin-startup", "startup-worktree")
 	started, err := os.ReadFile(filepath.Join(worktree, "pi-started"))
 	if err != nil {
 		t.Fatal(err)
