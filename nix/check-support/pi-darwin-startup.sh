@@ -1,6 +1,27 @@
 # shellcheck shell=bash
 set -euo pipefail
 
+phase='input validation'
+fixture_root=
+report_failure() {
+  local status=$?
+  trap - EXIT
+  if (( status != 0 )); then
+    printf 'Darwin Pi startup fixture failed during %s\n' "$phase" >&2
+    if [[ -n $fixture_root ]]; then
+      local output
+      for output in hostile-collisions extension-version policy-version version assertions.report; do
+        if [[ -f $fixture_root/$output ]]; then
+          printf '%s:\n' "$output" >&2
+          cat "$fixture_root/$output" >&2
+        fi
+      done
+    fi
+  fi
+  exit "$status"
+}
+trap report_failure EXIT
+
 : "${DEN_NATIVE_HOST_ROOT:?native host root is required}"
 : "${DEN_NATIVE_PI_STARTUP_PI:?Pi executable is required}"
 : "${DEN_NATIVE_PI_STARTUP_SANDBOX:?Pi sandbox is required}"
@@ -29,6 +50,7 @@ for path in "$DEN_NATIVE_PI_STARTUP_PI" "$DEN_NATIVE_PI_STARTUP_SANDBOX" \
 done
 
 fixture_root=$DEN_NATIVE_HOST_ROOT/pi-darwin-startup
+phase='fixture setup'
 collision_agent=$fixture_root/collision-agent
 collision_worktree=$fixture_root/collision-worktree
 startup_agent=$fixture_root/startup-agent
@@ -62,6 +84,7 @@ chmod 0600 "$collision_agent/trust.json" "$startup_agent/trust.json"
 # The production manifest must retain its immutable security adapter. The
 # negative launches below prove real launcher-boundary rejection instead of
 # treating this shape check as that proof.
+phase='security manifest validation'
 security_extension=$(jq -er '
   select(.agent.name == "pi") |
   select(.agent.securityAdapter.kind == "pi-extension") |
@@ -143,6 +166,7 @@ export DEN_REPLACEMENT_BASH_MARKER="$fixture_root/replacement-bash"
 export DEN_REPLACEMENT_USER_BASH_MARKER="$fixture_root/replacement-user-bash"
 export DEN_PI_DARWIN_STARTUP_ROOT="$fixture_root"
 export DEN_PI_DARWIN_WORKTREE="$collision_worktree"
+phase='security extension behavior checks'
 "$DEN_NATIVE_PI_STARTUP_NODE" "$fixture_root/check.mjs"
 test "$(<"$DEN_PI_DARWIN_HELPER_LISTENER_REPORT")" = no-listener
 
@@ -163,6 +187,7 @@ packaged_launch() {
 }
 expect_prestart_rejection() {
   local sandbox=$1 label=$2 diagnostic=$3
+  phase="pre-start $label identity rejection"
   rm -f "$startup_worktree/pi-started"
   if packaged_launch "$sandbox" "$fixture_root/$label-version" \
     "$startup_agent" "$startup_worktree"; then
@@ -178,6 +203,7 @@ expect_prestart_rejection() {
 # Collided ambient extensions must fail normal packaged startup with exact
 # diagnostics. They are isolated from the later launch expected to succeed.
 collision_output=$fixture_root/hostile-collisions
+phase='hostile extension collision launch'
 if packaged_launch "$DEN_NATIVE_PI_STARTUP_SANDBOX" "$collision_output" \
   "$collision_agent" "$collision_worktree"; then
   printf 'hostile extension collisions did not fail packaged Pi startup\n' >&2
@@ -208,9 +234,11 @@ export DEN_PI_DARWIN_EXPECT_OUTER_FENCE=1
 export DEN_PI_DARWIN_OUTSIDE="$fixture_root/outside-secret"
 export DEN_PI_DARWIN_DIRECT_REPORT="$startup_worktree/direct-extension.report"
 rm -f "$startup_worktree/pi-started"
+phase='clean packaged launch'
 packaged_launch "$DEN_NATIVE_PI_STARTUP_SANDBOX" "$fixture_root/version" \
   "$startup_agent" "$startup_worktree"
 unset DEN_PI_DARWIN_EXPECT_OUTER_FENCE DEN_PI_DARWIN_OUTSIDE DEN_PI_DARWIN_DIRECT_REPORT
+phase='startup assertions'
 test ! -s "$fixture_root/version"
 printf 'started\n' | cmp - "$startup_worktree/pi-started"
 printf 'denied\n' | cmp - "$startup_worktree/direct-extension.report"
@@ -236,4 +264,5 @@ prestart-policy-identity-diagnostic'
 while IFS= read -r assertion; do
   grep -Fxq "$assertion" "$fixture_root/assertions.report"
 done <<< "$required_assertions"
+phase='completion artifact write'
 printf 'complete\n' > "$DEN_NATIVE_HOST_ROOT/pi-darwin-startup.complete"

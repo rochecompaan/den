@@ -69,6 +69,10 @@ if [[ -f $user_hostile || -f $project_hostile ]]; then
 fi
 
 test -f "$PWD/.pi/extensions/project-probe.ts"
+if [[ ${DEN_PI_DARWIN_TEST_FAIL_POSITIVE:-0} == 1 ]]; then
+  printf 'forced positive launch failure\n' >&2
+  exit 23
+fi
 printf 'started\n' > "$DEN_PI_DARWIN_PI_START_MARKER"
 if [[ ${DEN_PI_DARWIN_EXPECT_OUTER_FENCE:-0} == 1 ]]; then
   printf 'denied\n' > "$DEN_PI_DARWIN_DIRECT_REPORT"
@@ -113,4 +117,16 @@ if ! "$BASH" "$startup_source"; then
 fi
 cmp -s <(printf 'complete\n') "$DEN_NATIVE_HOST_ROOT/pi-darwin-startup.complete"
 cmp -s <(printf 'hostile-collision\npositive-launch\n') "$DEN_PI_DARWIN_TEST_EVENTS"
+
+failure_output=$root/failure-output
+if DEN_PI_DARWIN_TEST_FAIL_POSITIVE=1 "$BASH" "$startup_source" > "$failure_output" 2>&1; then
+  printf 'forced positive launch failure unexpectedly succeeded\n' >&2
+  exit 1
+fi
+if ! grep -Fqx 'Darwin Pi startup fixture failed during clean packaged launch' "$failure_output"; then
+  printf 'missing Darwin Pi startup phase diagnostic\n' >&2
+  exit 1
+fi
+grep -Fqx 'version:' "$failure_output"
+grep -Fqx 'forced positive launch failure' "$failure_output"
 printf 'Darwin Pi startup shell tests passed\n'
