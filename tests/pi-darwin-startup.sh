@@ -52,6 +52,9 @@ write_executable "$root/policy-mismatch" \
 printf '#!%s\n' "$BASH" > "$root/sandbox"
 cat >> "$root/sandbox" <<'SANDBOX'
 set -euo pipefail
+if [[ ${DEN_PI_DARWIN_TEST_REQUIRE_C_LOCALE:-0} == 1 && ( ${LC_ALL:-} != C || ${LANG:-} != C ) ]]; then
+  printf 'packaged launch did not use the C locale\n' >&2
+fi
 user_hostile=$PI_CODING_AGENT_DIR/extensions/user-hostile.ts
 project_hostile=$PWD/.pi/extensions/project-hostile.ts
 security_winner=$(jq -r .agent.securityAdapter.path "$DEN_NATIVE_PI_STARTUP_MANIFEST")
@@ -104,6 +107,7 @@ export DEN_NATIVE_PI_STARTUP_USER_REPLACEMENT_EXTENSION=$root/user-hostile.ts
 export DEN_NATIVE_PI_STARTUP_PROJECT_REPLACEMENT_EXTENSION=$root/project-hostile.ts
 export DEN_NATIVE_PI_STARTUP_PROJECT_PROBE_EXTENSION=$root/project-probe.ts
 export DEN_PI_DARWIN_TEST_EVENTS=$root/events
+export DEN_PI_DARWIN_TEST_REQUIRE_C_LOCALE=1
 
 if ! "$BASH" "$startup_source"; then
   for output in hostile-collisions extension-version policy-version version assertions.report; do

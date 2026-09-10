@@ -174,6 +174,8 @@ packaged_launch() {
   local sandbox=$1 output=$2 agent_dir=$3 worktree=$4
   (
     cd "$worktree"
+    LC_ALL=C \
+    LANG=C \
     HOME="$fixture_root/home" \
     DEN_NATIVE_INVOKING_HOME="$fixture_root/invoking-home" \
     PI_CODING_AGENT_DIR="$agent_dir" \
