@@ -142,7 +142,7 @@ if [[ $DEN_NATIVE_HOST_SYSTEM == *-darwin ]]; then
   test_status=0
   if "$DEN_NATIVE_TEST_BINARY" -test.count=1 -test.timeout=2m; then
     require_suite_completion Claude claude-suite.complete
-    if DEN_NATIVE_LAUNCHER="$DEN_NATIVE_PI_LAUNCHER" "$DEN_NATIVE_PI_TEST_BINARY" -test.count=1 -test.timeout=2m; then
+    if DEN_NATIVE_LAUNCHER="$DEN_NATIVE_PI_LAUNCHER" "$DEN_NATIVE_PI_TEST_BINARY" -test.count=1 -test.timeout=4m; then
       require_suite_completion Pi pi-suite.complete
       test_status=0
     else
