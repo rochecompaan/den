@@ -32,6 +32,7 @@ case "$DEN_NATIVE_HOST_SYSTEM" in
     : "${DEN_NATIVE_PI_STARTUP:?packaged Darwin Pi startup fixture is required}"
     : "${DEN_NATIVE_FENCE_CAPABILITIES:?packaged Darwin Fence capability fixture is required}"
     : "${DEN_NATIVE_SANDBOX_EXEC:?Darwin sandbox-exec path is required}"
+    : "${DEN_NATIVE_PS:?packaged Darwin ps is required}"
     test -x "$DEN_NATIVE_CLAUDE_STARTUP"
     case "$DEN_NATIVE_PI_STARTUP" in
       /*) test -x "$DEN_NATIVE_PI_STARTUP" ;;
@@ -39,6 +40,7 @@ case "$DEN_NATIVE_HOST_SYSTEM" in
     esac
     test -x "$DEN_NATIVE_FENCE_CAPABILITIES"
     test -x "$DEN_NATIVE_SANDBOX_EXEC"
+    test -x "$DEN_NATIVE_PS"
     ;;
   *)
     printf 'unsupported native runner system: %s\n' "$DEN_NATIVE_HOST_SYSTEM" >&2

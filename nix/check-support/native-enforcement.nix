@@ -242,16 +242,16 @@ let
 in
 assert pkgs.lib.assertMsg
   (!pkgs.stdenv.isDarwin ||
-    (claudeStartup != null &&
-     piDarwinStartup != null &&
-     (claudeStartup.denHostFixturePlatform or null) == "darwin" &&
-     (piDarwinStartup.denHostFixturePlatform or null) == "darwin" &&
-     (fenceCapabilities.denHostFixturePlatform or null) == "darwin"))
+  (claudeStartup != null &&
+    piDarwinStartup != null &&
+    (claudeStartup.denHostFixturePlatform or null) == "darwin" &&
+    (piDarwinStartup.denHostFixturePlatform or null) == "darwin" &&
+    (fenceCapabilities.denHostFixturePlatform or null) == "darwin"))
   "Darwin native enforcement requires the packaged Darwin host fixtures";
 pkgs.writeShellApplication {
   name = "native-enforcement";
   runtimeInputs = [ pkgs.bash pkgs.coreutils pkgs.curl pkgs.gitMinimal pkgs.gnused ]
-    ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.diffutils ]
+    ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.diffutils pkgs.procps ]
     ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.acl pkgs.iproute2 pkgs.util-linux ];
   text = ''
     export DEN_NATIVE_HOST_SYSTEM=${pkgs.stdenv.hostPlatform.system}
@@ -280,6 +280,7 @@ pkgs.writeShellApplication {
       export DEN_NATIVE_PI_STARTUP=${piDarwinStartup}/bin/pi-darwin-startup
       export DEN_NATIVE_FENCE_CAPABILITIES=${fenceCapabilities}/bin/fence-capabilities
       export DEN_NATIVE_SANDBOX_EXEC=/usr/bin/sandbox-exec
+      export DEN_NATIVE_PS=${pkgs.procps}/bin/ps
       export DEN_NATIVE_ACL_PROBE=${aclProbeDarwin}/bin/den-acl-probe
     ''}
     ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
