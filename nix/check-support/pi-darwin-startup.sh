@@ -15,6 +15,7 @@ set -euo pipefail
 : "${DEN_NATIVE_PI_STARTUP_HELPER:?security helper is required}"
 : "${DEN_NATIVE_PI_STARTUP_USER_REPLACEMENT_EXTENSION:?user hostile extension is required}"
 : "${DEN_NATIVE_PI_STARTUP_PROJECT_REPLACEMENT_EXTENSION:?project hostile extension is required}"
+: "${DEN_NATIVE_PI_STARTUP_PROJECT_PROBE_EXTENSION:?project startup probe is required}"
 
 for path in "$DEN_NATIVE_PI_STARTUP_PI" "$DEN_NATIVE_PI_STARTUP_SANDBOX" \
   "$DEN_NATIVE_PI_STARTUP_PRESTART_EXTENSION_MISMATCH_SANDBOX" \
@@ -28,26 +29,35 @@ for path in "$DEN_NATIVE_PI_STARTUP_PI" "$DEN_NATIVE_PI_STARTUP_SANDBOX" \
 done
 
 fixture_root=$DEN_NATIVE_HOST_ROOT/pi-darwin-startup
+collision_agent=$fixture_root/collision-agent
+collision_worktree=$fixture_root/collision-worktree
+startup_agent=$fixture_root/startup-agent
+startup_worktree=$fixture_root/startup-worktree
 rm -rf "$fixture_root"
-mkdir -p "$fixture_root/home" "$fixture_root/invoking-home" \
-  "$fixture_root/agent/extensions" "$fixture_root/sessions" \
-  "$fixture_root/worktree/.pi/extensions"
+mkdir -p "$fixture_root/home" "$fixture_root/invoking-home" "$fixture_root/sessions" \
+  "$collision_agent/extensions" "$collision_worktree/.pi/extensions" \
+  "$startup_agent/extensions" "$startup_worktree/.pi/extensions"
 chmod 0700 "$fixture_root" "$fixture_root/home" "$fixture_root/invoking-home" \
-  "$fixture_root/agent" "$fixture_root/agent/extensions" \
-  "$fixture_root/sessions" "$fixture_root/worktree" \
-  "$fixture_root/worktree/.pi" "$fixture_root/worktree/.pi/extensions"
+  "$fixture_root/sessions" "$collision_agent" "$collision_agent/extensions" \
+  "$collision_worktree" "$collision_worktree/.pi" "$collision_worktree/.pi/extensions" \
+  "$startup_agent" "$startup_agent/extensions" "$startup_worktree" \
+  "$startup_worktree/.pi" "$startup_worktree/.pi/extensions"
 printf 'fixture CA\n' > "$fixture_root/ca.pem"
 printf '{}\n' > "$fixture_root/policy.json"
 chmod 0400 "$fixture_root/ca.pem"
 chmod 0600 "$fixture_root/policy.json"
 cp "$DEN_NATIVE_PI_STARTUP_USER_REPLACEMENT_EXTENSION" \
-  "$fixture_root/agent/extensions/user-hostile.ts"
+  "$collision_agent/extensions/user-hostile.ts"
 cp "$DEN_NATIVE_PI_STARTUP_PROJECT_REPLACEMENT_EXTENSION" \
-  "$fixture_root/worktree/.pi/extensions/project-hostile.ts"
-chmod 0600 "$fixture_root/agent/extensions/user-hostile.ts" \
-  "$fixture_root/worktree/.pi/extensions/project-hostile.ts"
-printf '{"%s":true}\n' "$fixture_root/worktree" > "$fixture_root/agent/trust.json"
-chmod 0600 "$fixture_root/agent/trust.json"
+  "$collision_worktree/.pi/extensions/project-hostile.ts"
+cp "$DEN_NATIVE_PI_STARTUP_PROJECT_PROBE_EXTENSION" \
+  "$startup_worktree/.pi/extensions/project-probe.ts"
+chmod 0600 "$collision_agent/extensions/user-hostile.ts" \
+  "$collision_worktree/.pi/extensions/project-hostile.ts" \
+  "$startup_worktree/.pi/extensions/project-probe.ts"
+printf '{"%s":true}\n' "$collision_worktree" > "$collision_agent/trust.json"
+printf '{"%s":true}\n' "$startup_worktree" > "$startup_agent/trust.json"
+chmod 0600 "$collision_agent/trust.json" "$startup_agent/trust.json"
 
 # The production manifest must retain its immutable security adapter. The
 # negative launches below prove real launcher-boundary rejection instead of
@@ -88,7 +98,7 @@ const security = process.env.DEN_NATIVE_PI_STARTUP_SECURITY_TEST_EXTENSION;
 const runner = await load(security);
 const bash = runner.getToolDefinition("bash");
 assert(bash, "security extension did not own bash");
-const cwd = join(root, "worktree");
+const cwd = process.env.DEN_PI_DARWIN_WORKTREE;
 await reject(() => bash.execute("outside-fence", { command: "printf unfenced > unfenced" }, undefined, undefined, context(cwd)), "outer-fence-required");
 assert(!existsSync(join(cwd, "unfenced")), "command ran outside outer Fence");
 record("outer-fence-required-for-shell-entrypoints");
@@ -125,26 +135,26 @@ record("helper-created-no-http-or-socks-listener");
 EOF
 
 export HOME="$fixture_root/home"
-export PI_CODING_AGENT_DIR="$fixture_root/agent"
+export PI_CODING_AGENT_DIR="$collision_agent"
 export DEN_FENCE_POLICY_FILE="$fixture_root/policy.json"
 export DEN_PI_DARWIN_HELPER_REQUEST="$fixture_root/helper-request.json"
 export DEN_PI_DARWIN_HELPER_LISTENER_REPORT="$fixture_root/helper-listener.report"
 export DEN_REPLACEMENT_BASH_MARKER="$fixture_root/replacement-bash"
 export DEN_REPLACEMENT_USER_BASH_MARKER="$fixture_root/replacement-user-bash"
 export DEN_PI_DARWIN_STARTUP_ROOT="$fixture_root"
-export DEN_PI_DARWIN_WORKTREE="$fixture_root/worktree"
+export DEN_PI_DARWIN_WORKTREE="$collision_worktree"
 "$DEN_NATIVE_PI_STARTUP_NODE" "$fixture_root/check.mjs"
 test "$(<"$DEN_PI_DARWIN_HELPER_LISTENER_REPORT")" = no-listener
 
-prestart_launch() {
-  local sandbox=$1 output=$2
+packaged_launch() {
+  local sandbox=$1 output=$2 agent_dir=$3 worktree=$4
   (
-    cd "$fixture_root/worktree"
+    cd "$worktree"
     HOME="$fixture_root/home" \
     DEN_NATIVE_INVOKING_HOME="$fixture_root/invoking-home" \
-    PI_CODING_AGENT_DIR="$fixture_root/agent" \
+    PI_CODING_AGENT_DIR="$agent_dir" \
     PI_CODING_AGENT_SESSION_DIR="$fixture_root/sessions" \
-    DEN_PI_DARWIN_PI_START_MARKER="$fixture_root/worktree/pi-started" \
+    DEN_PI_DARWIN_PI_START_MARKER="$worktree/pi-started" \
     REPOWOLF_ENDPOINT=https://broker.example.test/ \
     REPOWOLF_TOKEN=rw1_AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE \
     REPOWOLF_CA_FILE="$fixture_root/ca.pem" \
@@ -153,19 +163,40 @@ prestart_launch() {
 }
 expect_prestart_rejection() {
   local sandbox=$1 label=$2 diagnostic=$3
-  rm -f "$fixture_root/worktree/pi-started"
-  if prestart_launch "$sandbox" "$fixture_root/$label-version"; then
+  rm -f "$startup_worktree/pi-started"
+  if packaged_launch "$sandbox" "$fixture_root/$label-version" \
+    "$startup_agent" "$startup_worktree"; then
     printf '%s identity mismatch reached Pi launch\n' "$label" >&2
     exit 1
   fi
-  test ! -e "$fixture_root/worktree/pi-started"
+  test ! -e "$startup_worktree/pi-started"
   grep -Fqx "$diagnostic" "$fixture_root/$label-version"
   printf 'prestart-%s-mismatch-fails-before-launch\n' "$label" >> "$fixture_root/assertions.report"
   printf 'prestart-%s-identity-diagnostic\n' "$label" >> "$fixture_root/assertions.report"
 }
 
+# Collided ambient extensions must fail normal packaged startup with exact
+# diagnostics. They are isolated from the later launch expected to succeed.
+collision_output=$fixture_root/hostile-collisions
+if packaged_launch "$DEN_NATIVE_PI_STARTUP_SANDBOX" "$collision_output" \
+  "$collision_agent" "$collision_worktree"; then
+  printf 'hostile extension collisions did not fail packaged Pi startup\n' >&2
+  exit 1
+fi
+grep -Fqx \
+  "Error: Failed to load extension \"$collision_agent/extensions/user-hostile.ts\": Tool \"bash\" conflicts with $security_extension" \
+  "$collision_output"
+grep -Fqx \
+  "Error: Failed to load extension \"$collision_worktree/.pi/extensions/project-hostile.ts\": Tool \"bash\" conflicts with $security_extension" \
+  "$collision_output"
+{
+  printf 'hostile-collisions-fail-packaged-startup\n'
+  printf 'hostile-user-extension-collision-diagnostic\n'
+  printf 'hostile-project-extension-collision-diagnostic\n'
+} >> "$fixture_root/assertions.report"
+
 # Both negatives cross the packaged sandbox, den-launcher, and real outer
-# Fence. Their marker is written by a real Pi extension only if Pi begins
+# Fence. Their marker is written by a benign Pi extension only if Pi begins
 # loading extensions, so its absence proves rejection before Pi starts.
 expect_prestart_rejection "$DEN_NATIVE_PI_STARTUP_PRESTART_EXTENSION_MISMATCH_SANDBOX" extension \
   'Pi command security extension identity changed'
@@ -175,13 +206,14 @@ printf 'outer Fence synthetic secret\n' > "$fixture_root/outside-secret"
 chmod 0600 "$fixture_root/outside-secret"
 export DEN_PI_DARWIN_EXPECT_OUTER_FENCE=1
 export DEN_PI_DARWIN_OUTSIDE="$fixture_root/outside-secret"
-export DEN_PI_DARWIN_DIRECT_REPORT="$fixture_root/worktree/direct-extension.report"
-rm -f "$fixture_root/worktree/pi-started"
-prestart_launch "$DEN_NATIVE_PI_STARTUP_SANDBOX" "$fixture_root/version"
+export DEN_PI_DARWIN_DIRECT_REPORT="$startup_worktree/direct-extension.report"
+rm -f "$startup_worktree/pi-started"
+packaged_launch "$DEN_NATIVE_PI_STARTUP_SANDBOX" "$fixture_root/version" \
+  "$startup_agent" "$startup_worktree"
 unset DEN_PI_DARWIN_EXPECT_OUTER_FENCE DEN_PI_DARWIN_OUTSIDE DEN_PI_DARWIN_DIRECT_REPORT
 test ! -s "$fixture_root/version"
-printf 'started\n' | cmp - "$fixture_root/worktree/pi-started"
-printf 'denied\n' | cmp - "$fixture_root/worktree/direct-extension.report"
+printf 'started\n' | cmp - "$startup_worktree/pi-started"
+printf 'denied\n' | cmp - "$startup_worktree/direct-extension.report"
 printf 'direct-extension-process-outer-fence-constrained\n' >> "$fixture_root/assertions.report"
 required_assertions='allowed-bash-after-no-change-helper
 fail-closed:deny
@@ -190,6 +222,9 @@ fail-closed:malformed
 fail-closed:failed
 native-user-bash-parity
 hostile-user-project-extensions-cannot-replace-entrypoints
+hostile-collisions-fail-packaged-startup
+hostile-user-extension-collision-diagnostic
+hostile-project-extension-collision-diagnostic
 identity-change-fails-closed
 helper-created-no-http-or-socks-listener
 outer-fence-required-for-shell-entrypoints

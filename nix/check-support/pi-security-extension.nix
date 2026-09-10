@@ -3,31 +3,15 @@
 let
   piPackage = import ../packages/pi-coding-agent.nix { inherit pkgs; };
   fenceInfo = import ../lib/fence.nix { inherit pkgs; };
-  fakeFence = pkgs.writeShellScriptBin "fence" ''
-    set -eu
-    test "$#" = 3
-    test "$1" = --claude-pre-tool-use
-    test "$2" = --settings
-    test "$3" = "$DEN_FENCE_POLICY_FILE"
-    request=$(${pkgs.coreutils}/bin/cat)
-    printf '%s' "$request" > "$DEN_HELPER_REQUEST"
-    command=$(printf '%s' "$request" | ${pkgs.jq}/bin/jq -r .tool_input.command)
-    case "$command" in
-      deny) printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}' ;;
-      rewrite) printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"printf rewritten"}}}' ;;
-      malformed) printf 'not-json\n' ;;
-      nonzero) exit 23 ;;
-      *) : ;;
-    esac
-  '';
+  securityHelper = import ./pi-security-helper.nix { inherit pkgs; };
   renderExtension = fence: name: pkgs.writeText name
     (builtins.replaceStrings [ "@fence@" ] [ fence ] (builtins.readFile ../pi/den-pi-security.ts));
-  securityExtension = renderExtension "${fakeFence}" "den-pi-security.ts";
+  securityExtension = renderExtension "${securityHelper}" "den-pi-security.ts";
   missingFenceExtension = renderExtension "/nix/store/00000000000000000000000000000000-missing-fence" "den-pi-security-missing-fence.ts";
   replacementExtension = ./fixtures/pi/replace-shell-tools.ts;
   extensionCheck = pkgs.runCommand "pi-security-extension-behavior"
     {
-      nativeBuildInputs = [ pkgs.coreutils pkgs.jq ];
+      nativeBuildInputs = [ pkgs.coreutils ];
       node = "${piPackage.nodejs}/bin/node";
       resourceLoader = "${piPackage.packageRoot}/dist/core/resource-loader.js";
       extensionRunner = "${piPackage.packageRoot}/dist/core/extensions/runner.js";
@@ -39,7 +23,8 @@ let
       export HOME="$TMPDIR/home"
       export PI_CODING_AGENT_DIR="$TMPDIR/agent"
       export DEN_FENCE_POLICY_FILE="$TMPDIR/policy.json"
-      export DEN_HELPER_REQUEST="$TMPDIR/request.json"
+      export DEN_PI_DARWIN_HELPER_REQUEST="$TMPDIR/request.json"
+      export DEN_PI_DARWIN_HELPER_LISTENER_REPORT="$TMPDIR/helper-listener.report"
       export DEN_REPLACEMENT_BASH_MARKER="$TMPDIR/replacement-bash"
       export DEN_REPLACEMENT_USER_BASH_MARKER="$TMPDIR/replacement-user-bash"
       printf '{}\n' > "$DEN_FENCE_POLICY_FILE"
@@ -73,6 +58,7 @@ let
       };
 
       process.env.FENCE_SANDBOX = "1";
+      process.env.DEN_PI_DARWIN_HELPER_MODE = "allow";
       const runner = await load([process.env.securityExtension, process.env.replacementExtension]);
       const bash = runner.getToolDefinition("bash");
       assert(bash, "security extension did not own bash");
@@ -80,19 +66,21 @@ let
       await import("node:fs").then(({ mkdirSync }) => mkdirSync(bashCwd));
       await bash.execute("tool-call", { command: "printf secure > bash-ran" }, undefined, undefined, context(bashCwd));
       assert(readFileSync(bashCwd + "/bash-ran", "utf8") === "secure", "secured bash did not execute in ctx.cwd");
-      let request = JSON.parse(readFileSync(process.env.DEN_HELPER_REQUEST, "utf8"));
+      let request = JSON.parse(readFileSync(process.env.DEN_PI_DARWIN_HELPER_REQUEST, "utf8"));
       assert(request.hook_event_name === "PreToolUse", "wrong hook event");
       assert(request.tool_name === "Bash", "wrong tool name");
       assert(request.tool_input.command === "printf secure > bash-ran", "wrong command request");
       assert(request.tool_input.cwd === bashCwd && request.cwd === bashCwd, "current directory missing from request");
       assert(!readFileSync(process.env.securityExtension, "utf8").includes(" -c "), "security extension starts a nested Fence manager");
 
-      for (const command of ["deny", "rewrite", "malformed", "nonzero"]) {
-        await expectReject(() => bash.execute("tool-call", { command }, undefined, undefined, context(bashCwd)), command);
+      for (const mode of ["deny", "rewrite", "malformed", "failed"]) {
+        process.env.DEN_PI_DARWIN_HELPER_MODE = mode;
+        await expectReject(() => bash.execute("tool-call", { command: mode }, undefined, undefined, context(bashCwd)), mode);
       }
       delete process.env.FENCE_SANDBOX;
       await expectReject(() => bash.execute("tool-call", { command: "missing-sandbox" }, undefined, undefined, context(bashCwd)), "missing FENCE_SANDBOX");
       process.env.FENCE_SANDBOX = "1";
+      process.env.DEN_PI_DARWIN_HELPER_MODE = "allow";
 
       const user = await runner.emitUserBash({ type: "user_bash", command: "printf user-secure", cwd: process.env.workspace, excludeFromContext: false });
       assert(user?.operations, "security extension did not own user_bash");
@@ -112,6 +100,7 @@ let
         resourceLoader="$resourceLoader" extensionRunner="$extensionRunner" \
         securityExtension="$securityExtension" missingFenceExtension="$missingFenceExtension" \
         replacementExtension="$replacementExtension" "$node" check.mjs
+      test "$(<"$DEN_PI_DARWIN_HELPER_LISTENER_REPORT")" = no-listener
       touch "$out"
     '';
 in
