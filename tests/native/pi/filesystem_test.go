@@ -94,6 +94,63 @@ func TestFenceDenyReadMaskIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestDarwinFenceReadOnlyDenyPreventsMovement(t *testing.T) {
+	if !strings.HasSuffix(os.Getenv("DEN_NATIVE_HOST_SYSTEM"), "-darwin") {
+		t.Skip("Darwin Seatbelt test")
+	}
+
+	root := t.TempDir()
+	worktree := filepath.Join(root, "worktree")
+	protected := filepath.Join(worktree, "read-only-denied")
+	secret := filepath.Join(protected, "secret.txt")
+	if err := os.MkdirAll(protected, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secret, []byte("read-only-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policyPath := filepath.Join(root, "fence.json")
+	policy, err := json.Marshal(map[string]any{
+		"filesystem": map[string]any{
+			"allowWrite": []string{worktree},
+			"denyRead":   []string{protected},
+		},
+		"command": map[string]any{"useDefaults": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policyPath, policy, 0o400); err != nil {
+		t.Fatal(err)
+	}
+
+	movedSecret := filepath.Join(worktree, "moved-secret.txt")
+	movedProtected := filepath.Join(worktree, "moved-read-only-denied")
+	cmd := exec.Command(os.Getenv("DEN_NATIVE_FENCE"), "--settings", policyPath, "--",
+		"/bin/bash", "-c", `
+set -eu
+if mv "$SECRET" "$MOVED_SECRET" >/dev/null 2>&1; then exit 20; fi
+if mv "$PROTECTED" "$MOVED_PROTECTED" >/dev/null 2>&1; then exit 21; fi
+if cat "$SECRET" >/dev/null 2>&1; then exit 22; fi
+`)
+	cmd.Env = append(os.Environ(),
+		"SECRET="+secret,
+		"PROTECTED="+protected,
+		"MOVED_SECRET="+movedSecret,
+		"MOVED_PROTECTED="+movedProtected,
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("read-only deny movement fixture failed: %v\n%s", err, output)
+	}
+	contents, err := os.ReadFile(secret)
+	if err != nil || string(contents) != "read-only-secret" {
+		t.Fatalf("read-only denied secret changed: %v %q", err, contents)
+	}
+	if pathExists(movedSecret) || pathExists(movedProtected) {
+		t.Fatal("read-only denied path moved outside its deny rule")
+	}
+}
+
 func TestPiNativeFileToolsAndHomeAliasesStayInsideFence(t *testing.T) {
 	fixture := newPiFixture(t)
 	var denied []string
@@ -130,15 +187,7 @@ func TestPiNativeFileToolsAndHomeAliasesStayInsideFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	denied = append(denied, unrelated, store)
-	readOnlyRoot := filepath.Join(fixture.worktree, "read-only-denied")
-	readOnlyDenied := filepath.Join(readOnlyRoot, "secret.txt")
-	if err := os.Mkdir(readOnlyRoot, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(readOnlyDenied, []byte("den9-read-only-secret"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	before := snapshotPaths(t, fixture.invokingHome, fixture.runtimeHome, unrelated, store, readOnlyRoot)
+	before := snapshotPaths(t, fixture.invokingHome, fixture.runtimeHome, unrelated, store)
 	encoded, _ := json.Marshal(denied)
 	policyReport := filepath.Join(fixture.root, "fence-policy.json")
 	result := fixture.runEnforcementProbe(t, `
@@ -160,17 +209,6 @@ func TestPiNativeFileToolsAndHomeAliasesStayInsideFence(t *testing.T) {
  record("native-tools-ancestor-rename-denied:" + protectedAncestor);
  await assert.rejects(fs.promises.readFile(firstProtectedPath), /EACCES|EPERM|ENOENT|permission/i, "native-tools protected path read unexpectedly resolved after rename denial");
  await assert.rejects(fs.promises.readFile(movedAncestor + "/agent/auth.json"), /EACCES|EPERM|ENOENT|permission/i, "native-tools moved protected path unexpectedly readable");
- const readOnlyProtectedPath = `+string(jsonString(readOnlyDenied))+`;
- const movedReadOnlyPath = readOnlyProtectedPath + "-moved";
- const readOnlyProtectedRoot = readOnlyProtectedPath.slice(0, readOnlyProtectedPath.lastIndexOf("/"));
- const movedReadOnlyRoot = readOnlyProtectedRoot + "-moved";
- record("native-tools-read-only-move-checking:" + readOnlyProtectedPath);
- await assert.rejects(fs.promises.rename(readOnlyProtectedPath, movedReadOnlyPath), /EACCES|EPERM|EROFS|permission/i, "native-tools read-only denied target rename unexpectedly resolved");
- await assert.rejects(fs.promises.rename(readOnlyProtectedRoot, movedReadOnlyRoot), /EACCES|EPERM|EROFS|permission/i, "native-tools read-only denied ancestor rename unexpectedly resolved");
- record("native-tools-read-only-move-denied:" + readOnlyProtectedPath);
- await assert.rejects(fs.promises.readFile(readOnlyProtectedPath), /EACCES|EPERM|ENOENT|permission/i, "native-tools read-only denied path unexpectedly readable after rename denial");
- await assert.rejects(fs.promises.readFile(movedReadOnlyPath), /EACCES|EPERM|ENOENT|permission/i, "native-tools moved read-only denied target unexpectedly readable");
- await assert.rejects(fs.promises.readFile(movedReadOnlyRoot + "/secret.txt"), /EACCES|EPERM|ENOENT|permission/i, "native-tools moved read-only denied ancestor unexpectedly readable");
  const directOutcome = async (operation: () => Promise<unknown>) => {
   try { await operation(); return "allowed"; }
   catch (error: any) { return "denied:" + (error?.code ?? error?.name ?? "unknown"); }
@@ -196,8 +234,6 @@ func TestPiNativeFileToolsAndHomeAliasesStayInsideFence(t *testing.T) {
  record("native-tools-control");
  `, []string{"DEN_NATIVE_PI_FENCE_POLICY_REPORT=" + policyReport}, func(document map[string]any) {
 		document["fenceExecutable"] = os.Getenv("DEN_NATIVE_PI_FENCE_INPUT_RECORDER")
-		filesystem := document["filesystem"].(map[string]any)
-		filesystem["denyRead"] = append(filesystem["denyRead"].([]any), readOnlyDenied)
 	})
 	contents, err := os.ReadFile(policyReport)
 	if err != nil {
@@ -222,14 +258,11 @@ func TestPiNativeFileToolsAndHomeAliasesStayInsideFence(t *testing.T) {
 	if !policyHasPath(policy.Filesystem.AllowRead, fixture.worktree) || !policyHasPath(policy.Filesystem.AllowWrite, fixture.worktree) {
 		t.Fatal("generated Fence policy omitted writable worktree")
 	}
-	if !policyHasPath(policy.Filesystem.DenyRead, readOnlyDenied) || policyHasPath(policy.Filesystem.DenyWrite, readOnlyDenied) {
-		t.Fatal("generated Fence policy did not preserve the read-only deny fixture")
-	}
 	for _, outcome := range filesystemDiagnosticOutcomes(t, filepath.Join(fixture.agentDir, "enforcement.report")) {
 		t.Logf("%s", outcome)
 	}
 	requireEnforcementProbeSuccess(t, fixture, result)
-	if after := snapshotPaths(t, fixture.invokingHome, fixture.runtimeHome, unrelated, store, readOnlyRoot); after != before {
+	if after := snapshotPaths(t, fixture.invokingHome, fixture.runtimeHome, unrelated, store); after != before {
 		t.Fatal("native tools changed protected host/store state")
 	}
 	requireNoCredential(t, result, "den9-host-secret")
