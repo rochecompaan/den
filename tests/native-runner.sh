@@ -108,9 +108,8 @@ cat >> "$root/resolver-helper" <<'FAKE_MARKER'
 exit 0
 FAKE_MARKER
 cp "$root/resolver-helper" "$root/sandbox-exec"
-cp "$root/resolver-helper" "$root/ps"
 chmod +x "$root/settings-merge" "$root/claude-startup" "$root/fence-capabilities" "$root/pi-startup" \
-  "$root/native-tests" "$root/pi-native-tests" "$root/resolver-helper" "$root/sandbox-exec" "$root/ps"
+  "$root/native-tests" "$root/pi-native-tests" "$root/resolver-helper" "$root/sandbox-exec"
 
 printf '#!/usr/bin/env bash\nexit 0\n' > "$root/pi"
 cp "$root/pi" "$root/pi-sandbox"
@@ -139,7 +138,6 @@ export DEN_NATIVE_PI_PACKAGE_ROOT=$root/pi-package-root
 export DEN_NATIVE_PI_RESOURCE_FIXTURE=$root/pi-resource-fixture
 export DEN_NATIVE_RESOLVER_HELPER=$root/resolver-helper
 export DEN_NATIVE_SANDBOX_EXEC=$root/sandbox-exec
-export DEN_NATIVE_PS=$root/ps
 export DEN_FAKE_EVENT_LOG=$root/events
 
 run_runner() {

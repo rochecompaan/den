@@ -1,0 +1,252 @@
+diff --git a/internal/sandbox/macos.go b/internal/sandbox/macos.go
+index f8257f9..f17cd02 100644
+--- a/internal/sandbox/macos.go
++++ b/internal/sandbox/macos.go
+@@ -202,0 +203,81 @@ func writeMachPermissionRules(profile *strings.Builder, operation string, patter
++func seatbeltPathContains(root, path string) bool {
++	root = filepath.Clean(root)
++	path = filepath.Clean(path)
++	if root == path {
++		return true
++	}
++	relative, err := filepath.Rel(root, path)
++	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
++}
++
++func seatbeltDenyMayOverlapAllow(allowPath, denyPattern string) bool {
++	if allowPath == "" || ContainsGlobChars(allowPath) {
++		return true
++	}
++
++	staticDenyPath := denyPattern
++	if index := strings.IndexAny(denyPattern, "*?["); index >= 0 {
++		staticDenyPath = denyPattern[:index]
++		if staticDenyPath == "" {
++			return true
++		}
++		if !strings.HasSuffix(staticDenyPath, string(filepath.Separator)) {
++			staticDenyPath = filepath.Dir(staticDenyPath)
++		}
++	}
++
++	return seatbeltPathContains(allowPath, staticDenyPath) || seatbeltPathContains(staticDenyPath, allowPath)
++}
++
++func seatbeltDenyExclusionFilters(allowPath string, denyPaths []string) []string {
++	var filters []string
++	seen := make(map[string]struct{})
++	for _, pathPattern := range denyPaths {
++		normalized := NormalizePath(pathPattern)
++		if !seatbeltDenyMayOverlapAllow(allowPath, normalized) {
++			continue
++		}
++
++		var candidates []string
++		if ContainsGlobChars(normalized) {
++			candidates = []string{fmt.Sprintf("(require-not (regex %s))", escapePath(GlobToRegex(normalized)))}
++		} else {
++			candidates = []string{
++				fmt.Sprintf("(require-not (literal %s))", escapePath(normalized)),
++				fmt.Sprintf("(require-not (subpath %s))", escapePath(normalized)),
++			}
++		}
++		for _, candidate := range candidates {
++			if _, ok := seen[candidate]; ok {
++				continue
++			}
++			seen[candidate] = struct{}{}
++			filters = append(filters, candidate)
++		}
++	}
++	return filters
++}
++
++func addSeatbeltAllowRule(builder *seatbeltRuleBuilder, operation, filter string, exclusions []string, logTag string) {
++	ruleLines := []string{fmt.Sprintf("(allow %s", operation)}
++	if len(exclusions) == 0 {
++		if filter != "" {
++			ruleLines = append(ruleLines, "  "+filter)
++		}
++	} else {
++		ruleLines = append(ruleLines, "  (require-all")
++		if filter != "" {
++			ruleLines = append(ruleLines, "    "+filter)
++		}
++		for _, exclusion := range exclusions {
++			ruleLines = append(ruleLines, "    "+exclusion)
++		}
++		ruleLines = append(ruleLines, "  )")
++	}
++	if logTag != "" {
++		ruleLines = append(ruleLines, fmt.Sprintf("  (with message %q)", logTag))
++	}
++	ruleLines[len(ruleLines)-1] += ")"
++	builder.addRule(ruleLines...)
++}
++
+@@ -213,2 +294,3 @@ func generateReadRules(defaultDenyRead, strictDenyRead bool, allowPaths, denyPat
+-		// Allow metadata operations globally (stat, readdir, etc.) and root dir (for path resolution)
+-		builder.addRule("(allow file-read-metadata)")
++		// Carve explicit denies out of broad metadata access instead of relying on
++		// separate deny rules to override an enclosing allow on macOS.
++		addSeatbeltAllowRule(builder, "file-read-metadata", "", seatbeltDenyExclusionFilters("", denyPaths), "")
+@@ -220,3 +302,6 @@ func generateReadRules(defaultDenyRead, strictDenyRead bool, allowPaths, denyPat
+-				builder.addRule(
+-					"(allow file-read-data",
+-					fmt.Sprintf("  (subpath %s))", escapePath(systemPath)),
++				addSeatbeltAllowRule(
++					builder,
++					"file-read-data",
++					fmt.Sprintf("(subpath %s)", escapePath(systemPath)),
++					seatbeltDenyExclusionFilters(systemPath, denyPaths),
++					"",
+@@ -227 +312 @@ func generateReadRules(defaultDenyRead, strictDenyRead bool, allowPaths, denyPat
+-		// Allow reading data from user-specified paths
++		// Allow reading data from user-specified paths while carving out explicit denies.
+@@ -230 +315 @@ func generateReadRules(defaultDenyRead, strictDenyRead bool, allowPaths, denyPat
+-
++			filter := fmt.Sprintf("(subpath %s)", escapePath(normalized))
+@@ -232,10 +317 @@ func generateReadRules(defaultDenyRead, strictDenyRead bool, allowPaths, denyPat
+-				regex := GlobToRegex(normalized)
+-				builder.addRule(
+-					"(allow file-read-data",
+-					fmt.Sprintf("  (regex %s))", escapePath(regex)),
+-				)
+-			} else {
+-				builder.addRule(
+-					"(allow file-read-data",
+-					fmt.Sprintf("  (subpath %s))", escapePath(normalized)),
+-				)
++				filter = fmt.Sprintf("(regex %s)", escapePath(GlobToRegex(normalized)))
+@@ -242,0 +319 @@ func generateReadRules(defaultDenyRead, strictDenyRead bool, allowPaths, denyPat
++			addSeatbeltAllowRule(builder, "file-read-data", filter, seatbeltDenyExclusionFilters(normalized, denyPaths), "")
+@@ -245,2 +322,2 @@ func generateReadRules(defaultDenyRead, strictDenyRead bool, allowPaths, denyPat
+-		// Allow all reads by default
+-		builder.addRule("(allow file-read*)")
++		// Allow all reads by default while carving out explicit denies.
++		addSeatbeltAllowRule(builder, "file-read*", "", seatbeltDenyExclusionFilters("", denyPaths), "")
+@@ -282,0 +360,8 @@ func generateWriteRules(allowPaths, denyPaths []string, allowGitConfig bool, wor
++	// Combine user-specified and mandatory deny patterns before generating allows
++	// so every broad write grant can exclude protected descendants.
++	cwd := ResolveSandboxWorkingDir(workingDir)
++	mandatoryDeny := GetMandatoryDenyPatterns(cwd, allowGitConfig)
++	allDenyPaths := make([]string, 0, len(denyPaths)+len(mandatoryDeny))
++	allDenyPaths = append(allDenyPaths, denyPaths...)
++	allDenyPaths = append(allDenyPaths, mandatoryDeny...)
++
+@@ -286,4 +371,6 @@ func generateWriteRules(allowPaths, denyPaths []string, allowGitConfig bool, wor
+-		builder.addRule(
+-			"(allow file-write*",
+-			fmt.Sprintf("  (subpath %s)", escapePath(normalized)),
+-			fmt.Sprintf("  (with message %q))", logTag),
++		addSeatbeltAllowRule(
++			builder,
++			"file-write*",
++			fmt.Sprintf("(subpath %s)", escapePath(normalized)),
++			seatbeltDenyExclusionFilters(normalized, allDenyPaths),
++			logTag,
+@@ -293 +380 @@ func generateWriteRules(allowPaths, denyPaths []string, allowGitConfig bool, wor
+-	// Generate allow rules
++	// Generate allow rules while carving out explicit and mandatory denies.
+@@ -296 +383 @@ func generateWriteRules(allowPaths, denyPaths []string, allowGitConfig bool, wor
+-
++		filter := fmt.Sprintf("(subpath %s)", escapePath(normalized))
+@@ -298,12 +385 @@ func generateWriteRules(allowPaths, denyPaths []string, allowGitConfig bool, wor
+-			regex := GlobToRegex(normalized)
+-			builder.addRule(
+-				"(allow file-write*",
+-				fmt.Sprintf("  (regex %s)", escapePath(regex)),
+-				fmt.Sprintf("  (with message %q))", logTag),
+-			)
+-		} else {
+-			builder.addRule(
+-				"(allow file-write*",
+-				fmt.Sprintf("  (subpath %s)", escapePath(normalized)),
+-				fmt.Sprintf("  (with message %q))", logTag),
+-			)
++			filter = fmt.Sprintf("(regex %s)", escapePath(GlobToRegex(normalized)))
+@@ -310,0 +387 @@ func generateWriteRules(allowPaths, denyPaths []string, allowGitConfig bool, wor
++		addSeatbeltAllowRule(builder, "file-write*", filter, seatbeltDenyExclusionFilters(normalized, allDenyPaths), logTag)
+@@ -313,7 +389,0 @@ func generateWriteRules(allowPaths, denyPaths []string, allowGitConfig bool, wor
+-	// Combine user-specified and mandatory deny patterns
+-	cwd := ResolveSandboxWorkingDir(workingDir)
+-	mandatoryDeny := GetMandatoryDenyPatterns(cwd, allowGitConfig)
+-	allDenyPaths := make([]string, 0, len(denyPaths)+len(mandatoryDeny))
+-	allDenyPaths = append(allDenyPaths, denyPaths...)
+-	allDenyPaths = append(allDenyPaths, mandatoryDeny...)
+-
+@@ -382,0 +453,6 @@ func generateMoveBlockingRules(builder *seatbeltRuleBuilder, pathPatterns []stri
++			// A subpath filter does not match the protected path itself.
++			builder.addRule(
++				"(deny file-write-unlink",
++				fmt.Sprintf("  (literal %s)", escapePath(normalized)),
++				fmt.Sprintf("  (with message %q))", logTag),
++			)
+diff --git a/internal/sandbox/macos_test.go b/internal/sandbox/macos_test.go
+index 14793d4..5914635 100644
+--- a/internal/sandbox/macos_test.go
++++ b/internal/sandbox/macos_test.go
+@@ -849,0 +850,63 @@ func TestWrapCommandMacOS_ExposedHostPathsSkipsMissing(t *testing.T) {
++
++func TestGenerateReadRules_CarvesNestedDeniedPathsOutOfAllow(t *testing.T) {
++	allowPath := "/fence/worktree"
++	deniedPath := "/fence/worktree/home/.pi/agent"
++	deniedGlob := "/fence/worktree/home/.ssh/id_*"
++	rules := generateReadRules(true, true, []string{allowPath}, []string{deniedPath, deniedGlob}, "test-log")
++	profile := strings.Join(rules, "\n")
++
++	want := strings.Join([]string{
++		"(allow file-read-data",
++		"  (require-all",
++		`    (subpath "/fence/worktree")`,
++		`    (require-not (literal "/fence/worktree/home/.pi/agent"))`,
++		`    (require-not (subpath "/fence/worktree/home/.pi/agent"))`,
++		`    (require-not (regex "^/fence/worktree/home/\\.ssh/id_[^/]*$"))`,
++	}, "\n")
++	if !strings.Contains(profile, want) {
++		t.Fatalf("nested deny paths were not carved out of read allow:\n%s", profile)
++	}
++}
++
++func TestGenerateWriteRules_CarvesNestedDeniedPathOutOfAllow(t *testing.T) {
++	allowPath := "/fence/worktree"
++	deniedPath := "/fence/worktree/home/.pi/agent"
++	rules := generateWriteRules([]string{allowPath}, []string{deniedPath}, true, allowPath, "test-log")
++	profile := strings.Join(rules, "\n")
++
++	want := strings.Join([]string{
++		"(allow file-write*",
++		"  (require-all",
++		`    (subpath "/fence/worktree")`,
++		`    (require-not (literal "/fence/worktree/home/.pi/agent"))`,
++		`    (require-not (subpath "/fence/worktree/home/.pi/agent"))`,
++	}, "\n")
++	if !strings.Contains(profile, want) {
++		t.Fatalf("nested deny path was not carved out of write allow:\n%s", profile)
++	}
++}
++
++func TestGenerateSandboxProfile_ReadOnlyDenyKeepsSpecificMoveProtection(t *testing.T) {
++	allowPath := "/fence/worktree"
++	deniedPath := "/fence/worktree/home/.pi/agent"
++	profile := GenerateSandboxProfile(MacOSSandboxParams{
++		WorkingDirectory: allowPath,
++		DefaultDenyRead:  true,
++		StrictDenyRead:   true,
++		ReadDenyPaths:    []string{deniedPath},
++		WriteAllowPaths:  []string{allowPath},
++		AllowGitConfig:   true,
++	})
++
++	for _, want := range []string{
++		"(deny file-write-unlink\n  (literal \"/fence/worktree/home/.pi/agent\")",
++		"(deny file-write-unlink\n  (literal \"/fence/worktree/home/.pi\")",
++	} {
++		if !strings.Contains(profile, want) {
++			t.Fatalf("read-only deny lost specific move protection %q:\n%s", want, profile)
++		}
++	}
++	if strings.Contains(profile, "(deny file-write*\n  (subpath \"/fence/worktree/home/.pi/agent\")") {
++		t.Fatalf("read-only deny unexpectedly blocked all writes:\n%s", profile)
++	}
++}

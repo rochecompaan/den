@@ -40,9 +40,6 @@ func filesystemDiagnosticOutcomes(t *testing.T, path string) []string {
 		"native-tools-direct-read:",
 		"native-tools-raw-read:",
 	}
-	if strings.HasSuffix(os.Getenv("DEN_NATIVE_HOST_SYSTEM"), "-darwin") {
-		prefixes = append(prefixes, "darwin-profile-ps-status:", "darwin-profile-sandbox-exec:", "darwin-profile-protected-path:", "darwin-profile-allow-subpath:", "darwin-profile-deny-subpath:")
-	}
 	var outcomes []string
 	for _, line := range strings.Split(string(contents), "\n") {
 		for _, prefix := range prefixes {
@@ -133,7 +130,15 @@ func TestPiNativeFileToolsAndHomeAliasesStayInsideFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	denied = append(denied, unrelated, store)
-	before := snapshotPaths(t, fixture.invokingHome, fixture.runtimeHome, unrelated, store)
+	readOnlyRoot := filepath.Join(fixture.worktree, "read-only-denied")
+	readOnlyDenied := filepath.Join(readOnlyRoot, "secret.txt")
+	if err := os.Mkdir(readOnlyRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(readOnlyDenied, []byte("den9-read-only-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotPaths(t, fixture.invokingHome, fixture.runtimeHome, unrelated, store, readOnlyRoot)
 	encoded, _ := json.Marshal(denied)
 	policyReport := filepath.Join(fixture.root, "fence-policy.json")
 	result := fixture.runEnforcementProbe(t, `
@@ -148,16 +153,24 @@ func TestPiNativeFileToolsAndHomeAliasesStayInsideFence(t *testing.T) {
   assert.match(JSON.stringify(await read.execute("state",{path:root+"/file-tool-state"})),/selected-state/);
  }
  const firstProtectedPath = `+string(jsonString(denied[0]))+`;
- if (process.env.DEN_NATIVE_HOST_SYSTEM?.endsWith("-darwin")) {
-  const ps = run(process.env.DEN_NATIVE_PS!, ["-ww", "-axo", "pid=,ppid=,command="]);
-  const profile = (ps.stdout ?? "").replace(/\s+/g, " ");
-  const protectedRoot = firstProtectedPath.slice(0, firstProtectedPath.lastIndexOf("/"));
-  record("darwin-profile-ps-status:" + String(ps.status));
-  record("darwin-profile-sandbox-exec:" + (profile.includes("sandbox-exec -p") ? "present" : "absent"));
-  record("darwin-profile-protected-path:" + (profile.includes(protectedRoot) ? "present" : "absent"));
-  record("darwin-profile-allow-subpath:" + (profile.includes("(allow file-read-data (subpath \"" + process.cwd() + "\")") ? "present" : "absent"));
-  record("darwin-profile-deny-subpath:" + (profile.includes("(deny file-read* (subpath \"" + protectedRoot + "\")") ? "present" : "absent"));
- }
+ const protectedAncestor = firstProtectedPath.slice(0, firstProtectedPath.lastIndexOf("/agent/"));
+ const movedAncestor = protectedAncestor + "-moved";
+ record("native-tools-ancestor-rename-checking:" + protectedAncestor);
+ await assert.rejects(fs.promises.rename(protectedAncestor, movedAncestor), /EACCES|EPERM|EROFS|permission/i, "native-tools protected ancestor rename unexpectedly resolved");
+ record("native-tools-ancestor-rename-denied:" + protectedAncestor);
+ await assert.rejects(fs.promises.readFile(firstProtectedPath), /EACCES|EPERM|ENOENT|permission/i, "native-tools protected path read unexpectedly resolved after rename denial");
+ await assert.rejects(fs.promises.readFile(movedAncestor + "/agent/auth.json"), /EACCES|EPERM|ENOENT|permission/i, "native-tools moved protected path unexpectedly readable");
+ const readOnlyProtectedPath = `+string(jsonString(readOnlyDenied))+`;
+ const movedReadOnlyPath = readOnlyProtectedPath + "-moved";
+ const readOnlyProtectedRoot = readOnlyProtectedPath.slice(0, readOnlyProtectedPath.lastIndexOf("/"));
+ const movedReadOnlyRoot = readOnlyProtectedRoot + "-moved";
+ record("native-tools-read-only-move-checking:" + readOnlyProtectedPath);
+ await assert.rejects(fs.promises.rename(readOnlyProtectedPath, movedReadOnlyPath), /EACCES|EPERM|EROFS|permission/i, "native-tools read-only denied target rename unexpectedly resolved");
+ await assert.rejects(fs.promises.rename(readOnlyProtectedRoot, movedReadOnlyRoot), /EACCES|EPERM|EROFS|permission/i, "native-tools read-only denied ancestor rename unexpectedly resolved");
+ record("native-tools-read-only-move-denied:" + readOnlyProtectedPath);
+ await assert.rejects(fs.promises.readFile(readOnlyProtectedPath), /EACCES|EPERM|ENOENT|permission/i, "native-tools read-only denied path unexpectedly readable after rename denial");
+ await assert.rejects(fs.promises.readFile(movedReadOnlyPath), /EACCES|EPERM|ENOENT|permission/i, "native-tools moved read-only denied target unexpectedly readable");
+ await assert.rejects(fs.promises.readFile(movedReadOnlyRoot + "/secret.txt"), /EACCES|EPERM|ENOENT|permission/i, "native-tools moved read-only denied ancestor unexpectedly readable");
  const directOutcome = async (operation: () => Promise<unknown>) => {
   try { await operation(); return "allowed"; }
   catch (error: any) { return "denied:" + (error?.code ?? error?.name ?? "unknown"); }
@@ -183,6 +196,8 @@ func TestPiNativeFileToolsAndHomeAliasesStayInsideFence(t *testing.T) {
  record("native-tools-control");
  `, []string{"DEN_NATIVE_PI_FENCE_POLICY_REPORT=" + policyReport}, func(document map[string]any) {
 		document["fenceExecutable"] = os.Getenv("DEN_NATIVE_PI_FENCE_INPUT_RECORDER")
+		filesystem := document["filesystem"].(map[string]any)
+		filesystem["denyRead"] = append(filesystem["denyRead"].([]any), readOnlyDenied)
 	})
 	contents, err := os.ReadFile(policyReport)
 	if err != nil {
@@ -207,11 +222,14 @@ func TestPiNativeFileToolsAndHomeAliasesStayInsideFence(t *testing.T) {
 	if !policyHasPath(policy.Filesystem.AllowRead, fixture.worktree) || !policyHasPath(policy.Filesystem.AllowWrite, fixture.worktree) {
 		t.Fatal("generated Fence policy omitted writable worktree")
 	}
+	if !policyHasPath(policy.Filesystem.DenyRead, readOnlyDenied) || policyHasPath(policy.Filesystem.DenyWrite, readOnlyDenied) {
+		t.Fatal("generated Fence policy did not preserve the read-only deny fixture")
+	}
 	for _, outcome := range filesystemDiagnosticOutcomes(t, filepath.Join(fixture.agentDir, "enforcement.report")) {
 		t.Logf("%s", outcome)
 	}
 	requireEnforcementProbeSuccess(t, fixture, result)
-	if after := snapshotPaths(t, fixture.invokingHome, fixture.runtimeHome, unrelated, store); after != before {
+	if after := snapshotPaths(t, fixture.invokingHome, fixture.runtimeHome, unrelated, store, readOnlyRoot); after != before {
 		t.Fatal("native tools changed protected host/store state")
 	}
 	requireNoCredential(t, result, "den9-host-secret")
