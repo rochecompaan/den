@@ -46,6 +46,41 @@ func Build(host []string, controlled Controlled) []string {
 	return append(result, controlledEntries...)
 }
 
+// Scrub removes entries whose names are explicitly controlled by an adapter.
+func Scrub(values, names []string) []string {
+	blocked := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		blocked[name] = struct{}{}
+	}
+	result := make([]string, 0, len(values))
+	for _, entry := range values {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok {
+			if _, remove := blocked[name]; remove {
+				continue
+			}
+		}
+		result = append(result, entry)
+	}
+	return result
+}
+
+// Overwrite replaces every entry with name by one exact-key value.
+func Overwrite(values []string, name, value string) []string {
+	if name == "" {
+		return values
+	}
+	result := make([]string, 0, len(values)+1)
+	for _, entry := range values {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && key == name {
+			continue
+		}
+		result = append(result, entry)
+	}
+	return append(result, name+"="+value)
+}
+
 func controlledEntries(controlled Controlled) []string {
 	gitSSH := filepath.Join(controlled.ClientDir, "bin", "repowolf-git-ssh")
 	result := []string{

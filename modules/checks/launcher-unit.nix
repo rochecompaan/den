@@ -5,6 +5,8 @@
     let
       den-launcher = import ../../nix/packages/den-launcher.nix { inherit pkgs; };
       git-transport = import ../../nix/check-support/git-transport.nix { inherit pkgs; };
+      piDarwinSecurityExtension = pkgs.writeText "pi-darwin-security-extension-test" "fixture\n";
+      piDarwinManifestExtension = pkgs.writeText "pi-darwin-manifest-extension-test" "fixture\n";
       script = pkgs.unixtools.script;
       scriptInvocation = command:
         if pkgs.stdenv.hostPlatform.isDarwin then
@@ -35,6 +37,9 @@
             "$PWD/nix/check-support/native-resolver-lifecycle.sh"
           ${pkgs.bash}/bin/bash tests/claude-startup-runtime-manifest.sh \
             "$PWD/nix/check-support/claude-startup-runtime-manifest.sh"
+          ${pkgs.bash}/bin/bash tests/pi-darwin-startup.sh \
+            "$PWD/nix/check-support/pi-darwin-startup.sh" \
+            ${piDarwinSecurityExtension} ${piDarwinManifestExtension}
 
           test -x ${den-launcher}/bin/den-launcher
           test ! -e ${den-launcher}/bin/den

@@ -7,6 +7,13 @@ if [[ $# -ne 0 ]]; then
 fi
 
 : "${DEN_NATIVE_TEST_BINARY:?packaged native test binary is required}"
+: "${DEN_NATIVE_PI_LAUNCHER:?packaged Pi fixture launcher is required}"
+: "${DEN_NATIVE_PI_TEST_BINARY:?packaged Pi native test binary is required}"
+: "${DEN_NATIVE_PI:?packaged Pi binary is required}"
+: "${DEN_NATIVE_PI_SANDBOX:?packaged Pi sandbox is required}"
+: "${DEN_NATIVE_PI_MANIFEST:?packaged Pi manifest is required}"
+: "${DEN_NATIVE_PI_PACKAGE_ROOT:?packaged Pi package root is required}"
+: "${DEN_NATIVE_PI_RESOURCE_FIXTURE:?packaged Pi resource fixture is required}"
 : "${DEN_NATIVE_HOST_SYSTEM:?packaged host system is required}"
 : "${DEN_NATIVE_SETTINGS_MERGE:?packaged Claude settings merge fixture is required}"
 
@@ -22,9 +29,14 @@ case "$DEN_NATIVE_HOST_SYSTEM" in
   *-darwin)
     : "${DEN_NATIVE_RESOLVER_HELPER:?packaged resolver helper is required}"
     : "${DEN_NATIVE_CLAUDE_STARTUP:?packaged Darwin Claude startup fixture is required}"
+    : "${DEN_NATIVE_PI_STARTUP:?packaged Darwin Pi startup fixture is required}"
     : "${DEN_NATIVE_FENCE_CAPABILITIES:?packaged Darwin Fence capability fixture is required}"
     : "${DEN_NATIVE_SANDBOX_EXEC:?Darwin sandbox-exec path is required}"
     test -x "$DEN_NATIVE_CLAUDE_STARTUP"
+    case "$DEN_NATIVE_PI_STARTUP" in
+      /*) test -x "$DEN_NATIVE_PI_STARTUP" ;;
+      *) printf 'Darwin Pi startup fixture must be an absolute executable path\n' >&2; exit 1 ;;
+    esac
     test -x "$DEN_NATIVE_FENCE_CAPABILITIES"
     test -x "$DEN_NATIVE_SANDBOX_EXEC"
     ;;
@@ -33,6 +45,14 @@ case "$DEN_NATIVE_HOST_SYSTEM" in
     exit 2
     ;;
 esac
+
+require_suite_completion() {
+  local suite=$1 completion=$DEN_NATIVE_HOST_ROOT/$2
+  if [[ ! -f $completion ]] || ! cmp -s <(printf 'complete\n') "$completion"; then
+    printf '%s suite did not produce its exact completion artifact\n' "$suite" >&2
+    exit 1
+  fi
+}
 
 printf 'executing Claude settings merge fixture as the invoking host user\n'
 settings_merge_output=$("$DEN_NATIVE_SETTINGS_MERGE")
@@ -110,11 +130,24 @@ if [[ $DEN_NATIVE_HOST_SYSTEM == *-darwin ]]; then
     printf 'Darwin Fence capability fixture did not produce its completion artifact\n' >&2
     exit 1
   fi
+  printf 'executing Darwin Pi startup fixture as the invoking host user\n'
+  "$DEN_NATIVE_PI_STARTUP"
+  completion=$DEN_NATIVE_HOST_ROOT/pi-darwin-startup.complete
+  if [[ ! -f $completion ]] || ! cmp -s <(printf 'complete\n') "$completion"; then
+    printf 'Darwin Pi startup fixture did not produce its exact completion artifact\n' >&2
+    exit 1
+  fi
   start_resolver_helper /usr/bin/sudo -n "$DEN_NATIVE_RESOLVER_HELPER"
 
   test_status=0
   if "$DEN_NATIVE_TEST_BINARY" -test.count=1 -test.timeout=2m; then
-    test_status=0
+    require_suite_completion Claude claude-suite.complete
+    if DEN_NATIVE_LAUNCHER="$DEN_NATIVE_PI_LAUNCHER" "$DEN_NATIVE_PI_TEST_BINARY" -test.count=1 -test.timeout=4m; then
+      require_suite_completion Pi pi-suite.complete
+      test_status=0
+    else
+      test_status=$?
+    fi
   else
     test_status=$?
   fi
@@ -155,5 +188,8 @@ mkdir -m 1777 "$namespace_tmp"
   "$DEN_NATIVE_MOUNT" --bind "$2" /etc/nsswitch.conf
   "$DEN_NATIVE_MOUNT" --bind "$3" /tmp
   export TMPDIR=/tmp
-  exec "$DEN_NATIVE_TEST_BINARY" -test.count=1 -test.timeout=2m
+  "$DEN_NATIVE_TEST_BINARY" -test.count=1 -test.timeout=2m
+  cmp -s <(printf "complete\\n") "$DEN_NATIVE_HOST_ROOT/claude-suite.complete"
+  DEN_NATIVE_LAUNCHER="$DEN_NATIVE_PI_LAUNCHER" "$DEN_NATIVE_PI_TEST_BINARY" -test.count=1 -test.timeout=2m
+  cmp -s <(printf "complete\\n") "$DEN_NATIVE_HOST_ROOT/pi-suite.complete"
 ' den-native "$resolver" "$nsswitch" "$namespace_tmp"

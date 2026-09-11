@@ -22,11 +22,11 @@ mutated="$root/mutated.json"
 
 cat > "$base" <<'JSON'
 {
-  "version": 1,
+  "version": 2,
   "platform": "darwin",
-  "explicitConfigDir": null,
   "aclProbe": ["/bin/den-acl-probe"],
   "agent": {"name": "claude"},
+  "stateBindings": [{"name":"config","explicitPath":null,"inheritedEnvironment":"CLAUDE_CONFIG_DIR","defaultPath":"","defaultWritablePaths":[],"exports":[{"kind":"environment","name":"CLAUDE_CONFIG_DIR","exportDefault":false}]}],
   "filesystem": {"sentinel": "unchanged"}
 }
 JSON
@@ -34,11 +34,11 @@ JSON
 export DEN_CLAUDE_STARTUP_ACL_PROBE=/usr/bin/den-acl-probe
 
 den_adapt_claude_startup_manifest "$base" "$inherited" inherited ""
-jq -e '.explicitConfigDir == null and .aclProbe == ["/usr/bin/den-acl-probe"] and
-  has("explicitConfigDir") and has("aclProbe")' "$inherited" >/dev/null
+jq -e '.stateBindings[0].explicitPath == null and .aclProbe == ["/usr/bin/den-acl-probe"] and
+  has("stateBindings") and has("aclProbe")' "$inherited" >/dev/null
 den_validate_claude_startup_manifest "$base" "$inherited"
 
-jq '.explicitConfigDir = "/private/etc/invalid"' "$base" > "$invalid_inherited_base"
+jq '.stateBindings[0].explicitPath = "/private/etc/invalid"' "$base" > "$invalid_inherited_base"
 if den_adapt_claude_startup_manifest "$invalid_inherited_base" \
   "$root/invalid-inherited.json" inherited ""; then
   printf 'inherited adaptation accepted a non-null base configuration directory\n' >&2
@@ -46,8 +46,8 @@ if den_adapt_claude_startup_manifest "$invalid_inherited_base" \
 fi
 
 den_adapt_claude_startup_manifest "$base" "$explicit" explicit /private/etc/claude
-jq -e '.explicitConfigDir == "/private/etc/claude" and .aclProbe == ["/usr/bin/den-acl-probe"] and
-  has("explicitConfigDir") and has("aclProbe")' "$explicit" >/dev/null
+jq -e '.stateBindings[0].explicitPath == "/private/etc/claude" and .aclProbe == ["/usr/bin/den-acl-probe"] and
+  has("stateBindings") and has("aclProbe")' "$explicit" >/dev/null
 den_validate_claude_startup_manifest "$base" "$explicit"
 
 jq '.filesystem.sentinel = "mutated"' "$explicit" > "$mutated"

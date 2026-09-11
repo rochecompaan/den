@@ -1,0 +1,934 @@
+--- a/dist/core/agent-session-runtime.js
++++ b/dist/core/agent-session-runtime.js
+@@ -1,9 +1,9 @@
+-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
++import { existsSync, mkdirSync } from "node:fs";
+ import { basename, join, resolve } from "node:path";
+ import { resolvePath } from "../utils/paths.js";
+ import { emitSessionShutdownEvent } from "./extensions/runner.js";
+ import { assertSessionCwdExists } from "./session-cwd.js";
+-import { SessionManager } from "./session-manager.js";
++import { readValidatedSession, SessionManager, validateSessionDestination, writeSessionDestination } from "./session-manager.js";
+ /**
+  * Thrown when /import references a JSONL file path that does not exist.
+  */
+@@ -126,12 +126,15 @@
+         }
+     }
+     async switchSession(sessionPath, options) {
+-        const beforeResult = await this.emitBeforeSwitch("resume", sessionPath);
++        const validatedTarget = readValidatedSession(sessionPath);
++        const beforeResult = await this.emitBeforeSwitch("resume", validatedTarget.canonicalPath);
+         if (beforeResult.cancelled) {
+             return beforeResult;
+         }
+         const previousSessionFile = this.session.sessionFile;
+-        const sessionManager = SessionManager.open(sessionPath, undefined, options?.cwdOverride);
++        // Passing entries read from the validated descriptor prevents the
++        // constructor from reopening attacker-replaceable session bytes.
++        const sessionManager = SessionManager.fromValidated(validatedTarget, undefined, options?.cwdOverride);
+         assertSessionCwdExists(sessionManager, this.cwd);
+         await this.teardownCurrent("resume", sessionManager.getSessionFile());
+         this.apply(await this.createRuntime({
+@@ -216,7 +219,7 @@
+             if (!existsSync(currentSessionFile)) {
+                 throw new Error("This session has not been saved yet. Wait for the first assistant response before cloning or forking it.");
+             }
+-            const sessionManager = SessionManager.open(currentSessionFile, sessionDir);
++            const sessionManager = SessionManager.open(currentSessionFile, sessionDir, undefined, this.session.sessionManager.getSessionFileIdentity());
+             const forkedSessionPath = sessionManager.createBranchedSession(targetLeafId);
+             if (!forkedSessionPath) {
+                 throw new Error("Failed to create forked session");
+@@ -257,23 +260,35 @@
+      */
+     async importFromJsonl(inputPath, cwdOverride) {
+         const resolvedPath = resolvePath(inputPath);
+-        if (!existsSync(resolvedPath)) {
+-            throw new SessionImportFileNotFoundError(resolvedPath);
++        let imported;
++        try {
++            imported = readValidatedSession(resolvedPath);
++        }
++        catch (error) {
++            if (error?.code === "ENOENT")
++                throw new SessionImportFileNotFoundError(resolvedPath);
++            throw error;
+         }
+         const sessionDir = this.session.sessionManager.getSessionDir();
+         if (!existsSync(sessionDir)) {
+             mkdirSync(sessionDir, { recursive: true });
+         }
+-        const destinationPath = join(sessionDir, basename(resolvedPath));
++        const requestedDestination = join(sessionDir, basename(imported.canonicalPath));
++        const sameFile = resolve(requestedDestination) === imported.canonicalPath;
++        const destinationPath = sameFile ? imported.canonicalPath : validateSessionDestination(requestedDestination);
+         const beforeResult = await this.emitBeforeSwitch("resume", destinationPath);
+         if (beforeResult.cancelled) {
+             return beforeResult;
+         }
+         const previousSessionFile = this.session.sessionFile;
+-        if (resolve(destinationPath) !== resolvedPath) {
+-            copyFileSync(resolvedPath, destinationPath);
++        let sessionManager;
++        if (sameFile) {
++            sessionManager = SessionManager.fromValidated(imported, sessionDir, cwdOverride);
++        }
++        else {
++            writeSessionDestination(destinationPath, imported.content);
++            sessionManager = SessionManager.open(destinationPath, sessionDir, cwdOverride);
+         }
+-        const sessionManager = SessionManager.open(destinationPath, sessionDir, cwdOverride);
+         assertSessionCwdExists(sessionManager, this.cwd);
+         await this.teardownCurrent("resume", sessionManager.getSessionFile());
+         this.apply(await this.createRuntime({
+--- a/dist/core/package-manager.js
++++ b/dist/core/package-manager.js
+@@ -34,11 +34,12 @@
+ const NETWORK_TIMEOUT_MS = 10000;
+ const UPDATE_CHECK_CONCURRENCY = 4;
+ const GIT_UPDATE_CONCURRENCY = 4;
++const DEN_PACKAGE_MUTATION_DISABLED = true;
++function denyPackageMutation() {
++    throw new Error("Pi package mutation is disabled by Den");
++}
+ function isOfflineModeEnabled() {
+-    const value = process.env.PI_OFFLINE;
+-    if (!value)
+-        return false;
+-    return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
++    return DEN_PACKAGE_MUTATION_DISABLED;
+ }
+ function isExactNpmVersion(version) {
+     return valid(version ?? "") !== null;
+@@ -616,6 +617,7 @@
+         this.progressCallback = callback;
+     }
+     addSourceToSettings(source, options) {
++        denyPackageMutation();
+         const scope = options?.local ? "project" : "user";
+         const currentSettings = scope === "project" ? this.settingsManager.getProjectSettings() : this.settingsManager.getGlobalSettings();
+         const currentPackages = currentSettings.packages ?? [];
+@@ -647,6 +649,7 @@
+         return true;
+     }
+     removeSourceFromSettings(source, options) {
++        denyPackageMutation();
+         const scope = options?.local ? "project" : "user";
+         const currentSettings = scope === "project" ? this.settingsManager.getProjectSettings() : this.settingsManager.getGlobalSettings();
+         const currentPackages = currentSettings.packages ?? [];
+@@ -762,6 +765,7 @@
+         return configuredPackages;
+     }
+     async install(source, options) {
++        denyPackageMutation();
+         const parsed = this.parseSource(source);
+         const scope = options?.local ? "project" : "user";
+         this.assertProjectTrustedForScope(scope);
+@@ -785,10 +789,12 @@
+         });
+     }
+     async installAndPersist(source, options) {
++        denyPackageMutation();
+         await this.install(source, options);
+         this.addSourceToSettings(source, options);
+     }
+     async remove(source, options) {
++        denyPackageMutation();
+         const parsed = this.parseSource(source);
+         const scope = options?.local ? "project" : "user";
+         this.assertProjectTrustedForScope(scope);
+@@ -808,10 +814,12 @@
+         });
+     }
+     async removeAndPersist(source, options) {
++        denyPackageMutation();
+         await this.remove(source, options);
+         return this.removeSourceFromSettings(source, options);
+     }
+     async update(source) {
++        denyPackageMutation();
+         const globalSettings = this.settingsManager.getGlobalSettings();
+         const projectSettings = this.settingsManager.getProjectSettings();
+         const identity = source ? this.getPackageIdentity(source) : undefined;
+@@ -840,6 +848,7 @@
+         await this.updateConfiguredSources(updateSources);
+     }
+     async updateConfiguredSources(sources) {
++        denyPackageMutation();
+         if (isOfflineModeEnabled() || sources.length === 0) {
+             return;
+         }
+@@ -907,6 +916,7 @@
+         }
+     }
+     async updateNpmBatch(sources, scope) {
++        denyPackageMutation();
+         if (sources.length === 0) {
+             return;
+         }
+@@ -918,11 +928,15 @@
+         });
+     }
+     async installNpmBatch(specs, scope) {
++        denyPackageMutation();
+         const installRoot = this.getNpmInstallRoot(scope, false);
+         this.ensureNpmProject(installRoot);
+         await this.runNpmCommand(this.getNpmInstallArgs(specs, installRoot));
+     }
+     async checkForAvailableUpdates() {
++        if (DEN_PACKAGE_MUTATION_DISABLED) {
++            return [];
++        }
+         if (isOfflineModeEnabled()) {
+             return [];
+         }
+@@ -992,44 +1006,18 @@
+                 this.resolveLocalExtensionSource(parsed, accumulator, filter, metadata, baseDir);
+                 continue;
+             }
+-            const installMissing = async () => {
+-                if (isOfflineModeEnabled())
+-                    return false;
+-                if (!onMissing) {
+-                    await this.installParsedSource(parsed, resolvedScope);
+-                    return true;
+-                }
+-                const action = await onMissing(resolvedSource);
+-                if (action === "skip")
+-                    return false;
+-                if (action === "error")
+-                    throw new Error(`Missing source: ${resolvedSource}`);
+-                await this.installParsedSource(parsed, resolvedScope);
+-                return true;
+-            };
+             if (parsed.type === "npm") {
+-                let installedPath = this.getNpmInstallPath(parsed, resolvedScope);
+-                const needsInstall = !existsSync(installedPath) || !(await this.installedNpmMatchesConfiguredVersion(parsed, installedPath));
+-                if (needsInstall) {
+-                    const installed = await installMissing();
+-                    if (!installed)
+-                        continue;
+-                    installedPath = this.getNpmInstallPath(parsed, resolvedScope);
+-                }
++                const installedPath = this.getNpmInstallPath(parsed, resolvedScope);
++                if (!existsSync(installedPath))
++                    continue;
+                 metadata.baseDir = installedPath;
+                 this.collectPackageResources(installedPath, accumulator, filter, metadata);
+                 continue;
+             }
+             if (parsed.type === "git") {
+                 const installedPath = this.getGitInstallPath(parsed, resolvedScope);
+-                if (!existsSync(installedPath)) {
+-                    const installed = await installMissing();
+-                    if (!installed)
+-                        continue;
+-                }
+-                else if (resolvedScope === "temporary" && !parsed.pinned && !isOfflineModeEnabled()) {
+-                    await this.refreshTemporaryGitSource(parsed, resolvedSource);
+-                }
++                if (!existsSync(installedPath))
++                    continue;
+                 metadata.baseDir = installedPath;
+                 this.collectPackageResources(installedPath, accumulator, filter, metadata);
+             }
+@@ -1068,6 +1056,7 @@
+         }
+     }
+     async installParsedSource(parsed, scope) {
++        denyPackageMutation();
+         if (parsed.type === "npm") {
+             await this.installNpm(parsed, scope, scope === "temporary");
+             return;
+@@ -1442,6 +1431,7 @@
+         return packageManagerCommand ? basename(packageManagerCommand).replace(/\.(cmd|exe)$/i, "") : "";
+     }
+     async runNpmCommand(args, options) {
++        denyPackageMutation();
+         const npmCommand = this.getNpmCommand();
+         await this.runCommand(npmCommand.command, [...npmCommand.args, ...args], options);
+     }
+@@ -1453,6 +1443,7 @@
+         return ["install", "--omit=dev"];
+     }
+     runNpmCommandSync(args) {
++        denyPackageMutation();
+         const npmCommand = this.getNpmCommand();
+         return this.runCommandSync(npmCommand.command, [...npmCommand.args, ...args]);
+     }
+@@ -1479,11 +1470,13 @@
+         return ["install", ...specs, "--prefix", installRoot, "--legacy-peer-deps"];
+     }
+     async installNpm(source, scope, temporary) {
++        denyPackageMutation();
+         const installRoot = this.getNpmInstallRoot(scope, temporary);
+         this.ensureNpmProject(installRoot);
+         await this.runNpmCommand(this.getNpmInstallArgs([source.spec], installRoot));
+     }
+     async uninstallNpm(source, scope) {
++        denyPackageMutation();
+         const installRoot = this.getNpmInstallRoot(scope, false);
+         if (!existsSync(installRoot)) {
+             return;
+@@ -1500,6 +1493,7 @@
+         await this.runNpmCommand(args);
+     }
+     async installGit(source, scope) {
++        denyPackageMutation();
+         const targetDir = this.getGitInstallPath(source, scope);
+         if (existsSync(targetDir)) {
+             if (source.ref) {
+@@ -1533,6 +1527,7 @@
+         }
+     }
+     async updateGit(source, scope) {
++        denyPackageMutation();
+         const targetDir = this.getGitInstallPath(source, scope);
+         if (!existsSync(targetDir)) {
+             await this.installGit(source, scope);
+@@ -1569,6 +1564,7 @@
+         }
+     }
+     async repairMissingGitDependencies(targetDir) {
++        denyPackageMutation();
+         if (!this.hasMissingGitDependencies(targetDir))
+             return;
+         await this.runNpmCommand(this.getGitDependencyInstallArgs(), { cwd: targetDir });
+@@ -1577,6 +1573,7 @@
+         return join(dirname(targetDir), `.${basename(targetDir)}.pi-update-incomplete`);
+     }
+     async cleanAndInstallGitDependencies(targetDir, markerPath) {
++        denyPackageMutation();
+         // Clean untracked files (extensions should be pristine). If this fails after
+         // deleting dependencies, repair them so the existing extension still loads.
+         try {
+@@ -1593,6 +1590,7 @@
+         rmSync(markerPath, { force: true });
+     }
+     async ensureGitRef(targetDir, fetchArgs, ref) {
++        denyPackageMutation();
+         // Fetch only the ref we will reset to, avoiding unrelated branch/tag noise.
+         await this.runCommand("git", fetchArgs, { cwd: targetDir });
+         const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
+@@ -1619,6 +1617,7 @@
+         await this.cleanAndInstallGitDependencies(targetDir, markerPath);
+     }
+     async refreshTemporaryGitSource(source, sourceStr) {
++        denyPackageMutation();
+         if (isOfflineModeEnabled()) {
+             return;
+         }
+@@ -1632,12 +1631,14 @@
+         }
+     }
+     async removeGit(source, scope) {
++        denyPackageMutation();
+         const targetDir = this.getGitInstallPath(source, scope);
+         rmSync(targetDir, { recursive: true, force: true });
+         rmSync(this.getGitUpdateMarkerPath(targetDir), { force: true });
+         this.pruneEmptyGitParents(targetDir, this.getGitInstallRoot(scope));
+     }
+     pruneEmptyGitParents(targetDir, installRoot) {
++        denyPackageMutation();
+         if (!installRoot)
+             return;
+         const resolvedRoot = resolve(installRoot);
+@@ -1661,6 +1662,7 @@
+         }
+     }
+     ensureNpmProject(installRoot) {
++        denyPackageMutation();
+         if (!existsSync(installRoot)) {
+             mkdirSync(installRoot, { recursive: true });
+         }
+@@ -1673,6 +1675,7 @@
+         }
+     }
+     ensureGitIgnore(dir) {
++        denyPackageMutation();
+         if (!existsSync(dir)) {
+             mkdirSync(dir, { recursive: true });
+         }
+@@ -2092,6 +2095,7 @@
+         };
+     }
+     spawnCommand(command, args, options) {
++        denyPackageMutation();
+         const env = getEnv();
+         return spawnProcess(command, args, {
+             cwd: options?.cwd,
+@@ -2100,6 +2104,7 @@
+         });
+     }
+     spawnCaptureCommand(command, args, options) {
++        denyPackageMutation();
+         const baseEnv = getEnv();
+         const env = options?.env ? { ...baseEnv, ...options.env } : baseEnv;
+         return spawnProcess(command, args, {
+@@ -2109,6 +2114,7 @@
+         });
+     }
+     runCommandCapture(command, args, options) {
++        denyPackageMutation();
+         return new Promise((resolvePromise, reject) => {
+             const child = this.spawnCaptureCommand(command, args, options);
+             let stdout = "";
+@@ -2148,6 +2154,7 @@
+         });
+     }
+     runCommand(command, args, options) {
++        denyPackageMutation();
+         return new Promise((resolvePromise, reject) => {
+             const child = this.spawnCommand(command, args, options);
+             child.on("error", reject);
+@@ -2162,6 +2169,7 @@
+         });
+     }
+     runCommandSync(command, args) {
++        denyPackageMutation();
+         const env = getEnv();
+         const result = spawnProcessSync(command, args, {
+             stdio: ["ignore", "pipe", "pipe"],
+--- a/dist/core/session-manager.js
++++ b/dist/core/session-manager.js
+@@ -1,14 +1,116 @@
+ import { uuidv7 } from "@earendil-works/pi-ai";
+ import { randomUUID } from "crypto";
+-import { appendFileSync, closeSync, createReadStream, existsSync, mkdirSync, openSync, readdirSync, readSync, statSync, writeFileSync, } from "fs";
+-import { readdir, stat } from "fs/promises";
+-import { join, resolve } from "path";
++import { closeSync, constants, createReadStream, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, readdirSync, statSync, writeFileSync, } from "fs";
++import { readdir } from "fs/promises";
++import { isAbsolute, join, relative, resolve, sep } from "path";
+ import { createInterface } from "readline";
+ import { StringDecoder } from "string_decoder";
+-import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
++import { APP_NAME, ENV_SESSION_DIR, getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
+ import { normalizePath, resolvePath } from "../utils/paths.js";
+ import { createBranchSummaryMessage, createCompactionSummaryMessage, createCustomMessage, } from "./messages.js";
+ export const CURRENT_SESSION_VERSION = 3;
++function captureSessionRoot() {
++    const configuredRoot = process.env[ENV_SESSION_DIR];
++    if (!configuredRoot)
++        return undefined;
++    try {
++        const canonicalPath = realpathSync(configuredRoot);
++        const root = statSync(canonicalPath);
++        return root.isDirectory() ? { canonicalPath, dev: root.dev, ino: root.ino } : undefined;
++    }
++    catch {
++        return undefined;
++    }
++}
++const DEN_SESSION_ROOT = captureSessionRoot();
++function validatedSessionRoot() {
++    if (!DEN_SESSION_ROOT)
++        throw new Error("Pi session directory was not available at startup");
++    const root = statSync(DEN_SESSION_ROOT.canonicalPath);
++    if (!root.isDirectory() || root.dev !== DEN_SESSION_ROOT.dev || root.ino !== DEN_SESSION_ROOT.ino)
++        throw new Error("Pi session directory changed after startup");
++    return DEN_SESSION_ROOT.canonicalPath;
++}
++function isOutsideSessionRoot(root, target) {
++    const relation = relative(root, target);
++    return relation === ".." || relation.startsWith(`..${sep}`) || isAbsolute(relation);
++}
++function resolveValidatedSessionPath(filePath) {
++    const root = validatedSessionRoot();
++    const resolvedPath = normalizePath(filePath);
++    const alias = lstatSync(resolvedPath);
++    if (!alias.isFile() || alias.isSymbolicLink())
++        throw new Error("Pi session target must be an existing regular file");
++    const canonicalPath = realpathSync(resolvedPath);
++    if (canonicalPath === root || isOutsideSessionRoot(root, canonicalPath))
++        throw new Error("Pi session target escapes the configured directory");
++    const target = lstatSync(canonicalPath);
++    if (!target.isFile() || target.isSymbolicLink())
++        throw new Error("Pi session target must be an existing regular file");
++    return { canonicalPath, target };
++}
++function sessionFileIdentity(stats) {
++    return { dev: stats.dev, ino: stats.ino };
++}
++function openValidatedSessionFile(filePath, flags = constants.O_RDONLY, expectedIdentity) {
++    const { canonicalPath, target } = resolveValidatedSessionPath(filePath);
++    const fd = openSync(canonicalPath, flags | constants.O_NOFOLLOW);
++    try {
++        const opened = fstatSync(fd);
++        if (!opened.isFile() || opened.dev !== target.dev || opened.ino !== target.ino)
++            throw new Error("Pi session target changed while opening");
++        if (expectedIdentity && (opened.dev !== expectedIdentity.dev || opened.ino !== expectedIdentity.ino))
++            throw new Error("Pi session target changed after validation");
++        return { canonicalPath, fd, stats: opened, identity: sessionFileIdentity(opened) };
++    }
++    catch (error) {
++        closeSync(fd);
++        throw error;
++    }
++}
++function sessionPathExists(filePath) {
++    try {
++        lstatSync(filePath);
++        return true;
++    }
++    catch (error) {
++        if (error?.code === "ENOENT")
++            return false;
++        throw error;
++    }
++}
++export function validateSessionDestination(filePath) {
++    const root = validatedSessionRoot();
++    const resolvedPath = normalizePath(filePath);
++    const parent = realpathSync(resolve(resolvedPath, ".."));
++    if (isOutsideSessionRoot(root, parent))
++        throw new Error("Pi session target escapes the configured directory");
++    try {
++        const alias = lstatSync(resolvedPath);
++        if (!alias.isFile() || alias.isSymbolicLink())
++            throw new Error("Pi session target must be an existing regular file");
++        throw new Error("Pi session destination already exists");
++    }
++    catch (error) {
++        if (error?.code !== "ENOENT")
++            throw error;
++    }
++    return resolvedPath;
++}
++export function writeSessionDestination(filePath, content) {
++    const resolvedPath = validateSessionDestination(filePath);
++    const fd = openSync(resolvedPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
++    try {
++        const opened = fstatSync(fd);
++        if (!opened.isFile())
++            throw new Error("Pi session target must be an existing regular file");
++        writeFileSync(fd, content);
++    }
++    finally {
++        closeSync(fd);
++    }
++    return resolvedPath;
++}
+ function createSessionId() {
+     return uuidv7();
+ }
+@@ -274,50 +376,68 @@
+     }
+ }
+ /** Exported for testing */
+-export function loadEntriesFromFile(filePath) {
+-    const resolvedFilePath = normalizePath(filePath);
+-    if (!existsSync(resolvedFilePath))
+-        return [];
++function readEntriesFromDescriptor(fd) {
+     const entries = [];
+     let pending = "";
+-    const fd = openSync(resolvedFilePath, "r");
++    const decoder = new StringDecoder("utf8");
++    const buffer = Buffer.allocUnsafe(SESSION_READ_BUFFER_SIZE);
++    while (true) {
++        const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
++        if (bytesRead === 0)
++            break;
++        pending += decoder.write(buffer.subarray(0, bytesRead));
++        let lineStart = 0;
++        let newlineIndex = pending.indexOf("\n", lineStart);
++        while (newlineIndex !== -1) {
++            const entry = parseSessionEntryLine(pending.slice(lineStart, newlineIndex));
++            if (entry)
++                entries.push(entry);
++            lineStart = newlineIndex + 1;
++            newlineIndex = pending.indexOf("\n", lineStart);
++        }
++        pending = pending.slice(lineStart);
++    }
++    pending += decoder.end();
++    const finalEntry = parseSessionEntryLine(pending);
++    if (finalEntry)
++        entries.push(finalEntry);
++    return { entries, missingNewline: pending.length > 0 };
++}
++function loadValidatedEntries(filePath, expectedIdentity) {
++    const opened = openValidatedSessionFile(filePath, constants.O_RDWR, expectedIdentity);
+     try {
+-        const decoder = new StringDecoder("utf8");
+-        const buffer = Buffer.allocUnsafe(SESSION_READ_BUFFER_SIZE);
+-        while (true) {
+-            const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+-            if (bytesRead === 0)
+-                break;
+-            pending += decoder.write(buffer.subarray(0, bytesRead));
+-            let lineStart = 0;
+-            let newlineIndex = pending.indexOf("\n", lineStart);
+-            while (newlineIndex !== -1) {
+-                const entry = parseSessionEntryLine(pending.slice(lineStart, newlineIndex));
+-                if (entry)
+-                    entries.push(entry);
+-                lineStart = newlineIndex + 1;
+-                newlineIndex = pending.indexOf("\n", lineStart);
+-            }
+-            pending = pending.slice(lineStart);
+-        }
+-        pending += decoder.end();
+-        const finalEntry = parseSessionEntryLine(pending);
+-        if (finalEntry)
+-            entries.push(finalEntry);
++        const { entries, missingNewline } = readEntriesFromDescriptor(opened.fd);
++        if (entries.length === 0)
++            return { entries, identity: opened.identity };
++        const header = entries[0];
++        if (header.type !== "session" || typeof header.id !== "string")
++            return { entries: [], identity: opened.identity };
++        if (missingNewline)
++            writeFileSync(opened.fd, "\n");
++        return { entries, identity: opened.identity };
+     }
+     finally {
+-        closeSync(fd);
++        closeSync(opened.fd);
+     }
+-    // Validate session header before repairing the file.
+-    if (entries.length === 0)
+-        return entries;
+-    const header = entries[0];
+-    if (header.type !== "session" || typeof header.id !== "string") {
+-        return [];
++}
++/** Exported for testing */
++export function loadEntriesFromFile(filePath) {
++    return loadValidatedEntries(filePath).entries;
++}
++export function readValidatedSession(filePath, expectedIdentity) {
++    const opened = openValidatedSessionFile(filePath, constants.O_RDONLY, expectedIdentity);
++    try {
++        const rawContent = readFileSync(opened.fd, "utf8");
++        const entries = parseSessionEntries(rawContent);
++        if (entries[0]?.type !== "session" || typeof entries[0].id !== "string")
++            throw new Error("Pi session target is not a valid session");
++        const missingNewline = rawContent.length > 0 && !rawContent.endsWith("\n");
++        const content = missingNewline ? `${rawContent}\n` : rawContent;
++        return { canonicalPath: opened.canonicalPath, content, entries, identity: opened.identity, missingNewline };
++    }
++    finally {
++        closeSync(opened.fd);
+     }
+-    if (pending)
+-        appendFileSync(resolvedFilePath, "\n");
+-    return entries;
+ }
+ /**
+  * Inspect a physical line while searching for the first parsed session entry.
+@@ -334,8 +454,7 @@
+         return null;
+     return entry;
+ }
+-function readSessionHeader(filePath) {
+-    const fd = openSync(filePath, "r");
++function readSessionHeaderFromDescriptor(fd, filePath) {
+     try {
+         const decoder = new StringDecoder("utf8");
+         const buffer = Buffer.allocUnsafe(SESSION_HEADER_READ_BUFFER_SIZE);
+@@ -373,16 +492,29 @@
+         throw new SessionHeaderScanLimitError(filePath);
+     }
+     finally {
+-        closeSync(fd);
++    }
++}
++function readSessionHeader(filePath) {
++    const opened = openValidatedSessionFile(filePath);
++    try {
++        return readSessionHeaderFromDescriptor(opened.fd, opened.canonicalPath);
++    }
++    finally {
++        closeSync(opened.fd);
+     }
+ }
+ function readSessionHeaderForDiscovery(filePath) {
+     try {
+-        return readSessionHeader(filePath);
++        const opened = openValidatedSessionFile(filePath);
++        try {
++            return { header: readSessionHeaderFromDescriptor(opened.fd, opened.canonicalPath), mtime: opened.stats.mtime };
++        }
++        finally {
++            closeSync(opened.fd);
++        }
+     }
+     catch {
+-        // Discovery is best-effort: unreadable or oversized files are not sessions,
+-        // and one corrupt file must not prevent other sessions from being found.
++        // Discovery is best-effort: unreadable, aliased, or oversized files are not sessions.
+         return null;
+     }
+ }
+@@ -401,10 +533,10 @@
+         const files = readdirSync(resolvedSessionDir)
+             .filter((f) => f.endsWith(".jsonl"))
+             .map((f) => join(resolvedSessionDir, f))
+-            .map((path) => ({ path, header: readSessionHeaderForDiscovery(path) }))
+-            .filter((file) => file.header !== null &&
+-            (!resolvedCwd || sessionCwdMatches(getSessionHeaderCwd(file.header), resolvedCwd)))
+-            .map(({ path }) => ({ path, mtime: statSync(path).mtime }))
++            .map((path) => ({ path, discovered: readSessionHeaderForDiscovery(path) }))
++            .filter((file) => file.discovered !== null && file.discovered.header !== null &&
++            (!resolvedCwd || sessionCwdMatches(getSessionHeaderCwd(file.discovered.header), resolvedCwd)))
++            .map(({ path, discovered }) => ({ path, mtime: discovered.mtime }))
+             .sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+         return files[0]?.path || null;
+     }
+@@ -440,8 +572,10 @@
+     return Number.isNaN(t) ? undefined : t;
+ }
+ async function buildSessionInfo(filePath) {
++    let opened;
+     try {
+-        const stats = await stat(filePath);
++        opened = openValidatedSessionFile(filePath);
++        const stats = opened.stats;
+         let header = null;
+         let messageCount = 0;
+         let firstMessage = "";
+@@ -449,7 +583,7 @@
+         let name;
+         let lastActivityTime;
+         const rl = createInterface({
+-            input: createReadStream(filePath, { encoding: "utf8" }),
++            input: createReadStream(filePath, { encoding: "utf8", fd: opened.fd, autoClose: false }),
+             crlfDelay: Infinity,
+         });
+         for await (const line of rl) {
+@@ -512,6 +646,10 @@
+     catch {
+         return null;
+     }
++    finally {
++        if (opened)
++            closeSync(opened.fd);
++    }
+ }
+ const MAX_CONCURRENT_SESSION_INFO_LOADS = 10;
+ async function buildSessionInfosWithConcurrency(files, onLoaded) {
+@@ -586,6 +724,7 @@
+ export class SessionManager {
+     sessionId = "";
+     sessionFile;
++    sessionFileIdentity;
+     sessionDir;
+     cwd;
+     persist;
+@@ -595,7 +734,7 @@
+     labelsById = new Map();
+     labelTimestampsById = new Map();
+     leafId = null;
+-    constructor(cwd, sessionDir, sessionFile, persist, newSessionOptions, preloadedFileEntries) {
++    constructor(cwd, sessionDir, sessionFile, persist, newSessionOptions, preloadedFileEntries, validatedFileIdentity, validatedMissingNewline) {
+         this.cwd = resolvePath(cwd);
+         this.sessionDir = normalizePath(sessionDir);
+         this.persist = persist;
+@@ -603,7 +742,7 @@
+             mkdirSync(this.sessionDir, { recursive: true });
+         }
+         if (sessionFile) {
+-            this._setSessionFile(sessionFile, preloadedFileEntries);
++            this._setSessionFile(sessionFile, preloadedFileEntries, validatedFileIdentity, validatedMissingNewline);
+         }
+         else {
+             this.newSession(newSessionOptions);
+@@ -613,19 +752,43 @@
+     setSessionFile(sessionFile) {
+         this._setSessionFile(sessionFile);
+     }
+-    _setSessionFile(sessionFile, preloadedFileEntries) {
++    _setSessionFile(sessionFile, preloadedFileEntries, validatedFileIdentity, validatedMissingNewline) {
+         this.sessionFile = resolvePath(sessionFile);
+-        if (existsSync(this.sessionFile)) {
+-            this.fileEntries = preloadedFileEntries ?? loadEntriesFromFile(this.sessionFile);
++        if (sessionPathExists(this.sessionFile)) {
++            if (preloadedFileEntries) {
++                if (!validatedFileIdentity)
++                    throw new Error("Preloaded session entries require a validated file identity");
++                this.fileEntries = preloadedFileEntries;
++                this.sessionFileIdentity = validatedFileIdentity;
++                if (validatedMissingNewline) {
++                    const opened = openValidatedSessionFile(this.sessionFile, constants.O_WRONLY | constants.O_APPEND, this.sessionFileIdentity);
++                    try {
++                        writeFileSync(opened.fd, "\n");
++                    }
++                    finally {
++                        closeSync(opened.fd);
++                    }
++                }
++            }
++            else {
++                const loaded = loadValidatedEntries(this.sessionFile);
++                this.fileEntries = loaded.entries;
++                this.sessionFileIdentity = loaded.identity;
++            }
+             // If file was empty, initialize it with a valid session header. If it was
+             // non-empty but did not parse as a pi session, fail without modifying it.
+             if (this.fileEntries.length === 0) {
+                 const explicitPath = this.sessionFile;
+-                if (statSync(explicitPath).size > 0) {
++                const opened = openValidatedSessionFile(explicitPath, constants.O_RDONLY, this.sessionFileIdentity);
++                const size = opened.stats.size;
++                closeSync(opened.fd);
++                if (size > 0) {
+                     throw new Error(`Session file is not a valid ${APP_NAME} session: ${explicitPath}`);
+                 }
++                const identity = this.sessionFileIdentity;
+                 this.newSession();
+                 this.sessionFile = explicitPath;
++                this.sessionFileIdentity = identity;
+                 this._rewriteFile();
+                 this.flushed = true;
+                 return;
+@@ -645,6 +808,7 @@
+         }
+     }
+     newSession(options) {
++        this.sessionFileIdentity = undefined;
+         if (options?.id !== undefined) {
+             assertValidSessionId(options.id);
+         }
+@@ -695,8 +859,19 @@
+     _rewriteFile() {
+         if (!this.persist || !this.sessionFile)
+             return;
+-        const fd = openSync(this.sessionFile, "w");
++        let fd;
++        if (sessionPathExists(this.sessionFile)) {
++            const opened = openValidatedSessionFile(this.sessionFile, constants.O_WRONLY, this.sessionFileIdentity);
++            fd = opened.fd;
++            this.sessionFileIdentity = opened.identity;
++        }
++        else {
++            const destination = validateSessionDestination(this.sessionFile);
++            fd = openSync(destination, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
++            this.sessionFileIdentity = sessionFileIdentity(fstatSync(fd));
++        }
+         try {
++            ftruncateSync(fd, 0);
+             for (const entry of this.fileEntries) {
+                 writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+             }
+@@ -723,13 +898,22 @@
+     getSessionFile() {
+         return this.sessionFile;
+     }
++    getSessionFileIdentity() {
++        return this.sessionFileIdentity ? { ...this.sessionFileIdentity } : undefined;
++    }
+     _persist(entry) {
+         if (!this.persist || !this.sessionFile)
+             return;
+         const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
+         if (!hasAssistant) {
+             if (this.flushed) {
+-                appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
++                const opened = openValidatedSessionFile(this.sessionFile, constants.O_WRONLY | constants.O_APPEND, this.sessionFileIdentity);
++                try {
++                    writeFileSync(opened.fd, `${JSON.stringify(entry)}\n`);
++                }
++                finally {
++                    closeSync(opened.fd);
++                }
+             }
+             else {
+                 // Mark as not flushed so when assistant arrives, all entries get written
+@@ -738,7 +922,9 @@
+             return;
+         }
+         if (!this.flushed) {
+-            const fd = openSync(this.sessionFile, "wx");
++            const destination = validateSessionDestination(this.sessionFile);
++            const fd = openSync(destination, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
++            this.sessionFileIdentity = sessionFileIdentity(fstatSync(fd));
+             try {
+                 for (const e of this.fileEntries) {
+                     writeFileSync(fd, `${JSON.stringify(e)}\n`);
+@@ -750,7 +936,13 @@
+             this.flushed = true;
+         }
+         else {
+-            appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
++            const opened = openValidatedSessionFile(this.sessionFile, constants.O_WRONLY | constants.O_APPEND, this.sessionFileIdentity);
++            try {
++                writeFileSync(opened.fd, `${JSON.stringify(entry)}\n`);
++            }
++            finally {
++                closeSync(opened.fd);
++            }
+         }
+     }
+     _appendEntry(entry) {
+@@ -1186,28 +1378,14 @@
+      * @param sessionDir Optional session directory for /new or /branch. If omitted, derives from file's parent.
+      * @param cwdOverride Optional cwd override instead of the session header cwd.
+      */
+-    static open(path, sessionDir, cwdOverride) {
+-        const resolvedPath = resolvePath(path);
+-        let header = null;
+-        let preloadedFileEntries;
+-        if (cwdOverride === undefined && existsSync(resolvedPath)) {
+-            try {
+-                header = readSessionHeader(resolvedPath);
+-            }
+-            catch (error) {
+-                if (!(error instanceof SessionHeaderScanLimitError))
+-                    throw error;
+-                // The bounded scan is only a discovery optimization. A full load remains
+-                // authoritative for legacy files with very large headers or prefixes.
+-                preloadedFileEntries = loadEntriesFromFile(resolvedPath);
+-                const firstEntry = preloadedFileEntries[0];
+-                header = firstEntry?.type === "session" ? firstEntry : null;
+-            }
+-        }
+-        const cwd = cwdOverride ?? (header ? getSessionHeaderCwd(header) : undefined) ?? process.cwd();
+-        // If no sessionDir provided, derive from file's parent directory
+-        const dir = sessionDir ? normalizePath(sessionDir) : resolve(resolvedPath, "..");
+-        return new SessionManager(cwd, dir, resolvedPath, true, undefined, preloadedFileEntries);
++    static open(path, sessionDir, cwdOverride, expectedIdentity) {
++        return SessionManager.fromValidated(readValidatedSession(path, expectedIdentity), sessionDir, cwdOverride);
++    }
++    static fromValidated(validated, sessionDir, cwdOverride) {
++        const header = validated.entries[0];
++        const cwd = cwdOverride ?? getSessionHeaderCwd(header) ?? process.cwd();
++        const dir = sessionDir ? normalizePath(sessionDir) : resolve(validated.canonicalPath, "..");
++        return new SessionManager(cwd, dir, validated.canonicalPath, true, undefined, validated.entries, validated.identity, validated.missingNewline);
+     }
+     /**
+      * Continue the most recent session, or create new if none.
+@@ -1266,13 +1444,10 @@
+             cwd: resolvedTargetCwd,
+             parentSession: resolvedSourcePath,
+         };
+-        writeFileSync(newSessionFile, `${JSON.stringify(newHeader)}\n`, { flag: "wx" });
+-        // Copy all non-header entries from source
+-        for (const entry of sourceEntries) {
+-            if (entry.type !== "session") {
+-                appendFileSync(newSessionFile, `${JSON.stringify(entry)}\n`);
+-            }
+-        }
++        const forkedContents = [newHeader, ...sourceEntries.filter((entry) => entry.type !== "session")]
++            .map((entry) => `${JSON.stringify(entry)}\n`)
++            .join("");
++        writeSessionDestination(newSessionFile, forkedContents);
+         return new SessionManager(resolvedTargetCwd, dir, newSessionFile, true);
+     }
+     /**
+--- a/dist/main.js
++++ b/dist/main.js
+@@ -433,7 +433,12 @@
+         { label: "Cancel", value: undefined },
+     ]);
+ }
++const DEN_PACKAGE_MUTATION_DISABLED = true;
++const DEN_PACKAGE_COMMANDS = new Set(["install", "remove", "uninstall", "update", "list", "config"]);
+ export async function main(args, options) {
++    if (DEN_PACKAGE_MUTATION_DISABLED && DEN_PACKAGE_COMMANDS.has(args[0])) {
++        throw new Error("Pi package mutation is disabled by Den");
++    }
+     resetTimings();
+     const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
+     const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);

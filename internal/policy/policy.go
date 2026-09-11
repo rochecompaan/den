@@ -19,19 +19,18 @@ type Base []byte
 // Dynamic contains canonical values approved for one launch. It intentionally
 // has no RepoWolf token field.
 type Dynamic struct {
-	Platform          string
-	RepoWolfHostname  string
-	CAFile            string
-	ClosurePaths      []string
-	Worktree          string
-	ScratchDir        string
-	StatePaths        []string
-	DefaultStatePaths []string
-	ProtectedPaths    []string
-	CustomMode        bool
-	UnixSockets       []string
-	HostPorts         []uint16
-	PolicyFile        string
+	Platform         string
+	RepoWolfHostname string
+	CAFile           string
+	ClosurePaths     []string
+	Worktree         string
+	ScratchDir       string
+	StatePaths       []string
+	DeniedWritePaths []string
+	ProtectedPaths   []string
+	UnixSockets      []string
+	HostPorts        []uint16
+	PolicyFile       string
 }
 
 type document struct {
@@ -141,14 +140,12 @@ func Generate(base Base, dynamic Dynamic) ([]byte, error) {
 		}
 	}
 
-	if dynamic.CustomMode {
-		for _, path := range dynamic.DefaultStatePaths {
-			resolved, err := canonicalPath("default state path", path)
-			if err != nil {
-				return nil, err
-			}
-			policy.Filesystem.DenyWrite = appendUnique(policy.Filesystem.DenyWrite, resolved)
+	for _, path := range dynamic.DeniedWritePaths {
+		resolved, err := canonicalPath("denied state path", path)
+		if err != nil {
+			return nil, err
 		}
+		policy.Filesystem.DenyWrite = appendUnique(policy.Filesystem.DenyWrite, resolved)
 	}
 	gitConfigPaths, err := gitConfigDenyPaths(worktree)
 	if err != nil {

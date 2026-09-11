@@ -61,6 +61,13 @@ if [[ -z $normal_checks ]]; then
   exit 1
 fi
 claude_startup_seen=0
+required_pi_checks=(pi-adapter pi-module-api pi-package pi-package-api pi-resources pi-security-extension)
+for check in "${required_pi_checks[@]}"; do
+  if ! grep -Fxq "$check" <<< "$normal_checks"; then
+    printf 'required Pi non-native check %s is missing for %s\n' "$check" "$system" >&2
+    exit 1
+  fi
+done
 while IFS= read -r check; do
   [[ -n $check ]] || continue
   if [[ $check == claude-startup ]]; then
@@ -73,11 +80,28 @@ if [[ $claude_startup_seen -ne 1 ]]; then
   exit 1
 fi
 
+printf 'building Pi for %s\n' "$system"
+nix build ".#packages.$system.pi" --no-link --print-build-logs
+
+printf 'scanning Darwin native derivation graphs for Pi startup and native inputs\n'
+for darwin_system in x86_64-darwin aarch64-darwin; do
+  darwin_graph=$(nix derivation show --recursive ".#checks.$darwin_system.native-enforcement")
+  for input in pi-darwin-startup den-pi-native-tests den-native-pi-launcher; do
+    if ! grep -Fq "$input" <<< "$darwin_graph"; then
+      printf 'Darwin native derivation graph for %s is missing required Pi input: %s\n' \
+        "$darwin_system" "$input" >&2
+      exit 1
+    fi
+  done
+  if [[ $system == *-darwin ]]; then
+    printf 'checking Darwin derivation graph for forbidden /bin/ls impure dependencies: %s\n' \
+      "$darwin_system"
+    printf '%s' "$darwin_graph" | python3 "$repo_root/scripts/check-derivation-impure-host-deps.py"
+  fi
+done
+
 if [[ $system == *-darwin ]]; then
-  printf 'checking Darwin derivation graph for forbidden /bin/ls impure dependencies\n'
-  nix derivation show --recursive \
-    ".#checks.$system.claude-startup" \
-    ".#checks.$system.native-enforcement" \
+  nix derivation show --recursive ".#checks.$system.claude-startup" \
     | python3 "$repo_root/scripts/check-derivation-impure-host-deps.py"
 fi
 

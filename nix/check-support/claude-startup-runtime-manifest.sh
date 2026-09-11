@@ -9,10 +9,14 @@ den_validate_claude_startup_manifest() {
   jq -e -n --slurpfile base "$base" --slurpfile runtime "$runtime" '
     ($base | length == 1) and
     ($runtime | length == 1) and
-    ($base[0] | has("explicitConfigDir") and has("aclProbe")) and
-    ($runtime[0] | has("explicitConfigDir") and has("aclProbe")) and
-    (($base[0] | del(.explicitConfigDir, .aclProbe)) ==
-     ($runtime[0] | del(.explicitConfigDir, .aclProbe)))
+    ($base[0] | has("stateBindings") and has("aclProbe") and
+      (.stateBindings | length == 1) and
+      (.stateBindings[0] | has("explicitPath"))) and
+    ($runtime[0] | has("stateBindings") and has("aclProbe") and
+      (.stateBindings | length == 1) and
+      (.stateBindings[0] | has("explicitPath"))) and
+    (($base[0] | del(.stateBindings[0].explicitPath, .aclProbe)) ==
+     ($runtime[0] | del(.stateBindings[0].explicitPath, .aclProbe)))
   ' >/dev/null
 }
 
@@ -30,14 +34,14 @@ den_adapt_claude_startup_manifest() {
     case "$mode" in
       inherited)
         [[ -z $config_dir ]] || return 2
-        jq -e '.explicitConfigDir == null' "$base" >/dev/null || return 2
+        jq -e '.stateBindings | length == 1 and .[0].explicitPath == null' "$base" >/dev/null || return 2
         jq --arg probe "$DEN_CLAUDE_STARTUP_ACL_PROBE" \
           '.aclProbe = [$probe]' "$base" > "$output" || return 2
         ;;
       explicit)
         [[ $config_dir == /* ]] || return 2
         jq --arg probe "$DEN_CLAUDE_STARTUP_ACL_PROBE" --arg config "$config_dir" \
-          '.aclProbe = [$probe] | .explicitConfigDir = $config' \
+          '.aclProbe = [$probe] | .stateBindings[0].explicitPath = $config' \
           "$base" > "$output" || return 2
         ;;
       *)

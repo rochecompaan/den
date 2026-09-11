@@ -114,8 +114,10 @@ let
     (pkgs.testers.testBuildFailure invalidDocker)
   ];
 in
-assert builtins.attrNames den.packages == [ "claude" "default" ];
-assert builtins.attrNames den.lib == [ "mkClaude" ];
+assert builtins.attrNames den.packages == [ "claude" "default" "pi" ];
+assert builtins.attrNames den.lib == [ "mkClaude" "mkPi" ];
+assert claude.name == "claude";
+assert claude.denManifest.name == "claude-manifest.json";
 assert default.outPath == claude.outPath;
 assert (mkClaude { }).outPath == claude.outPath;
 assert darwinPackages.x86_64.default.outPath == darwinPackages.x86_64.claude.outPath;
@@ -188,13 +190,22 @@ pkgs.runCommand "package-api"
       --argjson aclProbe '${expectedACLProbe}' \
       --argjson protected "$expectedProtected" \
       '
-        .version == 1 and
+        .version == 2 and
         .platform == $platform and
         .scratchRoot == $scratchRoot and
         .fenceExecutable == $fence and
         .repoWolfClientDir == $repowolf and
         .aclProbe == $aclProbe and
         .protectedPathPatterns == $protected and
+        .stateBindings == [{
+          name: "config", explicitPath: null, inheritedEnvironment: "CLAUDE_CONFIG_DIR",
+          defaultPath: "", defaultWritablePaths: [],
+          exports: [{kind: "environment", name: "CLAUDE_CONFIG_DIR", exportDefault: false}]
+        }] and
+        (.agent | keys) == [
+          "argumentPolicy", "commandName", "environment", "executable", "mandatoryArgs", "name",
+          "packageDirectory", "reservedCommands", "reservedFlags", "resourceArgs", "securityAdapter"
+        ] and
         .docker == {enable: false, socketPath: null, hostPorts: [], clientPrograms: []} and
         .podman == {enable: false, socketPath: null, hostPorts: [], clientPrograms: []}
       ' "$defaultManifest"
@@ -226,14 +237,22 @@ pkgs.runCommand "package-api"
       --arg podman "${fakePodman}/bin/podman" \
       --arg podmanCompose "${fakePodmanCompose}/bin/podman-compose" \
       '
-        .version == 1 and
+        .version == 2 and
         .platform == $platform and
         .scratchRoot == $scratchRoot and
         .fenceExecutable == $fenceExecutable and
         .repoWolfClientDir == $repoWolfClient and
         .aclProbe == $aclProbe and
         .protectedPathPatterns == $protected and
-        .explicitConfigDir == "/tmp/den-claude-config" and
+        .stateBindings == [{
+          name: "config", explicitPath: "/tmp/den-claude-config", inheritedEnvironment: "CLAUDE_CONFIG_DIR",
+          defaultPath: "", defaultWritablePaths: [],
+          exports: [{kind: "environment", name: "CLAUDE_CONFIG_DIR", exportDefault: false}]
+        }] and
+        (.agent | keys) == [
+          "argumentPolicy", "commandName", "environment", "executable", "mandatoryArgs", "name",
+          "packageDirectory", "reservedCommands", "reservedFlags", "resourceArgs", "securityAdapter"
+        ] and
         .docker == {
           enable: true,
           socketPath: "/tmp/docker.sock",

@@ -25,24 +25,48 @@ let
       }
     ];
   });
-  mandatoryArgs = [ "--dangerously-skip-permissions" ]
-    ++ lib.optionals isDarwin [ "--settings" settings ];
+  mandatoryArgs = [ "--dangerously-skip-permissions" ];
 in
 assert lib.assertMsg (claude.version == "2.1.158")
   "Den requires Claude Code 2.1.158; refusing unknown version ${claude.version}";
 mkAgentSandbox {
   inherit (options) configDir extraPkgs docker podman;
   adapter = {
+    output = {
+      packageName = "claude";
+      commandName = "claude";
+      manifestName = "claude-manifest.json";
+      mainProgram = "claude";
+    };
     runtimePackages = [ claude ];
     closureOnlyPackages = [ claudeExecutable ]
       ++ lib.optionals isDarwin [ settings ];
     agent = {
       name = "claude";
       executable = "${claudeExecutable}";
+      argumentPolicy = "claude";
       inherit mandatoryArgs;
+      resourceArgs = [ ];
       reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" ];
+      reservedCommands = [ ];
+      environment = { scrub = [ ]; set = { }; };
+      packageDirectory = null;
+      securityAdapter = if isDarwin then {
+        kind = "claude-settings";
+        path = settings;
+        arguments = [ "--settings" settings ];
+      } else null;
+      # Compatibility adapter metadata for existing Nix fixture consumers.
       configEnvironment = "CLAUDE_CONFIG_DIR";
       darwinSettings = lib.optionalString isDarwin settings;
     };
+    stateBindings = [{
+      name = "config";
+      explicitPath = options.configDir;
+      inheritedEnvironment = "CLAUDE_CONFIG_DIR";
+      defaultPath = "";
+      defaultWritablePaths = [ ];
+      exports = [{ kind = "environment"; name = "CLAUDE_CONFIG_DIR"; exportDefault = false; }];
+    }];
   };
 }

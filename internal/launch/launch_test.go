@@ -22,6 +22,14 @@ import (
 	"github.com/rochecompaan/den/internal/repowolf"
 )
 
+func claudeBinding(path *string) []manifest.StateBinding {
+	return []manifest.StateBinding{{Name: "config", ExplicitPath: path, InheritedEnvironment: "CLAUDE_CONFIG_DIR", Exports: []manifest.StateExport{{Kind: "environment", Name: "CLAUDE_CONFIG_DIR"}}}}
+}
+
+func testManifestWithConfig(path *string, probe []string) manifest.Manifest {
+	return manifest.Manifest{StateBindings: claudeBinding(path), ACLProbe: probe}
+}
+
 func TestRunRejectsInvalidRepoWolfInputsWithoutLeakingValues(t *testing.T) {
 	values := map[string]string{
 		"REPOWOLF_ENDPOINT":    "https://secret.example.test/no",
@@ -68,7 +76,7 @@ func TestRunFailsClosedWhenInvokingAccountHomeIsUnavailable(t *testing.T) {
 	code := runWithLifecycleAndHome(context.Background(), manifest.Manifest{}, nil,
 		lookup(values), func(string) (fs.FileInfo, error) { return launchFileInfo{mode: 0o444}, nil },
 		func() []string { return nil }, environment.Build, &stderr,
-		func(context.Context, manifest.Manifest, []string, repowolf.Config, configdir.Selection, func() error, []string, container.Socket, container.Socket, io.Writer) int {
+		func(context.Context, manifest.Manifest, []string, repowolf.Config, []*configdir.Handle, StateInputs, func() error, []string, container.Socket, container.Socket, io.Writer) int {
 			t.Fatal("lifecycle ran")
 			return 0
 		},
@@ -86,7 +94,7 @@ func TestRunRejectsInvalidRepoWolfBeforeConfigurationOrACLProbe(t *testing.T) {
 	if err := os.WriteFile(probe, []byte("#!/bin/sh\ntouch \""+probeMarker+"\"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	got := run(context.Background(), manifest.Manifest{ExplicitConfigDir: &configPath, ACLProbe: []string{probe}}, nil,
+	got := run(context.Background(), testManifestWithConfig(&configPath, []string{probe}), nil,
 		lookup(map[string]string{"REPOWOLF_ENDPOINT": "http://invalid.example.test", "HOME": root}),
 		func(string) (fs.FileInfo, error) {
 			t.Fatal("CA input was inspected after invalid endpoint")
@@ -238,7 +246,7 @@ func TestRunSelectsCustomConfigurationAfterRepoWolfAndRollsItBack(t *testing.T) 
 	launcherManifest := manifest.Manifest{
 		RepoWolfClientDir: "/nix/store/repowolf-client",
 		ACLProbe:          []string{probe},
-		ExplicitConfigDir: &configPath,
+		StateBindings:     claudeBinding(&configPath),
 	}
 	got := run(
 		context.Background(), launcherManifest, nil, lookup(values),
@@ -302,7 +310,7 @@ func TestRunRollsBackConfigurationWhenContainerSocketValidationFails(t *testing.
 	}
 	called := false
 	got := run(context.Background(), manifest.Manifest{
-		ACLProbe: probeSlice(probe), ExplicitConfigDir: &configPath,
+		ACLProbe: probeSlice(probe), StateBindings: claudeBinding(&configPath),
 		Docker: manifest.ContainerConfig{Enable: true, SocketPath: stringPointer(filepath.Join(root, "missing.sock"))},
 	}, nil, lookup(values), func(string) (fs.FileInfo, error) { return launchFileInfo{mode: 0o444}, nil },
 		func() []string { return nil }, func([]string, environment.Controlled) []string { called = true; return nil }, &bytes.Buffer{})

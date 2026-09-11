@@ -17,7 +17,7 @@ let
     mkAgentSandbox = value: value;
   };
   adapter = (mkClaude { }).adapter;
-  mandatoryArgs = pkgs.lib.escapeShellArgs adapter.agent.mandatoryArgs;
+  mandatoryArgs = pkgs.lib.escapeShellArgs (adapter.agent.mandatoryArgs ++ adapter.agent.securityAdapter.arguments);
 in
 pkgs.writeShellApplication {
   name = "claude-settings-merge";

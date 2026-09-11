@@ -94,8 +94,8 @@ func TestGenerateDynamicPolicyByPlatform(t *testing.T) {
 				Platform: platform, RepoWolfHostname: "broker.example.test", CAFile: paths.ca,
 				ClosurePaths: []string{paths.closureRead, paths.closureExec},
 				Worktree:     paths.worktree, ScratchDir: paths.scratch, StatePaths: []string{paths.state + string(os.PathSeparator)},
-				DefaultStatePaths: []string{paths.defaultState + string(os.PathSeparator)}, CustomMode: true,
-				UnixSockets: []string{paths.socket}, HostPorts: []uint16{6379, 5432, 6379}, PolicyFile: paths.policy,
+				DeniedWritePaths: []string{paths.defaultState + string(os.PathSeparator)},
+				UnixSockets:      []string{paths.socket}, HostPorts: []uint16{6379, 5432, 6379}, PolicyFile: paths.policy,
 			}
 			encoded, err := Generate(base, dynamic)
 			if err != nil {
@@ -172,6 +172,95 @@ func TestGenerateDynamicPolicyByPlatform(t *testing.T) {
 		})
 	}
 }
+
+func TestMixedStatePolicyDeniesOnlyUnselectedDefaults(t *testing.T) {
+	root := t.TempDir()
+	paths := makePaths(t, root)
+	selected := filepath.Join(root, "selected")
+	unselected := filepath.Join(root, "unselected")
+	if err := os.Mkdir(selected, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(unselected, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := Generate(Base(readBase(t)), Dynamic{
+		Platform: "darwin", RepoWolfHostname: "broker.example.test", CAFile: paths.ca,
+		Worktree: paths.worktree, ScratchDir: paths.scratch, PolicyFile: paths.policy,
+		StatePaths: []string{selected + string(os.PathSeparator)}, DeniedWritePaths: []string{unselected + string(os.PathSeparator)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got document
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(got.Filesystem.AllowWrite, selected) || !contains(got.Filesystem.DenyWrite, unselected) {
+		t.Fatalf("state policy = %#v", got.Filesystem)
+	}
+	if contains(got.Filesystem.DenyRead, unselected) {
+		t.Fatalf("unselected default was denied for reads: %#v", got.Filesystem.DenyRead)
+	}
+}
+
+func TestClaudeStatePolicyParity(t *testing.T) {
+	// Catches policy aggregation regressions that turn an unselected Claude
+	// default into a read denial, or omit its write denial after custom selection.
+	root := t.TempDir()
+	paths := makePaths(t, root)
+	defaultPath := filepath.Join(root, "claude-default")
+	customPath := filepath.Join(root, "claude-custom")
+	protectedPath := filepath.Join(root, "protected", "credential")
+	for _, path := range []string{defaultPath, customPath} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, test := range map[string]struct {
+		dynamic    Dynamic
+		allowRead  []string
+		allowWrite []string
+		denyRead   []string
+		denyWrite  []string
+	}{
+		"default": {
+			dynamic:    Dynamic{StatePaths: []string{defaultPath + string(os.PathSeparator)}},
+			allowRead:  []string{paths.ca, paths.worktree, paths.scratch, defaultPath, paths.policy, "/System/Library", "/usr/lib", "/usr/share/icu", "/private/etc", "/private/var/db/timezone"},
+			allowWrite: []string{paths.worktree, paths.scratch, defaultPath},
+			denyRead:   []string{protectedPath},
+			denyWrite:  []string{protectedPath, paths.ca, filepath.Join(paths.worktree, ".git", "config"), filepath.Join(paths.worktree, ".git", "config.worktree"), paths.policy, filepath.Dir(paths.policy)},
+		},
+		"custom": {
+			dynamic:    Dynamic{StatePaths: []string{customPath + string(os.PathSeparator)}, DeniedWritePaths: []string{defaultPath + string(os.PathSeparator)}},
+			allowRead:  []string{paths.ca, paths.worktree, paths.scratch, customPath, paths.policy, "/System/Library", "/usr/lib", "/usr/share/icu", "/private/etc", "/private/var/db/timezone"},
+			allowWrite: []string{paths.worktree, paths.scratch, customPath},
+			denyRead:   []string{protectedPath},
+			denyWrite:  []string{protectedPath, paths.ca, defaultPath, filepath.Join(paths.worktree, ".git", "config"), filepath.Join(paths.worktree, ".git", "config.worktree"), paths.policy, filepath.Dir(paths.policy)},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dynamic := test.dynamic
+			dynamic.Platform, dynamic.RepoWolfHostname, dynamic.CAFile = "darwin", "broker.example.test", paths.ca
+			dynamic.Worktree, dynamic.ScratchDir, dynamic.PolicyFile = paths.worktree, paths.scratch, paths.policy
+			dynamic.ProtectedPaths = []string{protectedPath}
+			encoded, err := Generate(claudeParityBase, dynamic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got document
+			if err := json.Unmarshal(encoded, &got); err != nil {
+				t.Fatal(err)
+			}
+			assertSameStrings(t, got.Filesystem.AllowRead, test.allowRead)
+			assertSameStrings(t, got.Filesystem.AllowWrite, test.allowWrite)
+			assertSameStrings(t, got.Filesystem.DenyRead, test.denyRead)
+			assertSameStrings(t, got.Filesystem.DenyWrite, test.denyWrite)
+		})
+	}
+}
+
+var claudeParityBase = Base(`{"allowPty":true,"network":{"allowedDomains":[],"deniedDomains":[]},"filesystem":{"defaultDenyRead":true,"strictDenyRead":true,"allowGitConfig":true,"allowRead":[],"allowExecute":[],"allowWrite":[],"denyRead":[],"denyWrite":[]},"command":{"deny":[],"useDefaults":true}}`)
 
 func TestGenerateDeniesWriteToCAInsideWritableWorktree(t *testing.T) {
 	root := t.TempDir()

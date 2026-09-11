@@ -7,168 +7,115 @@ import (
 )
 
 const validManifest = `{
-  "version": 1,
-  "platform": "linux",
-  "fenceExecutable": "/nix/store/fence/bin/fence",
-  "repoWolfClientDir": "/nix/store/repowolf-client",
-  "basePolicy": "/nix/store/policy/fence.json",
-  "closurePathsFile": "/nix/store/closure-paths",
-  "scratchRoot": "/tmp",
-  "aclProbe": ["/usr/bin/getfacl", "-lde"],
-  "protectedPathPatterns": ["/home/user/.ssh/id_*"],
-  "pathEntries": ["/nix/store/fence/bin"],
-  "explicitConfigDir": null,
-  "agent": {
-    "name": "example-agent",
-    "executable": "/nix/store/example-agent/bin/example-agent",
-    "mandatoryArgs": ["--safe"],
-    "reservedFlags": ["--safe"],
-    "configEnvironment": "EXAMPLE_CONFIG_DIR",
-    "defaultStatePaths": ["/home/user/.example"]
-  },
-  "docker": {
-    "enable": false,
-    "socketPath": null,
-    "hostPorts": [],
-    "clientPrograms": []
-  },
-  "podman": {
-    "enable": false,
-    "socketPath": null,
-    "hostPorts": [],
-    "clientPrograms": []
-  }
+ "version":2,"platform":"linux","fenceExecutable":"/nix/store/fence/bin/fence","repoWolfClientDir":"/nix/store/repowolf","basePolicy":"/nix/store/policy.json","closurePathsFile":"/nix/store/closures","scratchRoot":"/tmp","aclProbe":["/usr/bin/getfacl"],"protectedPathPatterns":["~/.ssh/id_*"],"pathEntries":["/nix/store/bin"],
+ "agent":{"name":"claude","executable":"/nix/store/claude/bin/claude","commandName":"claude","argumentPolicy":"claude","mandatoryArgs":["--safe"],"resourceArgs":[],"reservedFlags":["--settings","--permission-mode","--dangerously-skip-permissions"],"reservedCommands":[],"environment":{"scrub":[],"set":{}},"packageDirectory":null,"securityAdapter":null},
+ "stateBindings":[{"name":"config","explicitPath":null,"inheritedEnvironment":"CLAUDE_CONFIG_DIR","defaultPath":"","defaultWritablePaths":[],"exports":[{"kind":"environment","name":"CLAUDE_CONFIG_DIR","exportDefault":false}]}],
+ "docker":{"enable":false,"socketPath":null,"hostPorts":[],"clientPrograms":[]},"podman":{"enable":false,"socketPath":null,"hostPorts":[],"clientPrograms":[]}
 }`
 
-func TestLoadAcceptsVersionOneManifest(t *testing.T) {
-	manifest, err := Load(writeManifest(t, validManifest))
+func TestLoadVersion2Manifest(t *testing.T) {
+	got, err := Load(writeManifest(t, validManifest))
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatal(err)
 	}
-	if manifest.Agent.Name != "example-agent" {
-		t.Fatalf("agent name = %q, want example-agent", manifest.Agent.Name)
-	}
-}
-
-func TestLoadAcceptsRelativeExplicitConfigDir(t *testing.T) {
-	manifest, err := Load(writeManifest(t, strings.Replace(validManifest, `"explicitConfigDir": null`, `"explicitConfigDir": ".claude"`, 1)))
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if manifest.ExplicitConfigDir == nil || *manifest.ExplicitConfigDir != ".claude" {
-		t.Fatalf("explicit config directory = %#v, want .claude", manifest.ExplicitConfigDir)
+	if got.Version != CurrentVersion || got.Agent.CommandName != "claude" || len(got.StateBindings) != 1 {
+		t.Fatalf("manifest = %#v", got)
 	}
 }
 
-func TestLoadRejectsUnknownVersion(t *testing.T) {
-	path := writeManifest(t, `{"version":2}`)
-	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "manifest version") {
-		t.Fatalf("expected version error, got %v", err)
+func TestLoadVersion2RejectsVersionOneAndUnknown(t *testing.T) {
+	for _, content := range []string{strings.Replace(validManifest, `"version":2`, `"version":1`, 1), strings.Replace(validManifest, `"version":2`, `"version":3`, 1)} {
+		if _, err := Load(writeManifest(t, content)); err == nil || !strings.Contains(err.Error(), "manifest version") {
+			t.Fatalf("Load() error = %v, want version rejection", err)
+		}
 	}
 }
 
-func TestLoadRejectsInvalidManifest(t *testing.T) {
-	tests := []struct {
-		name  string
-		json  string
-		field string
-	}{
-		{"empty fence path", strings.Replace(validManifest, `"/nix/store/fence/bin/fence"`, `""`, 1), "fenceExecutable"},
-		{"empty RepoWolf client path", strings.Replace(validManifest, `"/nix/store/repowolf-client"`, `""`, 1), "repoWolfClientDir"},
-		{"empty policy path", strings.Replace(validManifest, `"/nix/store/policy/fence.json"`, `""`, 1), "basePolicy"},
-		{"empty closure file", strings.Replace(validManifest, `"/nix/store/closure-paths"`, `""`, 1), "closurePathsFile"},
-		{"unsupported platform", strings.Replace(validManifest, `"platform": "linux"`, `"platform": "windows"`, 1), "platform"},
-		{"missing ACL probe", strings.Replace(validManifest, `["/usr/bin/getfacl", "-lde"]`, `[]`, 1), "aclProbe"},
-		{"relative ACL probe executable", strings.Replace(validManifest, `"/usr/bin/getfacl"`, `"getfacl"`, 1), "aclProbe"},
-		{"empty ACL probe argument", strings.Replace(validManifest, `"-lde"`, `""`, 1), "aclProbe"},
-		{"NUL ACL probe argument", strings.Replace(validManifest, `"-lde"`, `"\u0000"`, 1), "aclProbe"},
-		{"empty path entries", strings.Replace(validManifest, `["/nix/store/fence/bin"]`, `[]`, 1), "pathEntries"},
-		{"relative path entry", strings.Replace(validManifest, `"/nix/store/fence/bin"`, `"relative/bin"`, 1), "pathEntries"},
-		{"relative immutable path", strings.Replace(validManifest, `"/tmp"`, `"tmp"`, 1), "scratchRoot"},
-		{"empty agent program name", strings.Replace(validManifest, `"example-agent"`, `""`, 1), "agent.name"},
-		{"unsafe agent program name", strings.Replace(validManifest, `"example-agent"`, `"../agent"`, 1), "agent.name"},
-		{"relative agent executable", strings.Replace(validManifest, `"/nix/store/example-agent/bin/example-agent"`, `"example-agent"`, 1), "agent.executable"},
-		{"relative agent state path", strings.Replace(validManifest, `"/home/user/.example"`, `".example"`, 1), "agent.defaultStatePaths"},
-		{"relative Docker socket", strings.Replace(validManifest, "\"docker\": {\n    \"enable\": false,\n    \"socketPath\": null", "\"docker\": {\n    \"enable\": false,\n    \"socketPath\": \"relative-docker-socket\"", 1), "docker.socketPath"},
-		{"relative Docker client", strings.Replace(validManifest, "\"docker\": {\n    \"enable\": false,\n    \"socketPath\": null,\n    \"hostPorts\": [],\n    \"clientPrograms\": []", "\"docker\": {\n    \"enable\": false,\n    \"socketPath\": null,\n    \"hostPorts\": [],\n    \"clientPrograms\": [\"docker\"]", 1), "docker.clientPrograms"},
-		{"relative Podman socket", strings.Replace(validManifest, "\"podman\": {\n    \"enable\": false,\n    \"socketPath\": null", "\"podman\": {\n    \"enable\": false,\n    \"socketPath\": \"relative-podman-socket\"", 1), "podman.socketPath"},
-		{"relative Podman client", strings.Replace(validManifest, "\"podman\": {\n    \"enable\": false,\n    \"socketPath\": null,\n    \"hostPorts\": [],\n    \"clientPrograms\": []", "\"podman\": {\n    \"enable\": false,\n    \"socketPath\": null,\n    \"hostPorts\": [],\n    \"clientPrograms\": [\"podman\"]", 1), "podman.clientPrograms"},
-		{"unknown field", strings.Replace(validManifest, `"version": 1,`, `"version": 1, "unexpected": true,`, 1), "manifest"},
-		{"second JSON value", validManifest + ` {}`, "manifest"},
+func TestLoadVersion2RequiresBindingAndAllowsRelativeDefault(t *testing.T) {
+	withoutBindings := strings.Replace(validManifest, `"stateBindings":[{"name":"config","explicitPath":null,"inheritedEnvironment":"CLAUDE_CONFIG_DIR","defaultPath":"","defaultWritablePaths":[],"exports":[{"kind":"environment","name":"CLAUDE_CONFIG_DIR","exportDefault":false}]}],`, `"stateBindings":[],`, 1)
+	if _, err := Load(writeManifest(t, withoutBindings)); err == nil {
+		t.Fatal("Load() accepted empty stateBindings")
 	}
+	relativeDefault := strings.Replace(validManifest, `"defaultPath":""`, `"defaultPath":".local/state/den/pi/agent"`, 1)
+	if _, err := Load(writeManifest(t, relativeDefault)); err != nil {
+		t.Fatalf("Load() rejected relative default: %v", err)
+	}
+}
 
-	for _, test := range tests {
+func TestValidateStateBinding(t *testing.T) {
+	cases := []struct{ name, old, new, field string }{
+		{"duplicate names", `"stateBindings":[{`, `"stateBindings":[{"name":"config","explicitPath":null,"inheritedEnvironment":"OTHER","defaultPath":"","defaultWritablePaths":[],"exports":[{"kind":"environment","name":"OTHER","exportDefault":false}]},{`, "stateBindings"},
+		{"no exports", `"exports":[{"kind":"environment","name":"CLAUDE_CONFIG_DIR","exportDefault":false}]`, `"exports":[]`, "stateBindings"},
+		{"unknown export", `"kind":"environment"`, `"kind":"file"`, "stateBindings.exports"},
+		{"unsafe export name", `"CLAUDE_CONFIG_DIR"`, `"BAD-NAME"`, "stateBindings"},
+		{"newline path", `"/nix/store/policy.json"`, `"/nix/store/policy\n.json"`, "basePolicy"},
+		{"relative explicit", `"explicitPath":null`, `"explicitPath":"relative"`, "explicitPath"},
+		{"unsafe inherited name", `"CLAUDE_CONFIG_DIR"`, `"CLAUDE-CONFIG"`, "stateBindings"},
+		{"unsafe default path", `"defaultPath":""`, `"defaultPath":"../escape"`, "defaultPath"},
+		{"newline default path", `"defaultPath":""`, `"defaultPath":"bad\npath"`, "defaultPath"},
+	}
+	if _, err := Load(writeManifest(t, strings.Replace(validManifest, `"version":2`, `"version":2,"unexpected":true`, 1))); err == nil {
+		t.Fatal("Load accepted unknown field")
+	}
+	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := Load(writeManifest(t, test.json))
-			if err == nil {
-				t.Fatal("Load() error = nil")
-			}
-			if !strings.Contains(err.Error(), test.field) {
-				t.Fatalf("Load() error = %q, want field %q", err, test.field)
+			_, err := Load(writeManifest(t, strings.Replace(validManifest, test.old, test.new, 1)))
+			if err == nil || !strings.Contains(err.Error(), test.field) {
+				t.Fatalf("Load() error = %v, want %q", err, test.field)
 			}
 		})
 	}
 }
 
-func TestLoadRedactsRejectedValues(t *testing.T) {
-	tests := []struct {
-		name  string
-		field string
-		json  func(string) string
+func TestLoadRejectsUnsafeAgentContractValues(t *testing.T) {
+	// Catches validation regressions that admit malformed process controls into
+	// the launcher after the manifest has passed its version and schema checks.
+	for _, test := range []struct {
+		name, old, new string
 	}{
-		{"fence executable", "fenceExecutable", func(s string) string {
-			return strings.Replace(validManifest, `"/nix/store/fence/bin/fence"`, `"`+s+`"`, 1)
-		}},
-		{"RepoWolf client", "repoWolfClientDir", func(s string) string {
-			return strings.Replace(validManifest, `"/nix/store/repowolf-client"`, `"`+s+`"`, 1)
-		}},
-		{"base policy", "basePolicy", func(s string) string {
-			return strings.Replace(validManifest, `"/nix/store/policy/fence.json"`, `"`+s+`"`, 1)
-		}},
-		{"closure paths file", "closurePathsFile", func(s string) string {
-			return strings.Replace(validManifest, `"/nix/store/closure-paths"`, `"`+s+`"`, 1)
-		}},
-		{"scratch root", "scratchRoot", func(s string) string {
-			return strings.Replace(validManifest, `"/tmp"`, `"`+s+`"`, 1)
-		}},
-		{"platform", "platform", func(s string) string { return strings.Replace(validManifest, `"linux"`, `"`+s+`"`, 1) }},
-		{"ACL probe executable", "aclProbe", func(s string) string { return strings.Replace(validManifest, `"/usr/bin/getfacl"`, `"`+s+`"`, 1) }},
-		{"ACL probe argument", "aclProbe", func(s string) string { return strings.Replace(validManifest, `"-lde"`, `"`+s+`\u0000"`, 1) }},
-		{"path entry", "pathEntries", func(s string) string { return strings.Replace(validManifest, `"/nix/store/fence/bin"`, `"`+s+`"`, 1) }},
-		{"agent name", "agent.name", func(s string) string { return strings.Replace(validManifest, `"example-agent"`, `"unsafe/`+s+`"`, 1) }},
-		{"agent executable", "agent.executable", func(s string) string {
-			return strings.Replace(validManifest, `"/nix/store/example-agent/bin/example-agent"`, `"`+s+`"`, 1)
-		}},
-		{"agent state path", "agent.defaultStatePaths", func(s string) string { return strings.Replace(validManifest, `"/home/user/.example"`, `"`+s+`"`, 1) }},
-		{"Docker socket", "docker.socketPath", func(s string) string {
-			return strings.Replace(validManifest, "\"docker\": {\n    \"enable\": false,\n    \"socketPath\": null", "\"docker\": {\n    \"enable\": false,\n    \"socketPath\": \""+s+"\"", 1)
-		}},
-		{"Docker client", "docker.clientPrograms", func(s string) string {
-			return strings.Replace(validManifest, "\"docker\": {\n    \"enable\": false,\n    \"socketPath\": null,\n    \"hostPorts\": [],\n    \"clientPrograms\": []", "\"docker\": {\n    \"enable\": false,\n    \"socketPath\": null,\n    \"hostPorts\": [],\n    \"clientPrograms\": [\""+s+"\"]", 1)
-		}},
-		{"Podman socket", "podman.socketPath", func(s string) string {
-			return strings.Replace(validManifest, "\"podman\": {\n    \"enable\": false,\n    \"socketPath\": null", "\"podman\": {\n    \"enable\": false,\n    \"socketPath\": \""+s+"\"", 1)
-		}},
-		{"Podman client", "podman.clientPrograms", func(s string) string {
-			return strings.Replace(validManifest, "\"podman\": {\n    \"enable\": false,\n    \"socketPath\": null,\n    \"hostPorts\": [],\n    \"clientPrograms\": []", "\"podman\": {\n    \"enable\": false,\n    \"socketPath\": null,\n    \"hostPorts\": [],\n    \"clientPrograms\": [\""+s+"\"]", 1)
-		}},
-	}
-
-	for _, test := range tests {
+		{"empty agent name", `"name":"claude"`, `"name":""`},
+		{"unsafe agent name", `"name":"claude"`, `"name":"bad/name"`},
+		{"slash command name", `"commandName":"claude"`, `"commandName":"bad/name"`},
+		{"empty command name", `"commandName":"claude"`, `"commandName":""`},
+		{"newline command name", `"commandName":"claude"`, `"commandName":"bad\nname"`},
+		{"empty argument policy", `"argumentPolicy":"claude"`, `"argumentPolicy":""`},
+		{"unsafe environment scrub name", `"scrub":[]`, `"scrub":["BAD-NAME"]`},
+		{"empty environment scrub name", `"scrub":[]`, `"scrub":[""]`},
+		{"unsafe environment set name", `"set":{}`, `"set":{"BAD-NAME":"value"}`},
+		{"empty environment set name", `"set":{}`, `"set":{"":"value"}`},
+		{"empty environment set value", `"set":{}`, `"set":{"SAFE":""}`},
+		{"unsafe environment export name", `"name":"CLAUDE_CONFIG_DIR"`, `"name":"BAD-NAME"`},
+		{"empty environment export name", `"name":"CLAUDE_CONFIG_DIR"`, `"name":""`},
+		{"unsafe argument export name", `"kind":"environment","name":"CLAUDE_CONFIG_DIR"`, `"kind":"argument","name":"session-dir"`},
+		{"empty mandatory argument", `"mandatoryArgs":["--safe"]`, `"mandatoryArgs":[""]`},
+		{"newline resource argument", `"resourceArgs":[]`, `"resourceArgs":["bad\nresource"]`},
+		{"empty resource argument", `"resourceArgs":[]`, `"resourceArgs":[""]`},
+		{"empty reserved flag", `"--settings"`, `""`},
+		{"carriage-return reserved command", `"reservedCommands":[]`, `"reservedCommands":["bad\rcommand"]`},
+		{"empty reserved command", `"reservedCommands":[]`, `"reservedCommands":[""]`},
+		{"empty security adapter kind", `"securityAdapter":null`, `"securityAdapter":{"kind":"","path":"/nix/store/adapter","arguments":[]}`},
+		{"unsafe security adapter kind", `"securityAdapter":null`, `"securityAdapter":{"kind":"bad/kind","path":"/nix/store/adapter","arguments":[]}`},
+		{"relative security adapter path", `"securityAdapter":null`, `"securityAdapter":{"kind":"adapter","path":"relative","arguments":[]}`},
+		{"empty security argument", `"securityAdapter":null`, `"securityAdapter":{"kind":"adapter","path":"/nix/store/adapter","arguments":[""]}`},
+		{"newline security argument", `"securityAdapter":null`, `"securityAdapter":{"kind":"adapter","path":"/nix/store/adapter","arguments":["bad\nargument"]}`},
+	} {
 		t.Run(test.name, func(t *testing.T) {
-			sentinel := "redaction-sentinel-" + strings.ReplaceAll(test.name, " ", "-")
-			_, err := Load(writeManifest(t, test.json(sentinel)))
-			if err == nil {
-				t.Fatal("Load() error = nil")
-			}
-			if !strings.Contains(err.Error(), test.field) {
-				t.Fatalf("Load() error = %q, want field %q", err, test.field)
-			}
-			if strings.Contains(err.Error(), sentinel) {
-				t.Fatalf("Load() error disclosed manifest value %q: %q", sentinel, err)
+			if _, err := Load(writeManifest(t, strings.Replace(validManifest, test.old, test.new, 1))); err == nil {
+				t.Fatalf("Load accepted malformed %s", test.name)
 			}
 		})
+	}
+}
+
+func TestLoadRejectsArgumentPolicyTableMismatch(t *testing.T) {
+	pi := strings.ReplaceAll(validManifest, `"name":"claude"`, `"name":"pi"`)
+	pi = strings.ReplaceAll(pi, `"commandName":"claude","argumentPolicy":"claude","mandatoryArgs":["--safe"],"resourceArgs":[],"reservedFlags":["--settings","--permission-mode","--dangerously-skip-permissions"],"reservedCommands":[]`, `"commandName":"pi","argumentPolicy":"pi-0.84.4","mandatoryArgs":[],"resourceArgs":[],"reservedFlags":["--session-dir","--session","--fork","--export","--extension","-e","--skill","--prompt-template","--theme"],"reservedCommands":["install","remove","uninstall","update","list","config"]`)
+	if _, err := Load(writeManifest(t, pi)); err != nil {
+		t.Fatalf("Load() rejected Pi policy table: %v", err)
+	}
+	mismatch := strings.Replace(pi, `"--theme"`, `"--unknown"`, 1)
+	if _, err := Load(writeManifest(t, mismatch)); err == nil {
+		t.Fatal("Load() accepted mismatched Pi reserved flags")
 	}
 }
 
@@ -176,7 +123,7 @@ func writeManifest(t *testing.T, content string) string {
 	t.Helper()
 	path := t.TempDir() + "/manifest.json"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("write manifest: %v", err)
+		t.Fatal(err)
 	}
 	return path
 }

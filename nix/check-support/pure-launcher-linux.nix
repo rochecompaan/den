@@ -8,7 +8,7 @@ let
   relativeExplicitSandbox = fakes.overrideManifest {
     name = "claude-relative-explicit";
     package = sandbox;
-    filter = ''.explicitConfigDir = "relative-config"'';
+    filter = ''.stateBindings[0].explicitPath = "relative-config"'';
   };
 in
 pkgs.runCommand "pure-launcher"

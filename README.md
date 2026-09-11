@@ -1,7 +1,8 @@
 # Den
 
-Den packages Claude Code behind Fence and RepoWolf. You use the normal `claude`
-command. Den does not provide a separate runtime command.
+Den packages Claude Code and Pi behind Fence and RepoWolf. You use the normal
+`claude` or `pi` command; Den does not provide a separate runtime command.
+`packages.default` remains Claude.
 
 ## Architecture
 
@@ -9,12 +10,13 @@ Each launch uses this process flow:
 
 ```text
 claude launcher -> Fence -> Claude Code -> RepoWolf gh and Git SSH clients
+pi launcher     -> Fence -> Pi          -> RepoWolf gh and Git SSH clients
 ```
 
 The launcher validates runtime values and creates a private Fence policy. Fence
-enforces filesystem, process, command, and network rules around Claude Code.
-RepoWolf authorizes GitHub API and Git operations. RepoWolf is the only route to
-GitHub from the sandbox.
+enforces filesystem, process, command, and network rules around the selected
+agent. RepoWolf authorizes GitHub API, Git, and SSH operations. RepoWolf is the
+only route to GitHub from either sandbox.
 
 Fence is a process sandbox, not a virtual machine (VM). A VM has a separate
 kernel and gives a stronger isolation boundary. Fence does not give a VM-grade
@@ -71,8 +73,8 @@ Do not print RepoWolf values in logs or troubleshooting output.
 
 ## Install and integrate
 
-All interfaces install an executable named `claude`. The default package and
-the `claude` package are the same artifact.
+All Claude interfaces install an executable named `claude`. The default
+package and the `claude` package are the same artifact.
 
 ### Flake package
 
@@ -204,6 +206,153 @@ You can use the same export in a direnv `.envrc`:
 ```bash
 export CLAUDE_CONFIG_DIR="$PWD/.devenv/state/claude"
 ```
+
+## Pi support
+
+Pi is an additional public output; it does not change the default. The relevant
+flake interfaces are `packages.${system}.pi` and `lib.${system}.mkPi`, while
+`packages.${system}.default` and `packages.default` remain Claude.
+
+Install and run the packaged Pi command directly:
+
+```bash
+nix profile install github:rochecompaan/den#pi
+pi
+```
+
+Use the library constructor when a flake needs custom Pi state, tools, or
+immutable resources:
+
+```nix
+let
+  pi = inputs.den.lib.${system}.mkPi {
+    agentDir = null;
+    sessionDir = null;
+    extraPkgs = [ pkgs.neovim ];
+    resources = {
+      extensions = [ ./pi/extension.ts ];
+      packages = [ piResourcePackage ];
+      skills = [ ./pi/skills ];
+      promptTemplates = [ ./pi/prompts ];
+      themes = [ ./pi/themes ];
+    };
+  };
+in {
+  devShells.${system}.default = pkgs.mkShell { packages = [ pi ]; };
+}
+```
+
+Home Manager and devenv expose the same Pi options under `programs.den.pi`.
+Import the corresponding Den module, and then enable Pi:
+
+```nix
+programs.den.pi = {
+  enable = true;
+  agentDir = null;
+  sessionDir = null;
+  extraPkgs = [ pkgs.neovim ];
+  resources = {
+    extensions = [ ];
+    packages = [ ];
+    skills = [ ];
+    promptTemplates = [ ];
+    themes = [ ];
+  };
+};
+```
+
+A devenv can consume Den through that module, or consume the package or library
+output directly without enabling the module:
+
+```nix
+{ inputs, pkgs, ... }:
+let
+  customPi = inputs.den.lib.${pkgs.system}.mkPi {
+    extraPkgs = [ pkgs.neovim ];
+  };
+in {
+  packages = [ inputs.den.packages.${pkgs.system}.pi ];
+  # Use `packages = [ customPi ];` instead when constructor customization is
+  # required.
+}
+```
+
+### Pi state and credentials
+
+Den selects each Pi state directory independently in this order:
+
+1. The non-null constructor or module value (`agentDir` or `sessionDir`).
+2. The inherited `PI_CODING_AGENT_DIR` or `PI_CODING_AGENT_SESSION_DIR`.
+3. The Den default under the runtime home: `.local/state/den/pi/agent` or
+   `.local/state/den/pi/sessions`.
+
+Custom paths must be absolute, private, non-overlapping directories. Den exports
+the selected agent directory and exports the session directory both through the
+environment and Pi's `--session-dir` option. Pi configuration, `auth.json`, trust
+decisions, and other Pi-owned state live in the selected agent directory;
+sessions remain confined to the selected session directory. Den does not import
+host `.pi/agent`, host `auth.json`, or host-global `.agents` resources from
+either the invoking-account home or runtime home. Provider credentials remain
+runtime values and must not be put in Nix configuration.
+
+### Pi resources and project trust
+
+All configured resources must be Nix paths or packages that become immutable
+store paths. Den accepts extensions, Pi packages, skills, prompt templates, and
+themes, preserves list order within each configured subgroup, and supplies none
+by default. Pi 0.84.4 resolves each resource type independently in this order:
+
+1. Extensions: direct configured extensions, configured-package extensions,
+   then enabled trusted-project and user extensions.
+2. Skills: configured-package skills, enabled trusted-project and user skills,
+   then direct configured skills.
+3. Prompt templates: configured-package templates, enabled trusted-project and
+   user templates, then direct configured templates.
+4. Themes: configured-package themes, enabled trusted-project and user themes,
+   then direct configured themes.
+
+For same-name resources, Pi keeps the first resource and reports the later
+loser. Discovery-disable flags omit only the corresponding ambient user/project
+subgroup; mandatory configured resources retain their order.
+
+Pi's normal project-trust gate remains authoritative. After a project is
+trusted, Pi may load repository-local resources from `.pi` and
+`.agents/skills`. The exception is limited to the validated worktree and does
+not expose host-global resources. Project package declarations cannot install
+or resolve npm or Git packages at runtime; configured package dependencies must
+already be present in the Nix closure.
+
+The wrapper rejects `install`, `remove`, `uninstall`, `update`, `list`, and
+`config` package commands before Pi starts. Den also reserves its state and
+resource-source arguments, and the fixed Pi hardening patch rejects direct or
+extension-initiated package mutation even if `PI_OFFLINE` is changed. There is
+no supported runtime package installation or self-update path.
+
+### Pi enforcement and upgrades
+
+Pi uses the same Fence policy and RepoWolf integration as Claude. RepoWolf is
+the only route for GitHub API, Git, and SSH operations; direct GitHub routes
+remain denied. Fence controls normal provider and other network traffic and
+wraps Pi, configured resources, trusted project resources, and extension child
+processes.
+
+On Linux, the outer Fence performs its required feature preflight and enforces
+the generated filesystem, process, command, and network policy. On Darwin, a
+mandatory immutable Pi extension additionally sends the built-in `bash` tool
+and user `!` shell commands through Fence's proxy-free command-policy helper.
+Blocked, rewritten, malformed, or failed helper results stop execution, and
+ordinary extensions cannot replace those two entry points.
+
+The Darwin argv-aware guarantee is deliberately limited: direct process
+creation by arbitrary extension code does not pass through the shell helper.
+Those processes remain inside outer Fence filesystem, process, and network
+controls, but do not receive argv-aware command policy. Fence is still not a
+VM-grade boundary on either platform.
+
+A Pi upgrade is a reviewed compatibility change. It must update and revalidate
+the pinned Pi grammar, source and dependency hashes, the fixed hardening patch
+and its hash, and package/resource/session/Darwin compatibility fixtures before
+the pinned version changes.
 
 ## Public configuration
 

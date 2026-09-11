@@ -1,4 +1,4 @@
-// Package configdir securely selects Claude's writable configuration state.
+// Package configdir securely selects launcher writable state directories.
 package configdir
 
 import (
@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+
+	"github.com/rochecompaan/den/internal/manifest"
 )
 
 // Mode identifies whether Claude uses its default state or one custom directory.
@@ -22,8 +24,9 @@ const (
 
 // Dependencies contains immutable platform tools used to inspect filesystem ACLs.
 type Dependencies struct {
-	ACLProbe       []string
-	ProtectedHomes []string
+	ACLProbe              []string
+	ProtectedHomes        []string
+	ProtectedPathPatterns []string
 }
 
 // Selection is the validated state-directory choice and its rollback lifecycle.
@@ -37,7 +40,9 @@ type Selection struct {
 	Inode              uint64
 	Created            bool
 
-	state *selectionState
+	binding manifest.StateBinding
+	source  bindingSource
+	state   *selectionState
 }
 
 type selectionState struct {
@@ -214,7 +219,7 @@ func privateDirectoryMode(mode fs.FileMode) bool {
 }
 
 func (s Selection) Revalidate() error {
-	if s.Mode != Custom || s.state == nil {
+	if s.state == nil {
 		return nil
 	}
 	state := s.state

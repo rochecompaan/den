@@ -1,4 +1,4 @@
-{ inputs, pkgs, claude, claudeStartup ? null }:
+{ inputs, pkgs, claude, claudeStartup ? null, piFixture ? import ./pi-native-fixture.nix { inherit inputs pkgs; }, piDarwinStartup ? null }:
 
 let
   fence = (import ../lib/fence.nix { inherit pkgs; }).package;
@@ -140,14 +140,33 @@ let
     podman = { };
     adapter = {
       runtimePackages = [ fixtureAgent ];
+      closureOnlyPackages = [ ];
+      output = {
+        packageName = "claude";
+        commandName = "claude";
+        manifestName = "claude-manifest.json";
+        mainProgram = "claude";
+      };
       agent = {
         name = "native-fixture";
         executable = "${fixtureAgent}/bin/den-native-agent";
+        argumentPolicy = "claude";
         mandatoryArgs = [ ];
-        reservedFlags = [ ];
-        configEnvironment = "CLAUDE_CONFIG_DIR";
-        darwinSettings = "";
+        resourceArgs = [ ];
+        reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" ];
+        reservedCommands = [ ];
+        environment = { scrub = [ ]; set = { }; };
+        packageDirectory = null;
+        securityAdapter = null;
       };
+      stateBindings = [{
+        name = "config";
+        explicitPath = null;
+        inheritedEnvironment = "CLAUDE_CONFIG_DIR";
+        defaultPath = "";
+        defaultWritablePaths = [ ];
+        exports = [{ kind = "environment"; name = "CLAUDE_CONFIG_DIR"; exportDefault = false; }];
+      }];
     };
   };
   unrelatedStoreFile = pkgs.writeText "den-native-unrelated" "must remain unreadable\n";
@@ -202,12 +221,32 @@ let
       runHook postInstall
     '';
   };
+  piNativeTests = pkgs.buildGoModule {
+    pname = "den-pi-native-tests";
+    version = "0.1.0";
+    src = ../..;
+    vendorHash = denGoVendorHash;
+    env.CGO_ENABLED = "0";
+    doCheck = false;
+    buildPhase = ''
+      runHook preBuild
+      go test -c -tags=native -o den-pi-native-tests ./tests/native/pi
+      runHook postBuild
+    '';
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 den-pi-native-tests "$out/bin/den-pi-native-tests"
+      runHook postInstall
+    '';
+  };
 in
 assert pkgs.lib.assertMsg
   (!pkgs.stdenv.isDarwin ||
-    (claudeStartup != null &&
-     (claudeStartup.denHostFixturePlatform or null) == "darwin" &&
-     (fenceCapabilities.denHostFixturePlatform or null) == "darwin"))
+  (claudeStartup != null &&
+    piDarwinStartup != null &&
+    (claudeStartup.denHostFixturePlatform or null) == "darwin" &&
+    (piDarwinStartup.denHostFixturePlatform or null) == "darwin" &&
+    (fenceCapabilities.denHostFixturePlatform or null) == "darwin"))
   "Darwin native enforcement requires the packaged Darwin host fixtures";
 pkgs.writeShellApplication {
   name = "native-enforcement";
@@ -217,11 +256,20 @@ pkgs.writeShellApplication {
   text = ''
     export DEN_NATIVE_HOST_SYSTEM=${pkgs.stdenv.hostPlatform.system}
     export DEN_NATIVE_TEST_BINARY=${nativeTests}/bin/den-native-tests
+    export DEN_NATIVE_PI_LAUNCHER=${piFixture.launcher}/bin/den-launcher
+    export DEN_NATIVE_PI_TEST_BINARY=${piNativeTests}/bin/den-pi-native-tests
     export DEN_NATIVE_CLAUDE=${claude}/bin/claude
+    export DEN_NATIVE_PI=${piFixture.pi}/bin/pi
+    export DEN_NATIVE_PI_SANDBOX=${piFixture.sandbox}/bin/pi
+    export DEN_NATIVE_PI_MANIFEST=${piFixture.manifest}
+    export DEN_NATIVE_PI_PACKAGE_ROOT=${piFixture.packageRoot}
+    export DEN_NATIVE_PI_RESOURCE_FIXTURE=${piFixture.resourceFixture}
+    export DEN_NATIVE_PI_FENCE_INPUT_RECORDER=${piFixture.fenceInputRecorder}
     export DEN_NATIVE_SANDBOX=${fixtureSandbox}/bin/claude
     export DEN_NATIVE_MANIFEST=${fixtureSandbox.denManifest}
     export DEN_NATIVE_LAUNCHER=${launcher}/bin/den-launcher
     export DEN_NATIVE_FENCE=${fence}/bin/fence
+    export DEN_NATIVE_SCRIPT=${if pkgs.stdenv.isDarwin then "/usr/bin/script" else "${pkgs.util-linux}/bin/script"}
     export DEN_NATIVE_SETTINGS_MERGE=${claudeSettingsMerge}/bin/claude-settings-merge
     export DEN_NATIVE_REPOWOLF_CLIENT_DIR=${repoWolfClient}
     export DEN_NATIVE_REPOWOLF_FIXTURE=${repoWolfFixture}/bin/den-native-repowolf-fixture
@@ -229,6 +277,7 @@ pkgs.writeShellApplication {
     export DEN_NATIVE_RESOLVER_HELPER=${resolverHelper}/bin/den-native-resolver-helper
     ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
       export DEN_NATIVE_CLAUDE_STARTUP=${claudeStartup}/bin/claude-startup
+      export DEN_NATIVE_PI_STARTUP=${piDarwinStartup}/bin/pi-darwin-startup
       export DEN_NATIVE_FENCE_CAPABILITIES=${fenceCapabilities}/bin/fence-capabilities
       export DEN_NATIVE_SANDBOX_EXEC=/usr/bin/sandbox-exec
       export DEN_NATIVE_ACL_PROBE=${aclProbeDarwin}/bin/den-acl-probe

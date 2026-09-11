@@ -55,7 +55,7 @@ pkgs.runCommand "package-closure"
       --arg repowolf "${repowolfClient}" \
       --arg aclProbe "${expectedACLProbe}" \
       --arg policy "${../../policy/fence.json}" '
-        .version == 1 and
+        .version == 2 and
         .fenceExecutable == $fence and
         .repoWolfClientDir == $repowolf and
         .basePolicy == $policy and

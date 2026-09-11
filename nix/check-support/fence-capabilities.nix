@@ -1,6 +1,7 @@
 { pkgs, fence }:
 
 let
+  fenceInfo = import ../lib/fence.nix { inherit pkgs; };
   closure = pkgs.closureInfo {
     rootPaths = [ fence pkgs.bash pkgs.coreutils pkgs.gnugrep pkgs.jq ];
   };
@@ -28,7 +29,8 @@ let
     state=$root/state
     scratch=$root/scratch
     policyDir=$worktree/.den-policy
-    mkdir -m 0700 -p "$home/.npm/_logs" "$home/.fence" "$worktree" "$state" "$scratch" "$policyDir"
+    maskedDir=$worktree/deny-read-mask
+    mkdir -m 0700 -p "$home/.npm/_logs" "$home/.fence" "$worktree" "$state" "$scratch" "$policyDir" "$maskedDir"
     printf secret > "$home/secret"
     printf unchanged > "$home/.npm/_logs/implicit"
     printf unchanged > "$home/.fence/debug"
@@ -47,7 +49,7 @@ let
     jq -n \
       --argjson closure "$(cat closure.json)" \
       --arg home "$home" --arg worktree "$worktree" --arg state "$state" \
-      --arg scratch "$scratch" --arg policy "$policy" --arg policyDir "$policyDir" --arg ca "$ca" \
+      --arg scratch "$scratch" --arg policy "$policy" --arg policyDir "$policyDir" --arg maskedDir "$maskedDir" --arg ca "$ca" \
       '{
         allowPty: true,
         network: {
@@ -59,12 +61,25 @@ let
           allowRead: ($closure + [$worktree, $state, $scratch, $policy, $ca]),
           allowExecute: $closure,
           allowWrite: [$worktree, $state, $scratch],
-          denyRead: [$home + "/secret"],
-          denyWrite: ["~/.npm/_logs", "~/.fence/debug", "/tmp/fence", "/tmp/fence/**", "/private/tmp/fence", "/private/tmp/fence/**", $policy, $policyDir]
+          denyRead: [$home + "/secret", $maskedDir],
+          denyWrite: ["~/.npm/_logs", "~/.fence/debug", "/tmp/fence", "/tmp/fence/**", "/private/tmp/fence", "/private/tmp/fence/**", $policy, $policyDir, $maskedDir]
         },
-        command: { deny: [], useDefaults: true, acceptSharedBinaryCannotRuntimeDeny: ["chroot"], runtimeExecPolicy: "argv" }
+        command: { deny: ["printf denied"], useDefaults: true, acceptSharedBinaryCannotRuntimeDeny: ["chroot"], runtimeExecPolicy: "argv" }
       }' > "$policy"
     chmod 0400 "$policy"
+
+    request='{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"printf allowed","cwd":"/tmp"},"cwd":"/tmp"}'
+    printf '%s\n' "$request" | FENCE_SANDBOX=1 DEN_FENCE_TMPDIR="$scratch" TMPDIR="$scratch" \
+      "$fence" --claude-pre-tool-use --settings "$policy" > helper-allow.out 2> helper-allow.err
+    test ! -s helper-allow.out
+    test ! -s helper-allow.err
+    request='{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"printf denied","cwd":"/tmp"},"cwd":"/tmp"}'
+    printf '%s\n' "$request" | FENCE_SANDBOX=1 DEN_FENCE_TMPDIR="$scratch" TMPDIR="$scratch" \
+      "$fence" --claude-pre-tool-use --settings "$policy" > helper-deny.out 2> helper-deny.err
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}' > helper-deny.expected
+    cmp helper-deny.expected helper-deny.out
+    test ! -s helper-deny.err
+    test -z "$(find "$scratch" -mindepth 1 -print -quit)"
 
     "$fence" config show --settings "$policy" > parsed.json
     jq -e '
@@ -79,7 +94,7 @@ let
     mv "$policy.next" "$policy"
     chmod 0400 "$policy"
 
-    export HOME="$home" WORKTREE="$worktree" STATE="$state" SCRATCH="$scratch"
+    export HOME="$home" WORKTREE="$worktree" STATE="$state" SCRATCH="$scratch" MASKED_DIR="$maskedDir"
     export POLICY="$policy" CA="$ca"
     export TMPDIR="$scratch" DEN_FENCE_TMPDIR="$scratch"
     "$fence" --settings "$policy" --expose-host-path "$ca" -- ${pkgs.bash}/bin/bash -c '
@@ -91,12 +106,13 @@ let
       printf state > "$STATE/write"
       test "$(cat "$CA")" = ca-read-only
       if cat "$HOME/secret" >/dev/null 2>&1; then exit 20; fi
-      if cat ${pkgs.hello}/bin/hello >/dev/null 2>&1; then exit 21; fi
-      if printf changed > "$HOME/.npm/_logs/implicit" 2>/dev/null; then exit 22; fi
-      if printf changed > "$HOME/.fence/debug" 2>/dev/null; then exit 23; fi
-      if printf changed >> "$POLICY" 2>/dev/null; then exit 24; fi
-      if printf changed > "$(dirname "$POLICY")/other" 2>/dev/null; then exit 25; fi
-      if printf changed > "$CA" 2>/dev/null; then exit 26; fi
+      if printf escaped > "$MASKED_DIR/created" 2>/dev/null; then exit 21; fi
+      if cat ${pkgs.hello}/bin/hello >/dev/null 2>&1; then exit 22; fi
+      if printf changed > "$HOME/.npm/_logs/implicit" 2>/dev/null; then exit 23; fi
+      if printf changed > "$HOME/.fence/debug" 2>/dev/null; then exit 24; fi
+      if printf changed >> "$POLICY" 2>/dev/null; then exit 25; fi
+      if printf changed > "$(dirname "$POLICY")/other" 2>/dev/null; then exit 26; fi
+      if printf changed > "$CA" 2>/dev/null; then exit 27; fi
     '
     "$fence" --settings "$policy" --expose-host-path "$ca" -c 'test "$TMPDIR" = "$SCRATCH"; test "$DEN_FENCE_TMPDIR" = "$SCRATCH"; printf nested > "$TMPDIR/nested"'
     test "$(cat "$scratch/outer")" = outer
@@ -176,9 +192,22 @@ let
           denyRead: [$home + "/secret"],
           denyWrite: ["~/.npm/_logs", "~/.fence/debug", "/tmp/fence", "/tmp/fence/**", "/private/tmp/fence", "/private/tmp/fence/**", $policy, $policyDir]
         },
-        command: { deny: [], useDefaults: true, acceptSharedBinaryCannotRuntimeDeny: ["chroot"], runtimeExecPolicy: "argv" }
+        command: { deny: ["printf denied"], useDefaults: true, acceptSharedBinaryCannotRuntimeDeny: ["chroot"], runtimeExecPolicy: "argv" }
       }' > "$policy"
     chmod 0400 "$policy"
+
+    request='{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"printf allowed","cwd":"/tmp"},"cwd":"/tmp"}'
+    printf '%s\n' "$request" | FENCE_SANDBOX=1 DEN_FENCE_TMPDIR="$scratch" TMPDIR="$scratch" \
+      "$fence" --claude-pre-tool-use --settings "$policy" > helper-allow.out 2> helper-allow.err
+    test ! -s helper-allow.out
+    test ! -s helper-allow.err
+    request='{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"printf denied","cwd":"/tmp"},"cwd":"/tmp"}'
+    printf '%s\n' "$request" | FENCE_SANDBOX=1 DEN_FENCE_TMPDIR="$scratch" TMPDIR="$scratch" \
+      "$fence" --claude-pre-tool-use --settings "$policy" > helper-deny.out 2> helper-deny.err
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}' > helper-deny.expected
+    cmp helper-deny.expected helper-deny.out
+    test ! -s helper-deny.err
+    test -z "$(find "$scratch" -mindepth 1 -print -quit)"
 
     "$fence" config show --settings "$policy" > parsed.json
     jq -e '
@@ -225,11 +254,22 @@ let
     printf 'complete\n' > "$DEN_NATIVE_HOST_ROOT/fence-capabilities.complete"
   '';
 in
+assert fence == fenceInfo.package;
+assert fenceInfo.version == "0.1.58";
+assert fenceInfo.sourceHash == "sha256-ACe3N4bXYJW6QDQHtRChFWOTXTZTbEUbZ4d8cuFRqMY=";
+assert fenceInfo.patchHash == "4be4f0266a0a79da10002893752ea8185915f6ecfb146513946bde8a96e41e2a";
+assert fenceInfo.readOnlyMaskPatchHash == "750d15f9c6eee70f916de3044c60d937f9d67c39c0178da1a4da8acf8d6b990b";
+assert fenceInfo.bootstrapAttestationPatchHash == "d1f3f8d31ceb276998e5df0dd476e9e56ea7cd79517cf2bc0330bb498036c15f";
+assert fenceInfo.macosNestedDenyPatchHash == "194ed4989bc0ce8ebf2b3f1a73cad85f911bb39dede4c4fd7f343a10cf9e21ee";
+assert fenceInfo.capabilities.claudePreToolUse;
+assert fenceInfo.capabilities.denFenceTmpdir;
+assert fenceInfo.capabilities.strictDenyRead;
+assert if pkgs.stdenv.isDarwin then fenceInfo.capabilities.allowUnixSockets && fenceInfo.capabilities.darwinNestedDenyCarveouts else fenceInfo.capabilities.linuxReadOnlyDenyReadMasks && fenceInfo.capabilities.argvRuntimePolicy && fenceInfo.capabilities.attestedBootstrapTransitions;
 if pkgs.stdenv.isLinux then
   pkgs.runCommand "fence-capabilities"
-    {
-      nativeBuildInputs = [ pkgs.jq ];
-    }
+  {
+    nativeBuildInputs = [ pkgs.jq ];
+  }
     linuxCapabilities
 else
   pkgs.writeShellApplication {

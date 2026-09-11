@@ -29,13 +29,14 @@ func runFence(
 	launcherManifest manifest.Manifest,
 	arguments []string,
 	config repowolf.Config,
-	selection configdir.Selection,
+	handles []*configdir.Handle,
+	state StateInputs,
 	darwinRevalidate func() error,
 	environment []string,
 	docker, podman container.Socket,
 	stderr io.Writer,
 ) int {
-	return runFenceWithTemporary(ctx, launcherManifest, arguments, config, selection, darwinRevalidate, environment, docker, podman, stderr, tempdir.RemoveStale, tempdir.NewPair)
+	return runFenceWithTemporary(ctx, launcherManifest, arguments, config, handles, state, darwinRevalidate, environment, docker, podman, stderr, tempdir.RemoveStale, tempdir.NewPair)
 }
 
 func runFenceWithTemporary(
@@ -43,7 +44,8 @@ func runFenceWithTemporary(
 	launcherManifest manifest.Manifest,
 	arguments []string,
 	config repowolf.Config,
-	selection configdir.Selection,
+	handles []*configdir.Handle,
+	state StateInputs,
 	darwinRevalidate func() error,
 	environment []string,
 	docker, podman container.Socket,
@@ -70,7 +72,7 @@ func runFenceWithTemporary(
 	config.CAFile = preparedCA
 
 	policyFile := filepath.Join(policyDir, "policy.json")
-	contents, err := generatePolicy(launcherManifest, config, selection, scratchDir, policyFile, docker, podman)
+	contents, err := generatePolicy(launcherManifest, config, state, handles, scratchDir, policyFile, docker, podman)
 	if err != nil {
 		fmt.Fprintln(stderr, "Fence policy generation failed")
 		return 1
@@ -79,9 +81,11 @@ func runFenceWithTemporary(
 		fmt.Fprintln(stderr, "Fence policy write failed")
 		return 1
 	}
-	if err := selection.Revalidate(); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+	for _, handle := range handles {
+		if err := handle.Revalidate(); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 	}
 	if darwinRevalidate != nil {
 		if err := darwinRevalidate(); err != nil {
@@ -94,18 +98,18 @@ func runFenceWithTemporary(
 	environment = setEnvironment(environment, "REPOWOLF_CA_FILE", preparedCA)
 	environment = append(environment, "DEN_FENCE_POLICY_FILE="+policyFile)
 	argumentsForFence := []string{"--settings", policyFile, "--expose-host-path", config.CAFile, "--", launcherManifest.Agent.Executable}
-	argumentsForFence = append(argumentsForFence, launcherManifest.Agent.MandatoryArgs...)
 	argumentsForFence = append(argumentsForFence, arguments...)
 	return process.Run(process.Command{
 		Path: launcherManifest.FenceExecutable, Args: argumentsForFence, Env: environment,
-		Started: selection.Commit,
+		Started: func() { commitStateHandles(handles) },
 	}, process.IO{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}, process.Signals{})
 }
 
 func generatePolicy(
 	launcherManifest manifest.Manifest,
 	config repowolf.Config,
-	selection configdir.Selection,
+	state StateInputs,
+	handles []*configdir.Handle,
 	scratchDir, policyFile string,
 	docker, podman container.Socket,
 ) ([]byte, error) {
@@ -131,9 +135,8 @@ func generatePolicy(
 	return policy.Generate(policy.Base(base), policy.Dynamic{
 		Platform: launcherManifest.Platform, RepoWolfHostname: config.Hostname, CAFile: config.CAFile,
 		ClosurePaths: closures, Worktree: worktree, ScratchDir: scratchDir,
-		StatePaths: selection.WritablePaths, DefaultStatePaths: selection.DeniedDefaultPaths,
-		ProtectedPaths: selection.ProtectedPaths,
-		CustomMode:     selection.Mode == configdir.Custom, UnixSockets: sockets,
+		StatePaths: state.WritablePaths, DeniedWritePaths: state.DeniedWritePaths,
+		ProtectedPaths: protectedStatePaths(handles), UnixSockets: sockets,
 		HostPorts:  container.CombinePorts(launcherManifest.Docker.HostPorts, launcherManifest.Podman.HostPorts),
 		PolicyFile: policyFile,
 	})

@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+
+	"github.com/rochecompaan/den/internal/arguments"
 )
 
-const version = 1
+const CurrentVersion = 2
 
 // Manifest is the versioned boundary between the Nix package and the launcher.
 type Manifest struct {
@@ -26,24 +28,54 @@ type Manifest struct {
 	ACLProbe              []string        `json:"aclProbe"`
 	ProtectedPathPatterns []string        `json:"protectedPathPatterns"`
 	PathEntries           []string        `json:"pathEntries"`
-	ExplicitConfigDir     *string         `json:"explicitConfigDir"`
 	Agent                 Agent           `json:"agent"`
+	StateBindings         []StateBinding  `json:"stateBindings"`
 	Docker                ContainerConfig `json:"docker"`
 	Podman                ContainerConfig `json:"podman"`
 }
 
-// Agent describes the immutable program the launcher starts.
 type Agent struct {
-	Name              string   `json:"name"`
-	Executable        string   `json:"executable"`
-	MandatoryArgs     []string `json:"mandatoryArgs"`
-	ReservedFlags     []string `json:"reservedFlags"`
-	ConfigEnvironment string   `json:"configEnvironment"`
-	DefaultStatePaths []string `json:"defaultStatePaths"`
-	DarwinSettings    string   `json:"darwinSettings,omitempty"`
+	Name             string            `json:"name"`
+	Executable       string            `json:"executable"`
+	CommandName      string            `json:"commandName"`
+	ArgumentPolicy   string            `json:"argumentPolicy"`
+	MandatoryArgs    []string          `json:"mandatoryArgs"`
+	ResourceArgs     []string          `json:"resourceArgs"`
+	ReservedFlags    []string          `json:"reservedFlags"`
+	ReservedCommands []string          `json:"reservedCommands"`
+	Environment      AgentEnvironment  `json:"environment"`
+	PackageDirectory *EnvironmentValue `json:"packageDirectory,omitempty"`
+	SecurityAdapter  *SecurityAdapter  `json:"securityAdapter,omitempty"`
 }
 
-// ContainerConfig describes one optional container client integration.
+type AgentEnvironment struct {
+	Scrub []string          `json:"scrub"`
+	Set   map[string]string `json:"set"`
+}
+
+type EnvironmentValue struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+type SecurityAdapter struct {
+	Kind      string   `json:"kind"`
+	Path      string   `json:"path"`
+	Arguments []string `json:"arguments"`
+}
+type StateBinding struct {
+	Name                 string        `json:"name"`
+	ExplicitPath         *string       `json:"explicitPath"`
+	InheritedEnvironment string        `json:"inheritedEnvironment"`
+	DefaultPath          string        `json:"defaultPath"`
+	DefaultWritablePaths []string      `json:"defaultWritablePaths"`
+	Exports              []StateExport `json:"exports"`
+}
+type StateExport struct {
+	Kind          string `json:"kind"`
+	Name          string `json:"name"`
+	ExportDefault bool   `json:"exportDefault"`
+}
+
 type ContainerConfig struct {
 	Enable         bool     `json:"enable"`
 	SocketPath     *string  `json:"socketPath"`
@@ -51,28 +83,25 @@ type ContainerConfig struct {
 	ClientPrograms []string `json:"clientPrograms"`
 }
 
-// Load reads and validates one versioned launcher manifest.
 func Load(path string) (Manifest, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("open manifest: %w", err)
 	}
 	defer file.Close()
-
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
-
-	var manifest Manifest
-	if err := decoder.Decode(&manifest); err != nil {
-		return Manifest{}, fmt.Errorf("manifest: invalid JSON")
+	var value Manifest
+	if err := decoder.Decode(&value); err != nil {
+		return Manifest{}, errors.New("manifest: invalid JSON")
 	}
 	if err := requireEOF(decoder); err != nil {
 		return Manifest{}, err
 	}
-	if err := manifest.validate(); err != nil {
+	if err := value.validate(); err != nil {
 		return Manifest{}, err
 	}
-	return manifest, nil
+	return value, nil
 }
 
 func requireEOF(decoder *json.Decoder) error {
@@ -84,23 +113,13 @@ func requireEOF(decoder *json.Decoder) error {
 }
 
 func (m Manifest) validate() error {
-	if m.Version != version {
+	if m.Version != CurrentVersion {
 		return errors.New("manifest version is unsupported")
 	}
 	if m.Platform != "linux" && m.Platform != "darwin" {
 		return errors.New("manifest field platform is invalid")
 	}
-	for _, field := range []struct {
-		name string
-		path string
-	}{
-		{"fenceExecutable", m.FenceExecutable},
-		{"repoWolfClientDir", m.RepoWolfClientDir},
-		{"basePolicy", m.BasePolicy},
-		{"closurePathsFile", m.ClosurePathsFile},
-		{"scratchRoot", m.ScratchRoot},
-		{"agent.executable", m.Agent.Executable},
-	} {
+	for _, field := range []struct{ name, path string }{{"fenceExecutable", m.FenceExecutable}, {"repoWolfClientDir", m.RepoWolfClientDir}, {"basePolicy", m.BasePolicy}, {"closurePathsFile", m.ClosurePathsFile}, {"scratchRoot", m.ScratchRoot}} {
 		if err := validateAbsolute(field.name, field.path); err != nil {
 			return err
 		}
@@ -123,6 +142,19 @@ func (m Manifest) validate() error {
 	if err := m.Agent.validate(); err != nil {
 		return err
 	}
+	if len(m.StateBindings) == 0 {
+		return errors.New("manifest field stateBindings is required")
+	}
+	seen := make(map[string]struct{}, len(m.StateBindings))
+	for _, binding := range m.StateBindings {
+		if _, ok := seen[binding.Name]; ok {
+			return errors.New("manifest field stateBindings has duplicate name")
+		}
+		seen[binding.Name] = struct{}{}
+		if err := binding.validate(); err != nil {
+			return err
+		}
+	}
 	if err := m.Docker.validate("docker"); err != nil {
 		return err
 	}
@@ -130,23 +162,69 @@ func (m Manifest) validate() error {
 }
 
 func (a Agent) validate() error {
-	if !safeProgramName(a.Name) {
+	if !safeName(a.Name) {
 		return errors.New("manifest field agent.name is invalid")
 	}
-	if err := validateArguments("agent.mandatoryArgs", a.MandatoryArgs); err != nil {
+	if err := validateAbsolute("agent.executable", a.Executable); err != nil {
 		return err
 	}
-	if err := validateArguments("agent.reservedFlags", a.ReservedFlags); err != nil {
+	if !safeName(a.CommandName) {
+		return errors.New("manifest field agent.commandName is invalid")
+	}
+	if !safeName(a.ArgumentPolicy) {
+		return errors.New("manifest field agent.argumentPolicy is invalid")
+	}
+	for _, field := range []struct {
+		name   string
+		values []string
+	}{{"agent.mandatoryArgs", a.MandatoryArgs}, {"agent.resourceArgs", a.ResourceArgs}, {"agent.reservedFlags", a.ReservedFlags}, {"agent.reservedCommands", a.ReservedCommands}, {"agent.environment.scrub", a.Environment.Scrub}} {
+		if err := validateArguments(field.name, field.values); err != nil {
+			return err
+		}
+	}
+	for name, value := range a.Environment.Set {
+		if !safeEnvironmentName(name) || !safeValue(value) {
+			return errors.New("manifest field agent.environment.set is invalid")
+		}
+	}
+	for _, name := range a.Environment.Scrub {
+		if !safeEnvironmentName(name) {
+			return errors.New("manifest field agent.environment.scrub is invalid")
+		}
+	}
+	if a.PackageDirectory != nil {
+		if !safeEnvironmentName(a.PackageDirectory.Name) || !safeValue(a.PackageDirectory.Value) {
+			return errors.New("manifest field agent.packageDirectory is invalid")
+		}
+	}
+	if a.SecurityAdapter != nil {
+		if !safeName(a.SecurityAdapter.Kind) || validateAbsolute("agent.securityAdapter.path", a.SecurityAdapter.Path) != nil || validateArguments("agent.securityAdapter.arguments", a.SecurityAdapter.Arguments) != nil {
+			return errors.New("manifest field agent.securityAdapter is invalid")
+		}
+	}
+	if err := arguments.Validate(a.ArgumentPolicy, a.ReservedFlags, a.ReservedCommands, nil); err != nil {
+		return errors.New("manifest field agent argument policy is invalid")
+	}
+	return nil
+}
+
+func (s StateBinding) validate() error {
+	if !safeName(s.Name) || !safeEnvironmentName(s.InheritedEnvironment) || len(s.Exports) == 0 {
+		return errors.New("manifest field stateBindings is invalid")
+	}
+	if s.ExplicitPath != nil && !safePath(*s.ExplicitPath) {
+		return errors.New("manifest field stateBindings.explicitPath is invalid")
+	}
+	if s.DefaultPath != "" && !safeDefaultPath(s.DefaultPath) {
+		return errors.New("manifest field stateBindings.defaultPath is invalid")
+	}
+	if err := validateAbsolutePaths("stateBindings.defaultWritablePaths", s.DefaultWritablePaths, false); err != nil {
 		return err
 	}
-	if !safeEnvironmentName(a.ConfigEnvironment) {
-		return errors.New("manifest field agent.configEnvironment is invalid")
-	}
-	if err := validateAbsolutePaths("agent.defaultStatePaths", a.DefaultStatePaths, false); err != nil {
-		return err
-	}
-	if a.DarwinSettings != "" {
-		return validateAbsolute("agent.darwinSettings", a.DarwinSettings)
+	for _, export := range s.Exports {
+		if (export.Kind != "environment" && export.Kind != "argument") || !safeExportName(export.Name, export.Kind) {
+			return errors.New("manifest field stateBindings.exports is invalid")
+		}
 	}
 	return nil
 }
@@ -159,7 +237,6 @@ func (c ContainerConfig) validate(name string) error {
 	}
 	return validateAbsolutePaths(name+".clientPrograms", c.ClientPrograms, false)
 }
-
 func validateAbsolutePaths(field string, paths []string, required bool) error {
 	if required && len(paths) == 0 {
 		return fmt.Errorf("manifest field %s is required", field)
@@ -171,24 +248,33 @@ func validateAbsolutePaths(field string, paths []string, required bool) error {
 	}
 	return nil
 }
-
 func validateAbsolute(field, path string) error {
-	if path == "" || strings.IndexByte(path, 0) >= 0 || !filepath.IsAbs(path) {
+	if !safePath(path) {
 		return fmt.Errorf("manifest field %s is invalid", field)
 	}
 	return nil
 }
-
-func validateArguments(field string, arguments []string) error {
-	for _, argument := range arguments {
-		if argument == "" || strings.IndexByte(argument, 0) >= 0 {
+func safePath(path string) bool {
+	return path != "" && strings.IndexByte(path, 0) < 0 && !strings.ContainsAny(path, "\r\n") && filepath.IsAbs(path) && filepath.Clean(path) == path
+}
+func safeDefaultPath(path string) bool {
+	if path == "" || strings.IndexByte(path, 0) >= 0 || strings.ContainsAny(path, "\r\n") || filepath.Clean(path) != path {
+		return false
+	}
+	return filepath.IsAbs(path) || (path != "." && path != ".." && !strings.HasPrefix(path, ".."+string(filepath.Separator)))
+}
+func validateArguments(field string, values []string) error {
+	for _, value := range values {
+		if !safeValue(value) {
 			return fmt.Errorf("manifest field %s is invalid", field)
 		}
 	}
 	return nil
 }
-
-func safeProgramName(name string) bool {
+func safeValue(value string) bool {
+	return value != "" && strings.IndexByte(value, 0) < 0 && !strings.ContainsAny(value, "\r\n")
+}
+func safeName(name string) bool {
 	if name == "" || name == "." || name == ".." {
 		return false
 	}
@@ -199,7 +285,6 @@ func safeProgramName(name string) bool {
 	}
 	return true
 }
-
 func safeEnvironmentName(name string) bool {
 	if name == "" {
 		return false
@@ -210,4 +295,10 @@ func safeEnvironmentName(name string) bool {
 		}
 	}
 	return true
+}
+func safeExportName(name, kind string) bool {
+	if kind == "environment" {
+		return safeEnvironmentName(name)
+	}
+	return safeValue(name) && strings.HasPrefix(name, "-")
 }
