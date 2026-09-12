@@ -79,7 +79,7 @@ Home Manager config                    mkClaude / mkPi args
 | `nix/lib/module-options.nix` | extend | `programs.den.claude.resources.{skills,plugins,mcpServers,settings}` and `programs.den.{claude,pi}.bundles`. |
 | `nix/lib/mk-claude.nix` | extend | Wires normalized resources into the adapter: `resourceArgs`, resource store paths into `closureOnlyPackages`, reserved flags grow by `--plugin-dir`, `--mcp-config`, `--strict-mcp-config`, `--setting-sources`. `--settings` becomes Den-owned on both platforms whenever settings content exists. |
 | `nix/lib/mk-pi.nix` | extend | Accepts `bundles` and expands them through the shared helper before the existing `pi-resources.nix` path. |
-| `internal/claude/arguments.go` | maybe | If the hardcoded reserved-flag list is enforced alongside the manifest-driven list, it grows by the four new flags. Data-only change. |
+| `internal/claude/arguments.go`, `internal/arguments/arguments.go` | required | The launcher validates the manifest reserved-flag list by deep equality against the hardcoded Claude policy table, and manifest load fails on mismatch. Both lists grow by the four new flags together with the Nix-side list. Data-only change. |
 
 ### Claude class delivery
 
@@ -89,12 +89,15 @@ Verified against the pinned claude-code 2.1.158 binary: `--plugin-dir <path>`,
 config directory, the project directory, or from a plugin's `skills/`
 directory.
 
-- **plugins**: each entry is staged into a synthesized plugins root passed via
-  `--plugin-dir`.
+- **plugins**: one `--plugin-dir <entry>` per plugin. Verified against the
+  pinned binary: the flag is repeatable and each path must itself be a plugin
+  directory (`.claude-plugin/plugin.json` at its root).
 - **skills**: all skill entries are wrapped into one generated `den-skills`
-  plugin (a `linkFarm` with a `.claude-plugin/plugin.json` manifest and a
-  `skills/` directory of symlinks) delivered through the same `--plugin-dir`
-  channel.
+  plugin (a build-time derivation with a `.claude-plugin/plugin.json`
+  manifest and a `skills/` directory of symlinks, one per discovered
+  `SKILL.md` parent directory) delivered through the same `--plugin-dir`
+  channel. Verified: skills inside a `--plugin-dir` plugin surface to the
+  model.
 - **mcpServers**: rendered to a store file `den-mcp.json` and passed via
   `--mcp-config`. Server commands must be absolute store paths inside the
   sandbox closure.
@@ -222,14 +225,12 @@ launch-time failures remain the existing launcher integrity checks.
 
 Ordered so the riskiest assumption is retired first.
 
-1. **Spike check: `--plugin-dir` semantics.**
+1. **Regression check: `--plugin-dir` semantics.**
+   The spike ran during design and passed: `--plugin-dir` is repeatable,
+   accepts a plugin directory, and plugin skills surface in the API request.
    `nix/check-support/claude-plugin-injection.nix`, styled after
-   `claude-settings-merge`: launch pinned claude-code 2.1.158 against the
-   local Python API fixture with a synthesized `den-skills` plugin and assert
-   the skill name appears in the captured API request. This validates the
-   flag's directory-layout expectation and the skills-in-plugin delivery
-   before anything is built on it. If it fails, skills fall back to
-   config-directory seeding, isolated inside `claude-resources.nix`.
+   `claude-settings-merge`, codifies the spike as a permanent regression
+   check so a future claude-code pin bump cannot silently break delivery.
 2. **Eval-time checks** (extend `module-api` / `package-api` patterns):
    - `mkClaude { bundles = [ fixture ]; }` and the inline-equivalent
      `mkClaude { resources = ...; }` yield identical
@@ -279,6 +280,6 @@ Exit gate: `nix flake check --accept-flake-config --print-build-logs` green.
 
 | Risk | Mitigation |
 | --- | --- |
-| `--plugin-dir` rejects the synthesized layout or does not surface plugin skills | Spike check runs first; fallback is config-directory seeding for skills only, isolated in `claude-resources.nix`. |
+| A future claude-code pin bump changes `--plugin-dir` behavior | The `claude-plugin-injection` regression check exercises the real binary on every `nix flake check`. |
 | Settings merge breaks the Darwin fence-hook validation flow | The merged file is Den-generated and the fence entry is appended last; the extended `claude-settings-merge` check asserts the fence marker still fires. |
-| Reserved-flag enforcement is split between manifest data and hardcoded Go | Implementation reconciles both layers; the Go change, if needed, is data-only with existing test coverage. |
+| Reserved-flag enforcement is split between manifest data and hardcoded Go | Confirmed: both Go lists and the Nix list must change in one commit because manifest load deep-equals the policy table. The plan updates them together. |
