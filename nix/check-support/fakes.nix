@@ -14,6 +14,15 @@ let
     mkAgentSandbox = value: value;
   }) { };
   darwinSettings = darwinAdapter.adapter.agent.darwinSettings;
+  fenceSettings = {
+    hooks.PreToolUse = [{
+      matcher = "Bash";
+      hooks = [{
+        type = "command";
+        command = "${fakeFence}/bin/fence --claude-pre-tool-use --settings \"$DEN_FENCE_POLICY_FILE\"";
+      }];
+    }];
+  };
   dependencies = {
     fence = fakeFence;
     repoWolfClient = fakeRepoWolfClient;
@@ -38,7 +47,7 @@ let
       normalizedResources = import ../lib/claude-resources.nix { inherit pkgs; } {
         resources = mergedResources;
         extraPkgs = [ ];
-        baseSettings = null;
+        baseSettings = if pkgs.stdenv.isDarwin then fenceSettings else null;
       };
     in
     mkAgentSandbox {
@@ -48,7 +57,7 @@ let
       podman = { };
       adapter = {
         runtimePackages = [ fakeClaude ];
-        closureOnlyPackages = pkgs.lib.optionals pkgs.stdenv.isDarwin [ darwinSettings ]
+        closureOnlyPackages = pkgs.lib.optionals pkgs.stdenv.isDarwin [ normalizedResources.settingsFile ]
           ++ normalizedResources.closureInputs;
         output = {
           packageName = "claude";
@@ -68,8 +77,8 @@ let
           packageDirectory = null;
           securityAdapter = if pkgs.stdenv.isDarwin then {
             kind = "claude-settings";
-            path = darwinSettings;
-            arguments = [ "--settings" darwinSettings ];
+            path = normalizedResources.settingsFile;
+            arguments = [ "--settings" normalizedResources.settingsFile ];
           } else null;
         };
         stateBindings = [{

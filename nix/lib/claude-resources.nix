@@ -48,6 +48,7 @@ let
     ''
       set -eu
       mkdir -p "$out/.claude-plugin" "$out/skills"
+      declare -A skillDirectories
       printf '%s\n' '{"name":"den-skills","description":"Den injected skills","version":"1.0.0"}' \
         > "$out/.claude-plugin/plugin.json"
       for entry in ${lib.escapeShellArgs (map toString resources.skills)}; do
@@ -56,10 +57,16 @@ let
           found=true
           skillDirectory=$(dirname "$skillFile")
           skillName=$(basename "$skillDirectory")
+          canonicalSkillDirectory=$(realpath -e "$skillDirectory")
           if [ -e "$out/skills/$skillName" ]; then
             echo "Claude skill name collides: $skillName" >&2
             exit 1
           fi
+          if [ -n "''${skillDirectories[$canonicalSkillDirectory]+x}" ]; then
+            echo "Claude skill directory is included more than once: $canonicalSkillDirectory" >&2
+            exit 1
+          fi
+          skillDirectories[$canonicalSkillDirectory]=1
           ln -s "$skillDirectory" "$out/skills/$skillName"
         done < <(find -L "$entry" -type f -name SKILL.md)
         if [ "$found" != true ]; then
@@ -114,7 +121,12 @@ let
           echo "Claude plugin has no .claude-plugin/plugin.json: $entry" >&2
           exit 1
         fi
-        name=$(${pkgs.jq}/bin/jq -er .name "$manifest") || {
+        name=$(${pkgs.jq}/bin/jq -er '
+          if ((.name | type) == "string" and (.name | length) > 0)
+          then .name
+          else error("invalid plugin name")
+          end
+        ' "$manifest") || {
           echo "Claude plugin manifest has no name: $entry" >&2
           exit 1
         }
@@ -130,6 +142,17 @@ let
           echo "Claude MCP server command is not executable: ${server.command}" >&2
           exit 1
         fi
+        canonicalCommand=$(realpath -e ${lib.escapeShellArg server.command}) || {
+          echo "Claude MCP server command cannot be resolved: ${server.command}" >&2
+          exit 1
+        }
+        case "$canonicalCommand" in
+          ${builtins.storeDir}/*) ;;
+          *)
+            echo "Claude MCP server command resolves outside the store: ${server.command}" >&2
+            exit 1
+            ;;
+        esac
       '') (builtins.attrValues mcpServers)}
       echo 'Claude resource validation passed.' > "$out"
     '';

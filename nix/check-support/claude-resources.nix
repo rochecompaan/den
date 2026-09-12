@@ -56,6 +56,24 @@ let
     baseSettings = null;
   };
   invalidSkillBuild = pkgs.testers.testBuildFailure invalidSkillResources.skillsPlugin;
+  canonicalSkill = pkgs.runCommand "canonical-skill" { } ''
+    mkdir -p "$out/shared-skill"
+    printf '%s\n' 'canonical skill' > "$out/shared-skill/SKILL.md"
+  '';
+  skillAliasOne = pkgs.runCommand "skill-alias-one" { } ''
+    mkdir -p "$out"
+    ln -s ${canonicalSkill}/shared-skill "$out/first-alias"
+  '';
+  skillAliasTwo = pkgs.runCommand "skill-alias-two" { } ''
+    mkdir -p "$out"
+    ln -s ${canonicalSkill}/shared-skill "$out/second-alias"
+  '';
+  duplicateCanonicalSkillBuild = pkgs.testers.testBuildFailure
+    (claudeResources {
+      resources = empty // { skills = [ skillAliasOne skillAliasTwo ]; };
+      extraPkgs = [ ];
+      baseSettings = null;
+    }).skillsPlugin;
   invalidPluginBuild = pkgs.testers.testBuildFailure
     (claudeResources {
       resources = empty // { plugins = [ pluginWithoutManifest ]; };
@@ -76,10 +94,30 @@ let
       extraPkgs = [ ];
       baseSettings = null;
     }).diagnosticsCheck;
+  nonStringPluginName = pkgs.runCommand "non-string-plugin-name" { } ''
+    mkdir -p "$out/.claude-plugin"
+    printf '%s\n' '{"name":true}' > "$out/.claude-plugin/plugin.json"
+  '';
+  invalidPluginNameBuild = pkgs.testers.testBuildFailure
+    (claudeResources {
+      resources = empty // { plugins = [ nonStringPluginName ]; };
+      extraPkgs = [ ];
+      baseSettings = null;
+    }).diagnosticsCheck;
   nonExecutableMcp = pkgs.writeText "non-executable-mcp" "not executable";
   invalidMcpBuild = pkgs.testers.testBuildFailure
     (claudeResources {
       resources = empty // { mcpServers.nonExecutable = { command = "${nonExecutableMcp}"; }; };
+      extraPkgs = [ ];
+      baseSettings = null;
+    }).diagnosticsCheck;
+  escapingMcp = pkgs.runCommand "escaping-mcp" { } ''
+    mkdir -p "$out/bin"
+    ln -s /bin/sh "$out/bin/escape"
+  '';
+  escapingMcpBuild = pkgs.testers.testBuildFailure
+    (claudeResources {
+      resources = empty // { mcpServers.escape = { command = "${escapingMcp}/bin/escape"; }; };
       extraPkgs = [ ];
       baseSettings = null;
     }).diagnosticsCheck;
@@ -155,8 +193,11 @@ pkgs.runCommand "claude-resources-check"
     test -f ${builtins.elemAt full.resourceArgs 3}/.claude-plugin/plugin.json
     test -e ${builtins.elemAt full.resourceArgs 3}/skills/fixture-bundle-skill/SKILL.md
     test -e ${invalidSkillBuild}
+    test -e ${duplicateCanonicalSkillBuild}
     test -e ${invalidPluginBuild}
     test -e ${invalidDuplicatePluginBuild}
+    test -e ${invalidPluginNameBuild}
     test -e ${invalidMcpBuild}
+    test -e ${escapingMcpBuild}
     echo claude-resources checks passed > "$out"
   ''

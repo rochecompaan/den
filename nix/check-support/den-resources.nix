@@ -26,6 +26,18 @@ let
   badBundleNoPassthru = pkgs.runCommand "bad-bundle" { } "mkdir $out";
   badBundleAgent = pkgs.runCommand "bad-agent" { passthru.denResources.codex = { }; } "mkdir $out";
   badBundleClass = pkgs.runCommand "bad-class" { passthru.denResources.claude.extensions = [ ]; } "mkdir $out";
+  mutableBundleResource = pkgs.runCommand "mutable-bundle-resource" {
+    passthru.denResources.claude.plugins = [ "/tmp/mutable-plugin" ];
+  } "mkdir $out";
+  malformedBundleList = pkgs.runCommand "malformed-bundle-list" {
+    passthru.denResources.claude.plugins = parts.plugin;
+  } "mkdir $out";
+  invalidBundleMcp = pkgs.runCommand "invalid-bundle-mcp" {
+    passthru.denResources.claude.mcpServers.fixture = "not-a-server";
+  } "mkdir $out";
+  invalidBundleSettings = pkgs.runCommand "invalid-bundle-settings" {
+    passthru.denResources.claude.settings = [ true ];
+  } "mkdir $out";
   duplicateMcp = denResources {
     agent = "claude";
     bundles = [ bundle ];
@@ -48,5 +60,9 @@ assert builtins.elem "--skill" piViaBundle.adapter.agent.resourceArgs;
 assert fails (denResources { agent = "claude"; bundles = [ badBundleNoPassthru ]; resources = emptyClaude; });
 assert fails (denResources { agent = "claude"; bundles = [ badBundleAgent ]; resources = emptyClaude; });
 assert fails (denResources { agent = "claude"; bundles = [ badBundleClass ]; resources = emptyClaude; });
+assert fails (denResources { agent = "claude"; bundles = [ mutableBundleResource ]; resources = emptyClaude; });
+assert fails (denResources { agent = "claude"; bundles = [ malformedBundleList ]; resources = emptyClaude; });
+assert fails (denResources { agent = "claude"; bundles = [ invalidBundleMcp ]; resources = emptyClaude; });
+assert fails (denResources { agent = "claude"; bundles = [ invalidBundleSettings ]; resources = emptyClaude; });
 assert fails duplicateMcp;
 pkgs.runCommand "den-resources-check" { } "echo den-resources eval checks passed > $out"

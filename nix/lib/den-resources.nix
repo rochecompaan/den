@@ -10,6 +10,42 @@ let
   knownAgents = builtins.attrNames agentClasses;
   bundleName = bundle: bundle.name or "<unnamed>";
   hasOnly = allowed: value: lib.all (name: builtins.elem name allowed) (builtins.attrNames value);
+  force = values: lib.foldl' (result: value: builtins.seq value result) true values;
+  isResource = value: lib.isDerivation value || builtins.isPath value;
+  isSettingsFragment = value: isResource value || (builtins.isAttrs value && !lib.isDerivation value);
+
+  validateContribution = bundle: agentName: contribution:
+    let
+      bundleLabel = "Den bundle ${bundleName bundle}";
+      classes = agentClasses.${agentName};
+      validateList = class:
+        let
+          entries = contribution.${class};
+          isEntry = if agentName == "claude" && class == "settings"
+            then isSettingsFragment
+            else isResource;
+        in
+        assert lib.assertMsg (builtins.isList entries)
+          "${bundleLabel} ${agentName}.${class} must be a list";
+        assert lib.assertMsg (lib.all isEntry entries)
+          "${bundleLabel} ${agentName}.${class} must contain only Nix paths or packages";
+        entries;
+      validateAttrs = class:
+        let entries = contribution.${class}; in
+        assert lib.assertMsg (builtins.isAttrs entries)
+          "${bundleLabel} ${agentName}.${class} must be an attribute set";
+        assert lib.assertMsg (lib.all builtins.isAttrs (builtins.attrValues entries))
+          "${bundleLabel} ${agentName}.${class} must be an attribute set of server definitions";
+        entries;
+    in
+    assert lib.assertMsg (builtins.isAttrs contribution)
+      "${bundleLabel} ${agentName} resources must be an attribute set";
+    assert lib.assertMsg (hasOnly (classes.listClasses ++ classes.attrClasses) contribution)
+      "${bundleLabel} declares an unknown resource class";
+    assert force
+      (map validateList (builtins.filter (class: builtins.hasAttr class contribution) classes.listClasses)
+        ++ map validateAttrs (builtins.filter (class: builtins.hasAttr class contribution) classes.attrClasses));
+    contribution;
 
   validateBundle = bundle:
     assert lib.assertMsg (lib.isDerivation bundle)
@@ -18,12 +54,8 @@ let
       "Den bundle is missing passthru.denResources: ${bundleName bundle}";
     assert lib.assertMsg (hasOnly knownAgents bundle.denResources)
       "Den bundle declares an unknown agent: ${bundleName bundle}";
-    assert lib.assertMsg (lib.all
-      (agentName:
-        hasOnly (agentClasses.${agentName}.listClasses ++ agentClasses.${agentName}.attrClasses)
-          bundle.denResources.${agentName})
-      (builtins.attrNames bundle.denResources))
-      "Den bundle declares an unknown resource class: ${bundleName bundle}";
+    assert force (map (agentName: validateContribution bundle agentName bundle.denResources.${agentName})
+      (builtins.attrNames bundle.denResources));
     bundle;
 
   validated = map validateBundle bundles;
