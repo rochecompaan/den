@@ -1,5 +1,36 @@
 { pkgs }:
 
+let
+  plugin = pkgs.runCommand "claude-plugin-injection-plugin" { } ''
+    mkdir -p "$out/.claude-plugin" "$out/skills/injection-check-skill"
+    printf '%s\n' '{"name":"den-skills","description":"Den injected skills","version":"1.0.0"}' \
+      > "$out/.claude-plugin/plugin.json"
+    {
+      printf -- '---\n'
+      printf 'name: injection-check-skill\n'
+      printf 'description: Use when the user says zebra-quartz\n'
+      printf -- '---\n'
+      printf 'Reply with the word verified.\n'
+    } > "$out/skills/injection-check-skill/SKILL.md"
+  '';
+  secondPlugin = pkgs.runCommand "claude-plugin-injection-second-plugin" { } ''
+    mkdir -p "$out/.claude-plugin" "$out/skills/second-check-skill"
+    printf '%s\n' '{"name":"second-plugin","version":"1.0.0"}' > "$out/.claude-plugin/plugin.json"
+    {
+      printf -- '---\n'
+      printf 'name: second-check-skill\n'
+      printf 'description: Use when the user says onyx-falcon\n'
+      printf -- '---\n'
+      printf 'Reply with the word confirmed.\n'
+    } > "$out/skills/second-check-skill/SKILL.md"
+  '';
+  mcpConfig = pkgs.writeText "claude-plugin-injection-mcp.json" (builtins.toJSON {
+    mcpServers.injection-check = {
+      command = "${pkgs.coreutils}/bin/true";
+      args = [ ];
+    };
+  });
+in
 pkgs.writeShellApplication {
   name = "claude-plugin-injection";
   runtimeInputs = [ pkgs.claude-code pkgs.coreutils pkgs.gnugrep pkgs.python3 ];
@@ -20,32 +51,9 @@ pkgs.writeShellApplication {
     trap cleanup EXIT
 
     mkdir -p "$root/home" "$root/config" "$root/work"
-
-    plugin=$root/den-skills
-    mkdir -p "$plugin/.claude-plugin" "$plugin/skills/injection-check-skill"
-    printf '%s\n' '{"name":"den-skills","description":"Den injected skills","version":"1.0.0"}' \
-      > "$plugin/.claude-plugin/plugin.json"
-    {
-      printf -- '---\n'
-      printf 'name: injection-check-skill\n'
-      printf 'description: Use when the user says zebra-quartz\n'
-      printf -- '---\n'
-      printf 'Reply with the word verified.\n'
-    } > "$plugin/skills/injection-check-skill/SKILL.md"
-
-    second=$root/second-plugin
-    mkdir -p "$second/.claude-plugin" "$second/skills/second-check-skill"
-    printf '%s\n' '{"name":"second-plugin","version":"1.0.0"}' > "$second/.claude-plugin/plugin.json"
-    {
-      printf -- '---\n'
-      printf 'name: second-check-skill\n'
-      printf 'description: Use when the user says onyx-falcon\n'
-      printf -- '---\n'
-      printf 'Reply with the word confirmed.\n'
-    } > "$second/skills/second-check-skill/SKILL.md"
-
-    printf '%s\n' '{"mcpServers":{"injection-check":{"command":"${pkgs.coreutils}/bin/true","args":[]}}}' \
-      > "$root/mcp.json"
+    plugin=${pkgs.lib.escapeShellArg plugin}
+    secondPlugin=${pkgs.lib.escapeShellArg secondPlugin}
+    mcpConfig=${pkgs.lib.escapeShellArg mcpConfig}
 
     cat > "$root/fixture.py" <<'PYTHON'
     import http.server, json, os
@@ -72,16 +80,23 @@ pkgs.writeShellApplication {
         def log_message(self, *arguments):
             pass
 
-    http.server.HTTPServer(("127.0.0.1", 18899), Handler).serve_forever()
+    server = http.server.HTTPServer(("127.0.0.1", 18899), Handler)
+    open(os.environ["DEN_TEST_READY_MARKER"], "w").close()
+    server.serve_forever()
     PYTHON
 
     export CAPTURE_FILE="$root/capture.txt"
-    python3 "$root/fixture.py" &
+    export DEN_TEST_READY_MARKER="$root/fixture-ready"
+    python3 "$root/fixture.py" > "$root/fixture.log" 2>&1 &
     fixturePID=$!
-    sleep 1
+    for _ in $(seq 1 100); do
+      test -e "$DEN_TEST_READY_MARKER" && break
+      sleep 0.05
+    done
+    test -e "$DEN_TEST_READY_MARKER"
 
     cd "$root/work"
-    env -i \
+    if ! timeout 30 env -i \
       HOME="$root/home" \
       CLAUDE_CONFIG_DIR="$root/config" \
       ANTHROPIC_API_KEY=test-key \
@@ -89,9 +104,15 @@ pkgs.writeShellApplication {
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
       NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
       ${pkgs.claude-code}/bin/claude \
-        --plugin-dir "$plugin" --plugin-dir "$second" \
-        --mcp-config "$root/mcp.json" \
-        --print hello > "$root/stdout.txt"
+        --plugin-dir "$plugin" --plugin-dir "$secondPlugin" \
+        --mcp-config "$mcpConfig" \
+        --print hello > "$root/stdout.txt" 2> "$root/stderr.txt"; then
+      cat "$root/stdout.txt" >&2
+      cat "$root/stderr.txt" >&2
+      cat "$root/fixture.log" >&2
+      test ! -e "$root/capture.txt" || cat "$root/capture.txt" >&2
+      exit 1
+    fi
 
     grep -q '^ok$' "$root/stdout.txt"
     grep -q injection-check-skill "$root/capture.txt"
