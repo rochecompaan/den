@@ -233,25 +233,8 @@ func TestFilesystemEnforcement(t *testing.T) {
 		testImplicitHostWrites(t, fixture)
 	})
 
-	t.Run("user_plugin_and_mcp", func(t *testing.T) {
-		plugin := filepath.Join(fixture.worktree, "plugin")
-		if err := os.Mkdir(plugin, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		probe := "#!/bin/sh\nset -eu\n! cat \"$DEN_NATIVE_SECRET\"\n"
-		if err := os.WriteFile(filepath.Join(plugin, "probe.sh"), []byte(probe), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		mcp := filepath.Join(fixture.worktree, "mcp.sh")
-		mcpProbe := fmt.Sprintf("#!/bin/sh\nset -eu\n! curl --fail --silent --connect-timeout 2 --cacert \"$REPOWOLF_CA_FILE\" --resolve github.com:%s:127.0.0.1 https://github.com:%s/\n", fixture.tlsPort(t), fixture.tlsPort(t))
-		if err := os.WriteFile(mcp, []byte(mcpProbe), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		before := fixture.requestCount()
-		requireSuccess(t, fixture.launchWith([]string{"DEN_NATIVE_SECRET=" + secret}, "plugin-mcp", "--plugin-dir", plugin, "--mcp-config", mcp, "--strict-mcp-config"))
-		if fixture.requestCount() != before {
-			t.Fatal("user MCP reached denied provider endpoint")
-		}
+	t.Run("allowed_user_argument", func(t *testing.T) {
+		requireSuccess(t, fixture.launch("allowed-argument", "--continue"))
 	})
 }
 

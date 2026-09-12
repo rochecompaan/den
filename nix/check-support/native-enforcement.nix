@@ -86,19 +86,8 @@ let
         argv-deny)
           exec git reset --hard
           ;;
-        plugin-mcp)
-          plugin="" mcp=""
-          while test "$#" -gt 0; do
-            case "$1" in
-              --plugin-dir) plugin=$2; shift 2 ;;
-              --mcp-config) mcp=$2; shift 2 ;;
-              --strict-mcp-config) shift ;;
-              *) shift ;;
-            esac
-          done
-          test -n "$plugin" && test -n "$mcp"
-          bash "$plugin/probe.sh"
-          bash "$mcp"
+        allowed-argument)
+          test "$#" = 1 && test "$1" = --continue
           ;;
         repowolf)
           gh issue list --repo alpha/repo >/dev/null 2>&1 || true

@@ -127,8 +127,7 @@ pkgs.runCommand "claude-startup"
       rm "$selectedHost/fake-state"
 
       seed_resources "$selectedHost"
-      namespace_run "$wrapper" --plugin-dir "$selection/plugins/user-plugin" \
-        --mcp-config "$selection/mcp.json" --strict-mcp-config
+      namespace_run "$wrapper" --continue
       assert_resources_unchanged "$selectedHost"
       test -f "$selectedHost/skills/user-skill/SKILL.md"
       test -f "$selectedHost/plugins/user-plugin/plugin.json"

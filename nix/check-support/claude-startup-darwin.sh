@@ -135,7 +135,7 @@ run_custom() {
   rm "$selection/fake-state"
   seed_resources "$selection"
   : > "$DEN_CONFIGDIR_ACL_DIAGNOSTIC_LOG"
-  run_native "$manifest" --plugin-dir "$selection/plugins/user-plugin" --mcp-config "$selection/mcp.json" --strict-mcp-config || {
+  run_native "$manifest" --continue || {
     local status=$?
     printf 'sanitized Darwin ACL diagnostics:\n' >&2
     cat "$DEN_CONFIGDIR_ACL_DIAGNOSTIC_LOG" >&2
