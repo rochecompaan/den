@@ -10,6 +10,10 @@ var reservedFlags = []string{
 	"--settings",
 	"--permission-mode",
 	"--dangerously-skip-permissions",
+	"--plugin-dir",
+	"--mcp-config",
+	"--strict-mcp-config",
+	"--setting-sources",
 }
 
 // ValidateArguments rejects user arguments that could override Den's settings.

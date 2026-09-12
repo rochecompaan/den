@@ -153,7 +153,7 @@ let
         argumentPolicy = "claude";
         mandatoryArgs = [ ];
         resourceArgs = [ ];
-        reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" ];
+        reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" "--plugin-dir" "--mcp-config" "--strict-mcp-config" "--setting-sources" ];
         reservedCommands = [ ];
         environment = { scrub = [ ]; set = { }; };
         packageDirectory = null;

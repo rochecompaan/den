@@ -27,7 +27,7 @@ pkgs.runCommand "claude-adapter"
       .agent.executable == $executable and
       .agent.executable != $claudeBinary and
       .agent.mandatoryArgs == ["--dangerously-skip-permissions"] and
-      .agent.reservedFlags == ["--settings", "--permission-mode", "--dangerously-skip-permissions"] and
+      .agent.reservedFlags == ["--settings", "--permission-mode", "--dangerously-skip-permissions", "--plugin-dir", "--mcp-config", "--strict-mcp-config", "--setting-sources"] and
       .agent.configEnvironment == "CLAUDE_CONFIG_DIR" and
       (.agent | has("skills") | not) and
       (.agent | has("plugins") | not) and

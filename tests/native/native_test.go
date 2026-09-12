@@ -384,7 +384,12 @@ exec %s "$@"
 
 func TestReservedClaudeArgumentsFailBeforeFence(t *testing.T) {
 	fixture := newNativeFixture(t)
-	for _, argument := range []string{"--settings", "--settings=x", "--permission-mode", "--permission-mode=x", "--dangerously-skip-permissions", "--dangerously-skip-permissions=x"} {
+	for _, argument := range []string{
+		"--settings", "--settings=x", "--permission-mode", "--permission-mode=x",
+		"--dangerously-skip-permissions", "--dangerously-skip-permissions=x",
+		"--plugin-dir", "--plugin-dir=x", "--mcp-config", "--mcp-config=x",
+		"--strict-mcp-config", "--strict-mcp-config=x", "--setting-sources", "--setting-sources=x",
+	} {
 		command := exec.Command(os.Getenv("DEN_NATIVE_CLAUDE"), argument)
 		command.Dir = fixture.worktree
 		command.Env = replaceEnvironment(os.Environ(),

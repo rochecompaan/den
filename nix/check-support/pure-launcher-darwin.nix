@@ -161,7 +161,10 @@ pkgs.runCommand "pure-launcher"
     unset CLAUDE_CONFIG_DIR
     expect_early_failure ${relativeExplicitSandbox}/bin/claude
     for argument in --settings --settings=x --permission-mode --permission-mode=x \
-      --dangerously-skip-permissions --dangerously-skip-permissions=x --bare --bare=value; do
+      --dangerously-skip-permissions --dangerously-skip-permissions=x \
+      --plugin-dir --plugin-dir=x --mcp-config --mcp-config=x \
+      --strict-mcp-config --strict-mcp-config=x --setting-sources --setting-sources=x \
+      --bare --bare=value; do
       expect_early_failure run_sandbox "$argument"
     done
 

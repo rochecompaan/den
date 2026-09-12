@@ -8,14 +8,15 @@ import (
 func TestValidateArguments(t *testing.T) {
 	piFlags := []string{"--session-dir", "--session", "--fork", "--export", "--extension", "-e", "--skill", "--prompt-template", "--theme"}
 	piCommands := []string{"install", "remove", "uninstall", "update", "list", "config"}
-	claudeFlags := []string{"--settings", "--permission-mode", "--dangerously-skip-permissions"}
+	claudeFlags := []string{"--settings", "--permission-mode", "--dangerously-skip-permissions", "--plugin-dir", "--mcp-config", "--strict-mcp-config", "--setting-sources"}
 	for _, test := range []struct {
 		name, policy          string
 		flags, commands, user []string
 		wantErr               bool
 	}{
 		{"Pi policy", "pi-0.84.4", piFlags, piCommands, []string{"--continue"}, false},
-		{"Claude policy preserves existing flags", "claude", claudeFlags, nil, []string{"--plugin-dir", "plugin"}, false},
+		{"Claude policy rejects plugin dir", "claude", claudeFlags, nil, []string{"--plugin-dir", "plugin"}, true},
+		{"Claude policy allows continue", "claude", claudeFlags, nil, []string{"--continue"}, false},
 		{"unknown policy is invalid", "unknown", nil, nil, nil, true},
 		{"Pi manifest flags must match", "pi-0.84.4", piFlags[:len(piFlags)-1], piCommands, nil, true},
 		{"Pi manifest commands must match", "pi-0.84.4", piFlags, piCommands[:len(piCommands)-1], nil, true},
