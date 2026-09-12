@@ -11,6 +11,18 @@ let
   overlapOutside = fakes.mkSandbox { configDir = "/tmp/den-task12-startup/home"; };
   symlinkInside = fakes.mkSandbox { configDir = "/tmp/den-task12-startup/worktree/link-state"; };
   symlinkOutside = fakes.mkSandbox { configDir = "/tmp/den-task12-startup-outside-link"; };
+  fixtureSkill = pkgs.runCommand "claude-startup-resource-skill" { } ''
+    mkdir -p "$out/claude-startup-resource-skill"
+    printf '%s\n' '---' 'name: claude-startup-resource-skill' 'description: startup fixture' '---' 'Reply with fixture.' \
+      > "$out/claude-startup-resource-skill/SKILL.md"
+  '';
+  fakeMcp = pkgs.writeShellScriptBin "claude-startup-fake-mcp" "exit 0";
+  resourceSandbox = fakes.mkSandbox {
+    resources = {
+      skills = [ fixtureSkill ];
+      mcpServers.check = { command = "${fakeMcp}/bin/claude-startup-fake-mcp"; };
+    };
+  };
 in
 pkgs.runCommand "claude-startup"
   {
@@ -149,6 +161,18 @@ pkgs.runCommand "claude-startup"
     run_custom ${inheritedSandbox}/bin/claude ${inside} inherited inside-inherited
     git check-ignore -q "$rootHost/worktree/.den-claude"
     run_custom ${inheritedSandbox}/bin/claude ${outside} inherited outside-inherited
+
+    # Resource flags are manifest-owned; --continue remains the benign user arg.
+    unset CLAUDE_CONFIG_DIR DEN_FAKE_STATE_MODE DEN_FAKE_EXPECT_UID DEN_FAKE_POLICY_COPY
+    export HOME="$root/home"
+    export REPOWOLF_ENDPOINT=https://broker.example.test/
+    export REPOWOLF_TOKEN="$token"
+    export REPOWOLF_CA_FILE="$root/ca.pem"
+    export DEN_FAKE_AGENT_LOG="$root/claude-arguments"
+    rm -f "$rootHost/claude-arguments"
+    namespace_run ${resourceSandbox}/bin/claude --continue
+    grep -q -- '--plugin-dir' "$rootHost/claude-arguments"
+    grep -q -- '--mcp-config' "$rootHost/claude-arguments"
     unset CLAUDE_CONFIG_DIR DEN_FAKE_STATE_MODE DEN_FAKE_EXPECT_UID DEN_FAKE_POLICY_COPY
     export DEN_FAKE_FENCE_MARKER="$root/fence.marker"
     export DEN_FAKE_AGENT_LOG="$root/agent.log"

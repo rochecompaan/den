@@ -16,7 +16,9 @@ let
     inherit pkgs;
     mkAgentSandbox = value: value;
   };
-  adapter = (mkClaude { }).adapter;
+  adapter = (mkClaude {
+    resources.settings = [ { env.DEN_TEST_FRAGMENT = "merged"; } ];
+  }).adapter;
   mandatoryArgs = pkgs.lib.escapeShellArgs (adapter.agent.mandatoryArgs ++ adapter.agent.securityAdapter.arguments);
 in
 pkgs.writeShellApplication {
@@ -267,6 +269,14 @@ pkgs.writeShellApplication {
     test -e "$DEN_TEST_USER_MARKER"
     test -e "$DEN_TEST_BASH_MARKER"
     test -e "$DEN_TEST_FINAL_MARKER"
+    grep -q '"DEN_TEST_FRAGMENT":"merged"' "$settings"
+    ${pkgs.python3}/bin/python3 - "$settings" <<'PYTHON'
+    import json, sys
+    with open(sys.argv[1]) as handle:
+        merged = json.load(handle)
+    hooks = merged["hooks"]["PreToolUse"]
+    assert "claude-pre-tool-use" in json.dumps(hooks[-1]), "fence hook must be last"
+    PYTHON
     test ! -e "$DEN_TEST_EXTERNAL_MARKER"
     test ! -e "$DEN_TEST_PROTOCOL_MARKER"
     grep -Fx "fixture complete" "$root/claude.out"

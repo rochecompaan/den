@@ -23,7 +23,24 @@ let
     coreutils = pkgs.coreutils;
     inherit aclProbeDarwin;
   } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux { acl = pkgs.acl; };
-  mkSandbox = { configDir ? null }:
+  mkSandbox = { configDir ? null, resources ? { }, bundles ? [ ] }:
+    let
+      mergedResources = import ../lib/den-resources.nix { inherit pkgs; } {
+        agent = "claude";
+        inherit bundles;
+        resources = {
+          skills = [ ];
+          plugins = [ ];
+          mcpServers = { };
+          settings = [ ];
+        } // resources;
+      };
+      normalizedResources = import ../lib/claude-resources.nix { inherit pkgs; } {
+        resources = mergedResources;
+        extraPkgs = [ ];
+        baseSettings = null;
+      };
+    in
     mkAgentSandbox {
       inherit configDir dependencies;
       extraPkgs = [ ];
@@ -31,7 +48,8 @@ let
       podman = { };
       adapter = {
         runtimePackages = [ fakeClaude ];
-        closureOnlyPackages = pkgs.lib.optionals pkgs.stdenv.isDarwin [ darwinSettings ];
+        closureOnlyPackages = pkgs.lib.optionals pkgs.stdenv.isDarwin [ darwinSettings ]
+          ++ normalizedResources.closureInputs;
         output = {
           packageName = "claude";
           commandName = "claude";
@@ -43,7 +61,7 @@ let
           executable = "${fakeClaude}/bin/claude";
           argumentPolicy = "claude";
           mandatoryArgs = [ "--dangerously-skip-permissions" ];
-          resourceArgs = [ ];
+          resourceArgs = normalizedResources.resourceArgs;
           reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" "--plugin-dir" "--mcp-config" "--strict-mcp-config" "--setting-sources" ];
           reservedCommands = [ ];
           environment = { scrub = [ ]; set = { }; };

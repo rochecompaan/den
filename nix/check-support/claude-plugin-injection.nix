@@ -1,9 +1,21 @@
 { pkgs }:
 
 let
+  claudeResources = import ../lib/claude-resources.nix { inherit pkgs; };
+  bundleFixture = import ./fixture-bundle.nix { inherit pkgs; };
+  normalized = claudeResources {
+    resources = {
+      skills = [ bundleFixture.fixtureParts.skill ];
+      plugins = [ bundleFixture.fixtureParts.plugin ];
+      mcpServers = { };
+      settings = [ ];
+    };
+    extraPkgs = [ ];
+    baseSettings = null;
+  };
   plugin = pkgs.runCommand "claude-plugin-injection-plugin" { } ''
     mkdir -p "$out/.claude-plugin" "$out/skills/injection-check-skill"
-    printf '%s\n' '{"name":"den-skills","description":"Den injected skills","version":"1.0.0"}' \
+    printf '%s\n' '{"name":"first-plugin","description":"First raw plugin","version":"1.0.0"}' \
       > "$out/.claude-plugin/plugin.json"
     {
       printf -- '---\n'
@@ -117,6 +129,29 @@ pkgs.writeShellApplication {
     grep -q '^ok$' "$root/stdout.txt"
     grep -q injection-check-skill "$root/capture.txt"
     grep -q second-check-skill "$root/capture.txt"
+
+    # The normalizer-generated den-skills plugin must reach Claude alongside
+    # the fixture's declared plugin, without relying on the raw probe above.
+    : > "$root/capture.txt"
+    if ! timeout 30 env -i \
+      HOME="$root/home" \
+      CLAUDE_CONFIG_DIR="$root/config" \
+      ANTHROPIC_API_KEY=test-key \
+      ANTHROPIC_BASE_URL=http://127.0.0.1:18899 \
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+      NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
+      ${pkgs.claude-code}/bin/claude \
+        ${pkgs.lib.escapeShellArgs normalized.resourceArgs} \
+        --print hello > "$root/normalized-stdout.txt" 2> "$root/normalized-stderr.txt"; then
+      cat "$root/normalized-stdout.txt" >&2
+      cat "$root/normalized-stderr.txt" >&2
+      cat "$root/fixture.log" >&2
+      test ! -e "$root/capture.txt" || cat "$root/capture.txt" >&2
+      exit 1
+    fi
+
+    grep -q '^ok$' "$root/normalized-stdout.txt"
+    grep -q fixture-bundle-skill "$root/capture.txt"
     echo 'claude-plugin-injection passed.'
   '';
 }
