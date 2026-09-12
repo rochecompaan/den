@@ -11,6 +11,17 @@ let
 
   claudeMerged = denResources { agent = "claude"; bundles = [ bundle ]; resources = emptyClaude // { skills = [ parts.skill ]; }; };
   piMerged = denResources { agent = "pi"; bundles = [ bundle ]; resources = emptyPi; };
+  mkPiAdapter = import ../lib/mk-pi.nix {
+    inputs = null;
+    inherit pkgs;
+    mkAgentSandbox = value: value;
+    isDarwin = false;
+  };
+  piViaBundle = mkPiAdapter { bundles = [ bundle ]; };
+  piViaInline = mkPiAdapter {
+    resources.extensions = [ parts.piExtension ];
+    resources.skills = [ parts.skill ];
+  };
 
   badBundleNoPassthru = pkgs.runCommand "bad-bundle" { } "mkdir $out";
   badBundleAgent = pkgs.runCommand "bad-agent" { passthru.denResources.codex = { }; } "mkdir $out";
@@ -29,6 +40,10 @@ assert builtins.attrNames claudeMerged.mcpServers == [ "fixture" ];
 # missing agent key contributes nothing
 assert piMerged.extensions == [ parts.piExtension ];
 assert piMerged.packages == [ ];
+# Pi bundle expansion is equivalent to inline resources.
+assert piViaBundle.adapter.agent.resourceArgs == piViaInline.adapter.agent.resourceArgs;
+assert builtins.elem "--extension" piViaBundle.adapter.agent.resourceArgs;
+assert builtins.elem "--skill" piViaBundle.adapter.agent.resourceArgs;
 # rejection table
 assert fails (denResources { agent = "claude"; bundles = [ badBundleNoPassthru ]; resources = emptyClaude; });
 assert fails (denResources { agent = "claude"; bundles = [ badBundleAgent ]; resources = emptyClaude; });

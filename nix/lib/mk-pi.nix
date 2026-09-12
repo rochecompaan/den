@@ -1,14 +1,20 @@
 { inputs, pkgs, mkAgentSandbox ? import ./mk-agent-sandbox.nix { inherit inputs pkgs; }, isDarwin ? pkgs.stdenv.isDarwin, darwinSecurityTestInputs ? null }:
 
-args@{ agentDir ? null, sessionDir ? null, extraPkgs ? [ ], resources ? { }, docker ? { }, podman ? { }, ... }:
+args@{ agentDir ? null, sessionDir ? null, extraPkgs ? [ ], resources ? { }, bundles ? [ ], docker ? { }, podman ? { }, ... }:
 let
   lib = pkgs.lib;
   options = import ./pi-options.nix { inherit pkgs; } args;
   pi = import ../packages/pi-coding-agent.nix { inherit pkgs; };
   fenceInfo = import ./fence.nix { inherit pkgs; };
   fence = fenceInfo.package;
+  mergedResources = import ./den-resources.nix { inherit pkgs; } {
+    agent = "pi";
+    bundles = options.bundles;
+    resources = options.resources;
+  };
   normalizedResources = import ./pi-resources.nix { inherit pkgs; } {
-    inherit (options) resources extraPkgs;
+    resources = mergedResources;
+    inherit (options) extraPkgs;
   };
   securityExtension = pkgs.writeText "den-pi-security.ts"
     (builtins.replaceStrings [ "@fence@" ] [ "${fence}" ] (builtins.readFile ../pi/den-pi-security.ts));
