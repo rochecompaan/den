@@ -91,6 +91,7 @@ let
 
   # --- flags ---
   hasSkills = resources.skills != [ ];
+  hasConfiguredResources = hasSkills || resources.plugins != [ ] || hasMcp || fragments != [ ];
   pluginArgs = lib.concatMap (entry: [ "--plugin-dir" "${entry}" ]) resources.plugins
     ++ lib.optionals hasSkills [ "--plugin-dir" "${skillsPlugin}" ];
   mcpArgs = lib.optionals hasMcp [ "--mcp-config" "${mcpConfigFile}" ];
@@ -144,5 +145,5 @@ in
   inherit resourceArgs settingsFile diagnosticsCheck;
   # Exposed for the build-failure check; consumers use the documented keys above.
   skillsPlugin = if hasSkills then skillsPlugin else null;
-  closureInputs = [ diagnosticsCheck resourceClosure ];
+  closureInputs = lib.optionals hasConfiguredResources [ diagnosticsCheck resourceClosure ];
 }
