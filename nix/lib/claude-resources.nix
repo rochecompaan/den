@@ -80,7 +80,7 @@ let
       "Claude MCP server ${name} has an unknown option";
     assert lib.assertMsg (server ? command && builtins.isString server.command)
       "Claude MCP server ${name} needs a command string";
-    assert lib.assertMsg (lib.hasPrefix builtins.storeDir server.command)
+    assert lib.assertMsg (lib.hasPrefix "${builtins.storeDir}/" server.command)
       "Claude MCP server ${name} command must be a store path";
     assert lib.assertMsg (builtins.hasContext server.command)
       "Claude MCP server ${name} command must reference its package (write \"\${pkg}/bin/...\")";
