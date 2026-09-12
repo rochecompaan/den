@@ -84,6 +84,22 @@ let
       baseSettings = null;
     }).diagnosticsCheck;
   falsePrefixCommand = "${builtins.storeDir}-not-real/${parts.mcpServer}";
+  mkClaudeAdapter = import ../lib/mk-claude.nix {
+    fence = pkgs.writeShellScriptBin "fence" "exit 0";
+    isDarwin = false;
+    inherit pkgs;
+    mkAgentSandbox = value: value;
+  };
+  inline = {
+    resources = {
+      skills = [ parts.skill ];
+      plugins = [ parts.plugin ];
+      mcpServers.fixture = { command = "${parts.mcpServer}/bin/fixture-bundle-mcp"; args = [ ]; };
+      settings = [ parts.settingsFragment ];
+    };
+  };
+  viaBundle = mkClaudeAdapter { bundles = [ bundle ]; };
+  viaInline = mkClaudeAdapter inline;
 in
 # bare configuration emits nothing
 assert bare.resourceArgs == [ ];
@@ -127,6 +143,9 @@ assert fails (claudeResources {
   resources = empty // { mcpServers.falsePrefix = { command = falsePrefixCommand; }; };
   extraPkgs = [ ]; baseSettings = null;
 }).resourceArgs;
+assert viaBundle.adapter.agent.resourceArgs == viaInline.adapter.agent.resourceArgs;
+assert viaBundle.adapter.agent.resourceArgs != [ ];
+assert builtins.elem "--mcp-config" viaBundle.adapter.agent.resourceArgs;
 pkgs.runCommand "claude-resources-check"
   { nativeBuildInputs = [ ]; }
   ''
