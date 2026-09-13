@@ -1,16 +1,23 @@
 { ... }:
 {
-  perSystem = { pkgs, ... }: {
-    checks.claude-plugin-injection = pkgs.runCommand "claude-plugin-injection-check"
-      {
-        __darwinAllowLocalNetworking = pkgs.stdenv.isDarwin;
-        nativeBuildInputs = [
-          (import ../../nix/check-support/claude-plugin-injection.nix { inherit pkgs; })
-        ];
-      }
-      ''
-        claude-plugin-injection
-        touch "$out"
-      '';
-  };
+  perSystem = { pkgs, ... }:
+    let
+      pluginInjection = import ../../nix/check-support/claude-plugin-injection.nix {
+        inherit pkgs;
+      };
+    in
+    {
+      checks.claude-plugin-injection =
+        if pkgs.stdenv.isDarwin then
+          pluginInjection
+        else
+          pkgs.runCommand "claude-plugin-injection-check"
+            {
+              nativeBuildInputs = [ pluginInjection ];
+            }
+            ''
+              claude-plugin-injection
+              touch "$out"
+            '';
+    };
 }

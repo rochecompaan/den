@@ -28,10 +28,12 @@ case "$DEN_NATIVE_HOST_SYSTEM" in
     ;;
   *-darwin)
     : "${DEN_NATIVE_RESOLVER_HELPER:?packaged resolver helper is required}"
+    : "${DEN_NATIVE_CLAUDE_PLUGIN_INJECTION:?packaged Claude plugin injection fixture is required}"
     : "${DEN_NATIVE_CLAUDE_STARTUP:?packaged Darwin Claude startup fixture is required}"
     : "${DEN_NATIVE_PI_STARTUP:?packaged Darwin Pi startup fixture is required}"
     : "${DEN_NATIVE_FENCE_CAPABILITIES:?packaged Darwin Fence capability fixture is required}"
     : "${DEN_NATIVE_SANDBOX_EXEC:?Darwin sandbox-exec path is required}"
+    test -x "$DEN_NATIVE_CLAUDE_PLUGIN_INJECTION"
     test -x "$DEN_NATIVE_CLAUDE_STARTUP"
     case "$DEN_NATIVE_PI_STARTUP" in
       /*) test -x "$DEN_NATIVE_PI_STARTUP" ;;
@@ -116,6 +118,14 @@ mkdir -m 700 "$DEN_NATIVE_HOST_ROOT"
 if [[ $DEN_NATIVE_HOST_SYSTEM == *-darwin ]]; then
   export TMPDIR=${TMPDIR:-/tmp}
   export DEN_NATIVE_DNS_PORT=38415
+  printf 'executing Claude plugin injection fixture as the invoking host user\n'
+  plugin_injection_output=$("$DEN_NATIVE_CLAUDE_PLUGIN_INJECTION")
+  if [[ $plugin_injection_output != "claude-plugin-injection passed." ]]; then
+    printf 'Claude plugin injection fixture returned unexpected output: %q\n' \
+      "$plugin_injection_output" >&2
+    exit 1
+  fi
+  printf '%s\n' "$plugin_injection_output"
   printf 'executing Darwin Claude startup fixture as the invoking host user\n'
   "$DEN_NATIVE_CLAUDE_STARTUP"
   completion=$DEN_NATIVE_HOST_ROOT/claude-startup.complete
