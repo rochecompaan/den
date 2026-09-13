@@ -41,7 +41,7 @@ let
     resources = empty // { settings = [ { env.DEN_CHECK = "1"; } ]; };
     extraPkgs = [ ]; baseSettings = null;
   };
-  mergedFull = builtins.fromJSON (builtins.readFile full.settingsFile);
+  mergedFull = full.settingsValue;
 
   forbidden = fragment: fails (claudeResources {
     resources = empty // { settings = [ fragment ]; };
@@ -185,11 +185,15 @@ assert viaBundle.adapter.agent.resourceArgs == viaInline.adapter.agent.resourceA
 assert viaBundle.adapter.agent.resourceArgs != [ ];
 assert builtins.elem "--mcp-config" viaBundle.adapter.agent.resourceArgs;
 pkgs.runCommand "claude-resources-check"
-  { nativeBuildInputs = [ ]; }
+  { nativeBuildInputs = [ pkgs.jq ]; }
   ''
     set -eu
     # positive diagnostics build succeeds and skills plugin has the expected layout
     test -e ${full.diagnosticsCheck}
+    ${pkgs.jq}/bin/jq -e '
+      (.hooks.PreToolUse | last | tostring | contains("--claude-pre-tool-use"))
+      and .env.DEN_CHECK == "later"
+    ' ${full.settingsFile} > /dev/null
     test -f ${builtins.elemAt full.resourceArgs 3}/.claude-plugin/plugin.json
     test -e ${builtins.elemAt full.resourceArgs 3}/skills/fixture-bundle-skill/SKILL.md
     test -e ${invalidSkillBuild}

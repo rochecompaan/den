@@ -166,7 +166,8 @@ let
 in
 {
   inherit resourceArgs settingsFile diagnosticsCheck;
-  # Exposed for the build-failure check; consumers use the documented keys above.
+  # Exposed for checks; consumers use the documented keys above.
   skillsPlugin = if hasSkills then skillsPlugin else null;
+  settingsValue = if hasSettings then mergedSettings else null;
   closureInputs = lib.optionals hasConfiguredResources [ diagnosticsCheck resourceClosure ];
 }
