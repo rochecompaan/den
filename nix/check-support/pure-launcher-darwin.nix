@@ -100,7 +100,7 @@ pkgs.runCommand "pure-launcher"
     run_sandbox() { (cd "$root/worktree" && ${sandbox}/bin/claude "$@"); }
 
     set_phase "normal-launcher-execution"
-    run_sandbox "argument with spaces" "" --plugin-dir user-plugin --mcp-config user-mcp.json --strict-mcp-config
+    run_sandbox "argument with spaces" "" --continue
     set_phase "success-path-evidence-assertions"
     test "$(grep -Fxc invoked "$root/fence.marker")" = 1
     if grep -Fq preflight "$root/fence.marker"; then exit 1; fi
@@ -120,13 +120,9 @@ pkgs.runCommand "pure-launcher"
     grep -Fqx 'argv[8]=<${fakes.darwinSettings}>' "$root/fence-argv.log"
     grep -Fqx 'argv[9]=<argument with spaces>' "$root/fence-argv.log"
     grep -Fqx 'argv[10]=<>' "$root/fence-argv.log"
-    grep -Fqx 'argv[11]=<--plugin-dir>' "$root/fence-argv.log"
-    grep -Fqx 'argv[12]=<user-plugin>' "$root/fence-argv.log"
-    grep -Fqx 'argv[13]=<--mcp-config>' "$root/fence-argv.log"
-    grep -Fqx 'argv[14]=<user-mcp.json>' "$root/fence-argv.log"
-    grep -Fqx 'argv[15]=<--strict-mcp-config>' "$root/fence-argv.log"
-    test "$(grep -c '^argv\[' "$root/fence-argv.log")" = 16
-    if grep -q '^argv\[16\]=' "$root/fence-argv.log"; then exit 1; fi
+    grep -Fqx 'argv[11]=<--continue>' "$root/fence-argv.log"
+    test "$(grep -c '^argv\[' "$root/fence-argv.log")" = 12
+    if grep -q '^argv\[12\]=' "$root/fence-argv.log"; then exit 1; fi
     test "$(grep -Fxc 'repowolf-git-ssh <upload> <github.com>' "$root/repowolf.log")" = 2
     test "$(grep -Fxc 'repowolf-git-ssh <receive> <github.com>' "$root/repowolf.log")" = 1
     git --git-dir="$root/git-remote.git" show-ref --verify --quiet refs/heads/pushed
@@ -161,7 +157,10 @@ pkgs.runCommand "pure-launcher"
     unset CLAUDE_CONFIG_DIR
     expect_early_failure ${relativeExplicitSandbox}/bin/claude
     for argument in --settings --settings=x --permission-mode --permission-mode=x \
-      --dangerously-skip-permissions --dangerously-skip-permissions=x --bare --bare=value; do
+      --dangerously-skip-permissions --dangerously-skip-permissions=x \
+      --plugin-dir --plugin-dir=x --mcp-config --mcp-config=x \
+      --strict-mcp-config --strict-mcp-config=x --setting-sources --setting-sources=x \
+      --bare --bare=value; do
       expect_early_failure run_sandbox "$argument"
     done
 

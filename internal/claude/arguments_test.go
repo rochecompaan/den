@@ -10,6 +10,10 @@ func TestValidateArgumentsRejectsReservedFlags(t *testing.T) {
 		"--settings", "--settings=/tmp/user-settings.json",
 		"--permission-mode", "--permission-mode=plan",
 		"--dangerously-skip-permissions", "--dangerously-skip-permissions=true",
+		"--plugin-dir", "--plugin-dir=/tmp/p",
+		"--mcp-config", "--mcp-config=/tmp/m.json",
+		"--strict-mcp-config", "--strict-mcp-config=true",
+		"--setting-sources", "--setting-sources=user",
 	} {
 		t.Run(argument, func(t *testing.T) {
 			if err := ValidateArguments([]string{argument}); err == nil {
@@ -21,7 +25,7 @@ func TestValidateArgumentsRejectsReservedFlags(t *testing.T) {
 
 func TestValidateArgumentsPreservesOrdinaryArguments(t *testing.T) {
 	arguments := []string{
-		"--plugin-dir", "/tmp/with spaces", "--mcp-config=", "--strict-mcp-config", "", "--bare",
+		"--continue", "", "--bare",
 	}
 	want := append([]string(nil), arguments...)
 	if err := ValidateArguments(arguments); err != nil {

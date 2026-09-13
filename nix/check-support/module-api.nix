@@ -3,11 +3,19 @@
 let
   lib = pkgs.lib;
   mkClaude = den.lib.${pkgs.system}.mkClaude;
+  fixtureBundle = import ./fixture-bundle.nix { inherit pkgs; };
   moduleOptions = {
     programs.den.claude = {
       enable = true;
       configDir = "/tmp/den-claude-config";
       extraPkgs = [ fakeExtra ];
+      bundles = [ fixtureBundle ];
+      resources = {
+        skills = [ fixtureBundle.fixtureParts.skill ];
+        plugins = [ ];
+        mcpServers = { };
+        settings = [ { env.DEN_MODULE_CHECK = "1"; } ];
+      };
       docker = {
         enable = true;
         package = fakeDocker;
@@ -96,6 +104,10 @@ assert homeDisabled.config.programs.den.claude.configDir == null;
 assert devenvDisabled.programs.den.claude.configDir == null;
 assert homeDisabled.config.programs.den.claude.extraPkgs == [ ];
 assert devenvDisabled.programs.den.claude.extraPkgs == [ ];
+assert homeDisabled.config.programs.den.claude.resources.skills == [ ];
+assert homeDisabled.config.programs.den.claude.resources.mcpServers == { };
+assert homeDisabled.config.programs.den.claude.bundles == [ ];
+assert homeDisabled.config.programs.den.pi.bundles == [ ];
 assert !homeDisabled.config.programs.den.claude.docker.enable;
 assert !devenvDisabled.programs.den.claude.docker.enable;
 assert homeDisabled.config.programs.den.claude.docker.package.outPath == pkgs.docker-client.outPath;

@@ -95,15 +95,12 @@ pkgs.runCommand "pure-launcher"
     export GIT_CONFIG_VALUE_1='Authorization: redacted'
     export TMPDIR=/invalid/tmp DEN_FENCE_TMPDIR=/invalid/fence-tmp
 
-    run_sandbox "argument with spaces" "" --plugin-dir user-plugin \
-      --mcp-config user-mcp.json --strict-mcp-config
+    run_sandbox "argument with spaces" "" --continue
 
     grep -Fqx 'arg[0]=<--dangerously-skip-permissions>' "$rootHost/agent.log"
     grep -Fqx 'arg[1]=<argument with spaces>' "$rootHost/agent.log"
     grep -Fqx 'arg[2]=<>' "$rootHost/agent.log"
-    grep -Fqx 'arg[3]=<--plugin-dir>' "$rootHost/agent.log"
-    grep -Fqx 'arg[5]=<--mcp-config>' "$rootHost/agent.log"
-    grep -Fqx 'arg[7]=<--strict-mcp-config>' "$rootHost/agent.log"
+    grep -Fqx 'arg[3]=<--continue>' "$rootHost/agent.log"
     grep -Fqx 'policy-mode=400' "$rootHost/fence.log"
     grep -Fqx 'separate-scratch=yes' "$rootHost/fence.log"
     test "$(grep -Fxc invoked "$rootHost/fence.marker")" = 2
@@ -122,13 +119,9 @@ pkgs.runCommand "pure-launcher"
     grep -Fqx 'argv[6]=<--dangerously-skip-permissions>' "$rootHost/fence-argv.log"
     grep -Fqx 'argv[7]=<argument with spaces>' "$rootHost/fence-argv.log"
     grep -Fqx 'argv[8]=<>' "$rootHost/fence-argv.log"
-    grep -Fqx 'argv[9]=<--plugin-dir>' "$rootHost/fence-argv.log"
-    grep -Fqx 'argv[10]=<user-plugin>' "$rootHost/fence-argv.log"
-    grep -Fqx 'argv[11]=<--mcp-config>' "$rootHost/fence-argv.log"
-    grep -Fqx 'argv[12]=<user-mcp.json>' "$rootHost/fence-argv.log"
-    grep -Fqx 'argv[13]=<--strict-mcp-config>' "$rootHost/fence-argv.log"
-    test "$(grep -c '^argv\[' "$rootHost/fence-argv.log")" = 14
-    if grep -q '^argv\[14\]=' "$rootHost/fence-argv.log"; then exit 1; fi
+    grep -Fqx 'argv[9]=<--continue>' "$rootHost/fence-argv.log"
+    test "$(grep -c '^argv\[' "$rootHost/fence-argv.log")" = 10
+    if grep -q '^argv\[10\]=' "$rootHost/fence-argv.log"; then exit 1; fi
 
     accountHome=$(jq -r --arg home "$HOME" '
       .filesystem.denyRead[] | select(endswith("/.ssh/id_*") and (startswith($home) | not)) |
@@ -230,7 +223,9 @@ pkgs.runCommand "pure-launcher"
     unset CLAUDE_CONFIG_DIR
     expect_early_failure namespace_run ${relativeExplicitSandbox}/bin/claude
     for argument in --settings --settings=x --permission-mode --permission-mode=x \
-      --dangerously-skip-permissions --dangerously-skip-permissions=x; do
+      --dangerously-skip-permissions --dangerously-skip-permissions=x \
+      --plugin-dir --plugin-dir=x --mcp-config --mcp-config=x \
+      --strict-mcp-config --strict-mcp-config=x --setting-sources --setting-sources=x; do
       expect_early_failure run_sandbox "$argument"
     done
 

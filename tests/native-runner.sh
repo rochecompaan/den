@@ -34,6 +34,17 @@ printf 'settings\n' >> "$DEN_FAKE_EVENT_LOG"
 printf 'fixture complete\n'
 FAKE_SETTINGS
 
+printf '#!%s\n' "$BASH" > "$root/plugin-injection"
+cat >> "$root/plugin-injection" <<'FAKE_PLUGIN_INJECTION'
+set -euo pipefail
+printf 'plugin-injection\n' >> "$DEN_FAKE_EVENT_LOG"
+plugin_status=${DEN_FAKE_PLUGIN_INJECTION_STATUS:-0}
+if [[ $plugin_status -ne 0 ]]; then
+  exit "$plugin_status"
+fi
+printf '%s\n' "${DEN_FAKE_PLUGIN_INJECTION_OUTPUT:-claude-plugin-injection passed.}"
+FAKE_PLUGIN_INJECTION
+
 printf '#!%s\n' "$BASH" > "$root/claude-startup"
 cat >> "$root/claude-startup" <<'FAKE_STARTUP'
 set -euo pipefail
@@ -108,7 +119,8 @@ cat >> "$root/resolver-helper" <<'FAKE_MARKER'
 exit 0
 FAKE_MARKER
 cp "$root/resolver-helper" "$root/sandbox-exec"
-chmod +x "$root/settings-merge" "$root/claude-startup" "$root/fence-capabilities" "$root/pi-startup" \
+chmod +x "$root/settings-merge" "$root/plugin-injection" "$root/claude-startup" \
+  "$root/fence-capabilities" "$root/pi-startup" \
   "$root/native-tests" "$root/pi-native-tests" "$root/resolver-helper" "$root/sandbox-exec"
 
 printf '#!/usr/bin/env bash\nexit 0\n' > "$root/pi"
@@ -125,6 +137,7 @@ export HOME=$root/home
 export XDG_RUNTIME_DIR=$root/runtime
 export DEN_NATIVE_HOST_SYSTEM=aarch64-darwin
 export DEN_NATIVE_SETTINGS_MERGE=$root/settings-merge
+export DEN_NATIVE_CLAUDE_PLUGIN_INJECTION=$root/plugin-injection
 export DEN_NATIVE_CLAUDE_STARTUP=$root/claude-startup
 export DEN_NATIVE_PI_STARTUP=$root/pi-startup
 export DEN_NATIVE_FENCE_CAPABILITIES=$root/fence-capabilities
@@ -165,25 +178,38 @@ if [[ $status -ne 0 ]]; then
   cat "$root/success.stderr" >&2
   exit 1
 fi
-[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence\npi-startup\nresolver\nclaude\npi' ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nplugin-injection\nstartup\nfence\npi-startup\nresolver\nclaude\npi' ]]
+assert_runner_cleanup
+
+run_runner plugin-injection-failure env DEN_FAKE_PLUGIN_INJECTION_STATUS=17
+[[ $status -eq 17 ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nplugin-injection' ]]
+assert_runner_cleanup
+
+run_runner plugin-injection-output-failure env -u DEN_FAKE_PLUGIN_INJECTION_STATUS \
+  DEN_FAKE_PLUGIN_INJECTION_OUTPUT=unexpected
+[[ $status -eq 1 ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nplugin-injection' ]]
+grep -F 'Claude plugin injection fixture returned unexpected output: unexpected' \
+  "$root/plugin-injection-output-failure.stderr"
 assert_runner_cleanup
 
 run_runner startup-failure env -u DEN_FAKE_FENCE_STATUS \
   -u DEN_FAKE_FENCE_SKIP_COMPLETION DEN_FAKE_STARTUP_STATUS=19
 [[ $status -eq 19 ]]
-[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup' ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nplugin-injection\nstartup' ]]
 assert_runner_cleanup
 
 run_runner fence-failure env -u DEN_FAKE_STARTUP_STATUS \
   -u DEN_FAKE_FENCE_SKIP_COMPLETION DEN_FAKE_FENCE_STATUS=23
 [[ $status -eq 23 ]]
-[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence' ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nplugin-injection\nstartup\nfence' ]]
 assert_runner_cleanup
 
 run_runner fence-missing-completion env -u DEN_FAKE_STARTUP_STATUS \
   -u DEN_FAKE_FENCE_STATUS DEN_FAKE_FENCE_SKIP_COMPLETION=1
 [[ $status -eq 1 ]]
-[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence' ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nplugin-injection\nstartup\nfence' ]]
 grep -F 'Darwin Fence capability fixture did not produce its completion artifact' \
   "$root/fence-missing-completion.stderr"
 assert_runner_cleanup
@@ -192,7 +218,7 @@ run_runner fence-malformed-completion env -u DEN_FAKE_STARTUP_STATUS \
   -u DEN_FAKE_FENCE_STATUS -u DEN_FAKE_FENCE_SKIP_COMPLETION \
   DEN_FAKE_FENCE_EXTRA_NEWLINE=1
 [[ $status -eq 1 ]]
-[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence' ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nplugin-injection\nstartup\nfence' ]]
 grep -F 'Darwin Fence capability fixture did not produce its completion artifact' \
   "$root/fence-malformed-completion.stderr"
 assert_runner_cleanup
@@ -210,14 +236,14 @@ assert_runner_cleanup
 run_runner pi-startup-failure env -u DEN_FAKE_STARTUP_STATUS -u DEN_FAKE_FENCE_STATUS \
   -u DEN_FAKE_FENCE_SKIP_COMPLETION DEN_FAKE_PI_STARTUP_STATUS=29
 [[ $status -eq 29 ]]
-[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence\npi-startup' ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nplugin-injection\nstartup\nfence\npi-startup' ]]
 assert_runner_cleanup
 
 run_runner pi-startup-missing-completion env -u DEN_FAKE_STARTUP_STATUS -u DEN_FAKE_FENCE_STATUS \
   -u DEN_FAKE_FENCE_SKIP_COMPLETION -u DEN_FAKE_PI_STARTUP_STATUS \
   DEN_FAKE_PI_STARTUP_SKIP_COMPLETION=1
 [[ $status -eq 1 ]]
-[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence\npi-startup' ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nplugin-injection\nstartup\nfence\npi-startup' ]]
 grep -F 'Darwin Pi startup fixture did not produce its exact completion artifact' \
   "$root/pi-startup-missing-completion.stderr"
 assert_runner_cleanup
@@ -226,7 +252,7 @@ run_runner pi-startup-malformed-completion env -u DEN_FAKE_STARTUP_STATUS -u DEN
   -u DEN_FAKE_FENCE_SKIP_COMPLETION -u DEN_FAKE_PI_STARTUP_STATUS \
   -u DEN_FAKE_PI_STARTUP_SKIP_COMPLETION DEN_FAKE_PI_STARTUP_EXTRA_NEWLINE=1
 [[ $status -eq 1 ]]
-[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nstartup\nfence\npi-startup' ]]
+[[ $(<"$DEN_FAKE_EVENT_LOG") == $'settings\nplugin-injection\nstartup\nfence\npi-startup' ]]
 grep -F 'Darwin Pi startup fixture did not produce its exact completion artifact' \
   "$root/pi-startup-malformed-completion.stderr"
 assert_runner_cleanup

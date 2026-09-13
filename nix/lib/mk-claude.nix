@@ -1,18 +1,17 @@
 { pkgs, fence, mkAgentSandbox, isDarwin ? pkgs.stdenv.isDarwin }:
 
-args@{ configDir ? null, extraPkgs ? [ ], docker ? { }, podman ? { }, ... }:
+args@{ configDir ? null, extraPkgs ? [ ], resources ? { }, bundles ? [ ], docker ? { }, podman ? { }, ... }:
 
 let
   lib = pkgs.lib;
   options = import ./options.nix { inherit pkgs; } args;
   claude = pkgs.claude-code;
-  claudeExecutable = pkgs.writeShellScript "den-claude-agent" ''
-    export NODE_EXTRA_CA_CERTS="$REPOWOLF_CA_FILE"
-    export CLAUDE_CODE_TMPDIR="$DEN_FENCE_TMPDIR"
-    export GIT_SSH_COMMAND="$REPOWOLF_CLIENT_DIR/bin/repowolf-git-ssh"
-    exec ${claude}/bin/claude "$@"
-  '';
-  settings = pkgs.writeText "den-claude-settings.json" (builtins.toJSON {
+  mergedResources = import ./den-resources.nix { inherit pkgs; } {
+    agent = "claude";
+    bundles = options.bundles;
+    resources = options.resources;
+  };
+  fenceSettings = {
     hooks.PreToolUse = [
       {
         matcher = "Bash";
@@ -24,7 +23,19 @@ let
         ];
       }
     ];
-  });
+  };
+  normalizedResources = import ./claude-resources.nix { inherit pkgs; } {
+    resources = mergedResources;
+    extraPkgs = options.extraPkgs;
+    baseSettings = if isDarwin then fenceSettings else null;
+  };
+  settings = normalizedResources.settingsFile;
+  claudeExecutable = pkgs.writeShellScript "den-claude-agent" ''
+    export NODE_EXTRA_CA_CERTS="$REPOWOLF_CA_FILE"
+    export CLAUDE_CODE_TMPDIR="$DEN_FENCE_TMPDIR"
+    export GIT_SSH_COMMAND="$REPOWOLF_CLIENT_DIR/bin/repowolf-git-ssh"
+    exec ${claude}/bin/claude "$@"
+  '';
   mandatoryArgs = [ "--dangerously-skip-permissions" ];
 in
 assert lib.assertMsg (claude.version == "2.1.158")
@@ -40,14 +51,19 @@ mkAgentSandbox {
     };
     runtimePackages = [ claude ];
     closureOnlyPackages = [ claudeExecutable ]
-      ++ lib.optionals isDarwin [ settings ];
+      ++ lib.optionals isDarwin [ settings ]
+      ++ normalizedResources.closureInputs;
+    passthru = { resourceDiagnostics = normalizedResources.diagnosticsCheck; };
     agent = {
       name = "claude";
       executable = "${claudeExecutable}";
       argumentPolicy = "claude";
       inherit mandatoryArgs;
-      resourceArgs = [ ];
-      reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" ];
+      resourceArgs = normalizedResources.resourceArgs;
+      reservedFlags = [
+        "--settings" "--permission-mode" "--dangerously-skip-permissions"
+        "--plugin-dir" "--mcp-config" "--strict-mcp-config" "--setting-sources"
+      ];
       reservedCommands = [ ];
       environment = { scrub = [ ]; set = { }; };
       packageDirectory = null;

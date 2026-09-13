@@ -14,6 +14,15 @@ let
     mkAgentSandbox = value: value;
   }) { };
   darwinSettings = darwinAdapter.adapter.agent.darwinSettings;
+  fenceSettings = {
+    hooks.PreToolUse = [{
+      matcher = "Bash";
+      hooks = [{
+        type = "command";
+        command = "${fakeFence}/bin/fence --claude-pre-tool-use --settings \"$DEN_FENCE_POLICY_FILE\"";
+      }];
+    }];
+  };
   dependencies = {
     fence = fakeFence;
     repoWolfClient = fakeRepoWolfClient;
@@ -23,7 +32,24 @@ let
     coreutils = pkgs.coreutils;
     inherit aclProbeDarwin;
   } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux { acl = pkgs.acl; };
-  mkSandbox = { configDir ? null }:
+  mkSandbox = { configDir ? null, resources ? { }, bundles ? [ ] }:
+    let
+      mergedResources = import ../lib/den-resources.nix { inherit pkgs; } {
+        agent = "claude";
+        inherit bundles;
+        resources = {
+          skills = [ ];
+          plugins = [ ];
+          mcpServers = { };
+          settings = [ ];
+        } // resources;
+      };
+      normalizedResources = import ../lib/claude-resources.nix { inherit pkgs; } {
+        resources = mergedResources;
+        extraPkgs = [ ];
+        baseSettings = if pkgs.stdenv.isDarwin then fenceSettings else null;
+      };
+    in
     mkAgentSandbox {
       inherit configDir dependencies;
       extraPkgs = [ ];
@@ -31,7 +57,8 @@ let
       podman = { };
       adapter = {
         runtimePackages = [ fakeClaude ];
-        closureOnlyPackages = pkgs.lib.optionals pkgs.stdenv.isDarwin [ darwinSettings ];
+        closureOnlyPackages = pkgs.lib.optionals pkgs.stdenv.isDarwin [ normalizedResources.settingsFile ]
+          ++ normalizedResources.closureInputs;
         output = {
           packageName = "claude";
           commandName = "claude";
@@ -43,15 +70,15 @@ let
           executable = "${fakeClaude}/bin/claude";
           argumentPolicy = "claude";
           mandatoryArgs = [ "--dangerously-skip-permissions" ];
-          resourceArgs = [ ];
-          reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" ];
+          resourceArgs = normalizedResources.resourceArgs;
+          reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" "--plugin-dir" "--mcp-config" "--strict-mcp-config" "--setting-sources" ];
           reservedCommands = [ ];
           environment = { scrub = [ ]; set = { }; };
           packageDirectory = null;
           securityAdapter = if pkgs.stdenv.isDarwin then {
             kind = "claude-settings";
-            path = darwinSettings;
-            arguments = [ "--settings" darwinSettings ];
+            path = normalizedResources.settingsFile;
+            arguments = [ "--settings" normalizedResources.settingsFile ];
           } else null;
         };
         stateBindings = [{

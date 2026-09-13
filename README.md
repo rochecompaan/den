@@ -328,6 +328,97 @@ resource-source arguments, and the fixed Pi hardening patch rejects direct or
 extension-initiated package mutation even if `PI_OFFLINE` is changed. There is
 no supported runtime package installation or self-update path.
 
+### Inject agent resources
+
+Den can inject immutable resources for Claude and Pi. All resources use store
+paths only. Den supplies no resources by default.
+
+Configure Claude skills, plugins, MCP servers, and settings with these
+options:
+
+```nix
+programs.den.claude = {
+  enable = true;
+  bundles = [ pkg ]; # Packages with passthru.denResources
+  resources = {
+    skills = [ path-or-package ];
+    plugins = [ path-or-package ];
+    mcpServers = {
+      codegraph = {
+        command = "${pkgs.codegraph}/bin/codegraph-mcp";
+        args = [ "--stdio" ];
+        env = { };
+      };
+    };
+    settings = [ { env.BASH_DEFAULT_TIMEOUT_MS = "300000"; } ];
+  };
+};
+```
+
+Each plugin gets one `--plugin-dir` argument. Den puts all injected skills in
+a generated `den-skills` plugin and passes it with `--plugin-dir`. Den writes
+MCP servers to a store `den-mcp.json` file and passes it with `--mcp-config`.
+Den deep-merges settings into a Den-owned `--settings` file. On macOS, Den
+puts the Fence hook last in that file. On Linux, Den writes the file only when
+settings fragments exist.
+
+A bundle is a package with `passthru.denResources`. The agent keys are `pi`
+and `claude`. Each key can be absent. The resource class names match the
+corresponding `resources` options.
+
+```nix
+pkgs.runCommand "example-den-bundle"
+  {
+    passthru.denResources = {
+      pi = {
+        extensions = [ "${src}/extensions/handoff" ];
+        packages = [ piPackageDir ];
+        skills = [ "${superpowers}/skills" ];
+        promptTemplates = [ ];
+        themes = [ ];
+      };
+      claude = {
+        skills = [ "${superpowers}/skills" ];
+        plugins = [ "${src}/claude-plugins/example" ];
+        mcpServers = {
+          codegraph = {
+            command = "${pkgs.codegraph}/bin/codegraph-mcp";
+            args = [ "--stdio" ];
+          };
+        };
+        settings = [ { env.BASH_DEFAULT_TIMEOUT_MS = "300000"; } ];
+      };
+    };
+  } "mkdir $out"
+```
+
+Use the bundle for either agent, or for both agents:
+
+```nix
+programs.den.pi = {
+  enable = true;
+  bundles = [ inputs.my-config.packages.${pkgs.system}.den-bundle ];
+};
+programs.den.claude = {
+  enable = true;
+  bundles = [ inputs.my-config.packages.${pkgs.system}.den-bundle ];
+};
+```
+
+`nix/check-support/fixture-bundle.nix` is the canonical machine-checked bundle
+example.
+
+Resource security rules:
+
+- Store paths only.
+- Settings fragments cannot set `disableAllHooks` or `apiKeyHelper`, cannot
+  override `ANTHROPIC_*` env, and cannot reference the Fence hook.
+- MCP commands must be store paths with package references.
+- MCP config is additive (`--strict-mcp-config` reserved, never passed).
+- Reserved Claude flags are `--settings`, `--permission-mode`,
+  `--dangerously-skip-permissions`, `--plugin-dir`, `--mcp-config`,
+  `--strict-mcp-config`, and `--setting-sources`.
+
 ### Pi enforcement and upgrades
 
 Pi uses the same Fence policy and RepoWolf integration as Claude. RepoWolf is
@@ -642,9 +733,11 @@ after they are more than 24 hours old.
 ## Resources and macOS hook
 
 Den supplies no skills, plugins, Context Mode, CodeGraph, other MCP servers, or
-non-security hooks. User-managed skills, plugins, hooks, and MCP servers in the
-selected Claude configuration directory remain available. They run inside the
-same Fence filesystem, command, process, and network policy.
+non-security hooks by default. See [Inject agent resources](#inject-agent-resources)
+to configure immutable resources or bundles. User-managed skills, plugins,
+hooks, and MCP servers in the selected Claude configuration directory remain
+available. They run inside the same Fence filesystem, command, process, and
+network policy.
 
 On macOS, Den supplies one mandatory `den-fence` security hook. This
 `PreToolUse` hook examines Claude Bash tool commands. It denies blocked
@@ -655,10 +748,6 @@ Fence boundary still applies to those tools and user resources.
 
 User hooks cannot disable or replace `den-fence`. Unrelated user hooks remain
 available. Den does not edit user settings to install the security hook.
-
-Future resource bundles are outside this release. There is no usable
-`resourceBundles`, `claudeResources`, `mkClaudeResourceBundle`, marketplace,
-or resource-seed API.
 
 ## Network and filesystem limits
 

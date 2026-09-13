@@ -50,21 +50,46 @@
           export DEN_PROCESS_PID_FILE="$TMPDIR/process.pid"
           export DEN_PROCESS_SIGNAL_FILE="$TMPDIR/process.signals"
           export DEN_PROCESS_READY_FILE="$TMPDIR/process.ready"
+          harness_pid=
+          group_id=
+          cleanup_job_control() {
+            if test -n "$group_id"; then
+              kill -TERM "-$group_id" 2>/dev/null || true
+            fi
+            if test -n "$harness_pid"; then
+              kill -TERM "$harness_pid" 2>/dev/null || true
+              wait "$harness_pid" 2>/dev/null || true
+            fi
+          }
+          wait_for_process_signal() {
+            expected=$1
+            for _ in $(seq 1 50); do
+              if test -f "$DEN_PROCESS_SIGNAL_FILE" &&
+                grep -Fq "$expected" "$DEN_PROCESS_SIGNAL_FILE"; then
+                return 0
+              fi
+              sleep 0.1
+            done
+            printf 'timed out waiting for process signal %s\n' "$expected" >&2
+            return 1
+          }
           ${scriptInvocation "job-control"} &
           harness_pid=$!
+          trap cleanup_job_control EXIT
           for _ in $(seq 1 50); do test -e "$DEN_PROCESS_PID_FILE" && break; sleep 0.1; done
           test -s "$DEN_PROCESS_PID_FILE"
           for _ in $(seq 1 50); do test -e "$DEN_PROCESS_READY_FILE" && break; sleep 0.1; done
           test -s "$DEN_PROCESS_READY_FILE"
           group_id=$(cat "$DEN_PROCESS_PID_FILE")
           kill -WINCH "-$group_id"
-          sleep 1
-          grep -q W "$DEN_PROCESS_SIGNAL_FILE"
+          wait_for_process_signal W
           kill -TSTP "-$group_id"
-          sleep 1
+          wait_for_process_signal T
           kill -CONT "-$group_id"
           wait "$harness_pid"
-          grep -q TC "$DEN_PROCESS_SIGNAL_FILE"
+          grep -Fq C "$DEN_PROCESS_SIGNAL_FILE"
+          harness_pid=
+          trap - EXIT
           touch "$out"
         '';
     };

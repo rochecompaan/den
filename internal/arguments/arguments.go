@@ -9,7 +9,10 @@ import (
 	"github.com/rochecompaan/den/internal/piargs"
 )
 
-var claudeReservedFlags = []string{"--settings", "--permission-mode", "--dangerously-skip-permissions"}
+var claudeReservedFlags = []string{
+	"--settings", "--permission-mode", "--dangerously-skip-permissions",
+	"--plugin-dir", "--mcp-config", "--strict-mcp-config", "--setting-sources",
+}
 
 // Validate verifies the adapter policy table and untrusted user arguments.
 func Validate(policy string, reservedFlags, reservedCommands, userArgs []string) error {

@@ -67,6 +67,25 @@ in
         default = [ ];
         description = "Packages available only inside the Claude sandbox.";
       };
+      bundles = mkOption {
+        type = types.listOf types.package;
+        default = [ ];
+        description = "Den resource bundles (packages with passthru.denResources) applied to the Claude sandbox. Immutable; store paths only.";
+      };
+      resources = {
+        skills = mkOption { type = types.listOf resourceType; default = [ ]; description = "Immutable Claude skills. Immutable; store paths only."; };
+        plugins = mkOption { type = types.listOf resourceType; default = [ ]; description = "Immutable Claude plugins. Immutable; store paths only."; };
+        mcpServers = mkOption {
+          type = types.attrsOf (types.attrsOf types.raw);
+          default = { };
+          description = "Immutable Claude MCP servers; commands must be store paths.";
+        };
+        settings = mkOption {
+          type = types.listOf (types.either (types.attrsOf types.raw) resourceType);
+          default = [ ];
+          description = "Claude settings fragments merged into the Den-owned settings file.";
+        };
+      };
       docker = containerOptions "Claude" "Docker" pkgs.docker-client pkgs.docker-compose;
       podman = containerOptions "Claude" "Podman" pkgs.podman pkgs.podman-compose;
     };
@@ -91,6 +110,11 @@ in
         type = types.listOf types.package;
         default = [ ];
         description = "Packages available only inside the Pi sandbox.";
+      };
+      bundles = mkOption {
+        type = types.listOf types.package;
+        default = [ ];
+        description = "Den resource bundles (packages with passthru.denResources) applied to the Pi sandbox. Immutable; store paths only.";
       };
       resources = {
         extensions = mkOption { type = types.listOf resourceType; default = [ ]; description = "Immutable Pi extensions."; };

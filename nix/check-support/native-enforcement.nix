@@ -7,6 +7,7 @@ let
     inherit pkgs fence;
   };
   claudeSettingsMerge = import ./claude-settings-merge.nix { inherit pkgs; };
+  claudePluginInjection = import ./claude-plugin-injection.nix { inherit pkgs; };
   repoWolfClient = import ../packages/repowolf-client.nix { inherit inputs pkgs; };
   repoWolfFixture = pkgs.buildGoModule {
     pname = "den-native-repowolf-fixture";
@@ -86,19 +87,8 @@ let
         argv-deny)
           exec git reset --hard
           ;;
-        plugin-mcp)
-          plugin="" mcp=""
-          while test "$#" -gt 0; do
-            case "$1" in
-              --plugin-dir) plugin=$2; shift 2 ;;
-              --mcp-config) mcp=$2; shift 2 ;;
-              --strict-mcp-config) shift ;;
-              *) shift ;;
-            esac
-          done
-          test -n "$plugin" && test -n "$mcp"
-          bash "$plugin/probe.sh"
-          bash "$mcp"
+        allowed-argument)
+          test "$#" = 1 && test "$1" = --continue
           ;;
         repowolf)
           gh issue list --repo alpha/repo >/dev/null 2>&1 || true
@@ -153,7 +143,7 @@ let
         argumentPolicy = "claude";
         mandatoryArgs = [ ];
         resourceArgs = [ ];
-        reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" ];
+        reservedFlags = [ "--settings" "--permission-mode" "--dangerously-skip-permissions" "--plugin-dir" "--mcp-config" "--strict-mcp-config" "--setting-sources" ];
         reservedCommands = [ ];
         environment = { scrub = [ ]; set = { }; };
         packageDirectory = null;
@@ -276,6 +266,7 @@ pkgs.writeShellApplication {
     export DEN_NATIVE_UNRELATED_STORE_FILE=${unrelatedStoreFile}
     export DEN_NATIVE_RESOLVER_HELPER=${resolverHelper}/bin/den-native-resolver-helper
     ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+      export DEN_NATIVE_CLAUDE_PLUGIN_INJECTION=${claudePluginInjection}/bin/claude-plugin-injection
       export DEN_NATIVE_CLAUDE_STARTUP=${claudeStartup}/bin/claude-startup
       export DEN_NATIVE_PI_STARTUP=${piDarwinStartup}/bin/pi-darwin-startup
       export DEN_NATIVE_FENCE_CAPABILITIES=${fenceCapabilities}/bin/fence-capabilities

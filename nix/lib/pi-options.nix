@@ -7,6 +7,7 @@ let
     agentDir = null;
     sessionDir = null;
     extraPkgs = [ ];
+    bundles = [ ];
     resources = {
       extensions = [ ];
       packages = [ ];
@@ -29,7 +30,7 @@ let
       hostPorts = [ ];
     };
   };
-  allowedRootOptions = [ "agentDir" "sessionDir" "extraPkgs" "resources" "docker" "podman" ];
+  allowedRootOptions = [ "agentDir" "sessionDir" "extraPkgs" "bundles" "resources" "docker" "podman" ];
   allowedResourceOptions = [ "extensions" "packages" "skills" "promptTemplates" "themes" ];
   allowedContainerOptions = [ "enable" "package" "composePackage" "socketPath" "hostPorts" ];
   hasOnly = allowed: value: lib.all (name: builtins.elem name allowed) (builtins.attrNames value);
@@ -68,6 +69,8 @@ assert lib.assertMsg (!(raw ? sessionDir) || raw.sessionDir == null || isAbsolut
   "sessionDir must be null or an absolute string";
 assert lib.assertMsg (!(raw ? extraPkgs) || (builtins.isList raw.extraPkgs && lib.all isPackage raw.extraPkgs))
   "extraPkgs must be a list of packages";
+assert lib.assertMsg (!(raw ? bundles) || (builtins.isList raw.bundles && lib.all isPackage raw.bundles))
+  "bundles must be a list of packages";
 assert lib.assertMsg (!(raw ? resources) || builtins.isAttrs raw.resources) "resources must be an attribute set";
 assert lib.assertMsg (!(raw ? docker) || builtins.isAttrs raw.docker) "docker must be an attribute set";
 assert lib.assertMsg (!(raw ? podman) || builtins.isAttrs raw.podman) "podman must be an attribute set";
@@ -75,6 +78,7 @@ assert lib.assertMsg (!(raw ? podman) || builtins.isAttrs raw.podman) "podman mu
   agentDir = raw.agentDir or defaults.agentDir;
   sessionDir = raw.sessionDir or defaults.sessionDir;
   extraPkgs = raw.extraPkgs or defaults.extraPkgs;
+  bundles = raw.bundles or defaults.bundles;
   inherit validResources;
   resources = validResources;
   docker = validContainer "docker" docker;
