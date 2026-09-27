@@ -32,7 +32,7 @@ func TestPiExactRuntimeEnvironmentAndScrubbing(t *testing.T) {
 		func(document map[string]any) {
 			document["fenceExecutable"] = os.Getenv("DEN_NATIVE_PI_FENCE_INPUT_RECORDER")
 		}, "--version")
-	if boundary.err != nil || strings.TrimSpace(boundary.stdout) != "0.84.4" {
+	if boundary.err != nil || strings.TrimSpace(boundary.stdout) != "0.87.1" {
 		t.Fatalf("real Fence input probe failed: %v %s%s", boundary.err, boundary.stdout, boundary.stderr)
 	}
 	input, err := os.ReadFile(inputReport)
@@ -78,7 +78,7 @@ func jsonString(value string) string { encoded, _ := json.Marshal(value); return
 func TestPiWrapperPrecedesAllowedExtraPackage(t *testing.T) {
 	fixture := newPiFixture(t)
 	result := fixture.sandbox("", "--version")
-	if result.err != nil || strings.TrimSpace(result.stdout) != "0.84.4" {
+	if result.err != nil || strings.TrimSpace(result.stdout) != "0.87.1" {
 		t.Fatalf("allowed extra package replaced wrapper: %v %s%s", result.err, result.stdout, result.stderr)
 	}
 	fixture.enforcementProbe(t, `

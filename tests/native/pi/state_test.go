@@ -607,9 +607,9 @@ func runNativeResume(t *testing.T, fixture *piFixture, target, cwd string, repla
 	script, binary := os.Getenv("DEN_NATIVE_SCRIPT"), os.Getenv("DEN_NATIVE_PI_SANDBOX")
 	var command *exec.Cmd
 	if strings.HasSuffix(os.Getenv("DEN_NATIVE_HOST_SYSTEM"), "-linux") {
-		command = exec.CommandContext(ctx, script, "--quiet", "--return", "--command", shellQuote(binary)+" --mode interactive", "/dev/null")
+		command = exec.CommandContext(ctx, script, "--quiet", "--return", "--command", shellQuote(binary), "/dev/null")
 	} else {
-		command = exec.CommandContext(ctx, script, "-q", "/dev/null", binary, "--mode", "interactive")
+		command = exec.CommandContext(ctx, script, "-q", "/dev/null", binary)
 	}
 	command.Dir = fixture.worktree
 	if replace {

@@ -1,18 +1,20 @@
+diff --git a/dist/core/agent-session-runtime.js b/dist/core/agent-session-runtime.js
+index e335510..90b5f2f 100644
 --- a/dist/core/agent-session-runtime.js
 +++ b/dist/core/agent-session-runtime.js
 @@ -1,9 +1,9 @@
--import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+-import { constants, copyFileSync, existsSync, mkdirSync } from "node:fs";
 +import { existsSync, mkdirSync } from "node:fs";
- import { basename, join, resolve } from "node:path";
+ import { basename, join, parse, resolve } from "node:path";
  import { resolvePath } from "../utils/paths.js";
  import { emitSessionShutdownEvent } from "./extensions/runner.js";
  import { assertSessionCwdExists } from "./session-cwd.js";
 -import { SessionManager } from "./session-manager.js";
-+import { readValidatedSession, SessionManager, validateSessionDestination, writeSessionDestination } from "./session-manager.js";
++import { readValidatedSession, sessionDestinationExists, SessionManager, validateSessionDestination, writeSessionDestination } from "./session-manager.js";
  /**
   * Thrown when /import references a JSONL file path that does not exist.
   */
-@@ -126,12 +126,15 @@
+@@ -126,12 +126,15 @@ export class AgentSessionRuntime {
          }
      }
      async switchSession(sessionPath, options) {
@@ -30,7 +32,7 @@
          assertSessionCwdExists(sessionManager, this.cwd);
          await this.teardownCurrent("resume", sessionManager.getSessionFile());
          this.apply(await this.createRuntime({
-@@ -216,7 +219,7 @@
+@@ -216,7 +219,7 @@ export class AgentSessionRuntime {
              if (!existsSync(currentSessionFile)) {
                  throw new Error("This session has not been saved yet. Wait for the first assistant response before cloning or forking it.");
              }
@@ -39,7 +41,7 @@
              const forkedSessionPath = sessionManager.createBranchedSession(targetLeafId);
              if (!forkedSessionPath) {
                  throw new Error("Failed to create forked session");
-@@ -257,23 +260,35 @@
+@@ -257,31 +260,42 @@ export class AgentSessionRuntime {
       */
      async importFromJsonl(inputPath, cwdOverride) {
          const resolvedPath = resolvePath(inputPath);
@@ -58,19 +60,28 @@
          if (!existsSync(sessionDir)) {
              mkdirSync(sessionDir, { recursive: true });
          }
--        const destinationPath = join(sessionDir, basename(resolvedPath));
-+        const requestedDestination = join(sessionDir, basename(imported.canonicalPath));
-+        const sameFile = resolve(requestedDestination) === imported.canonicalPath;
-+        const destinationPath = sameFile ? imported.canonicalPath : validateSessionDestination(requestedDestination);
+-        let destinationPath = join(sessionDir, basename(resolvedPath));
+-        const sourceAlreadyStored = resolve(destinationPath) === resolvedPath;
++        let destinationPath = join(sessionDir, basename(imported.canonicalPath));
++        const sourceAlreadyStored = resolve(destinationPath) === imported.canonicalPath;
+         if (!sourceAlreadyStored) {
+             const { name, ext } = parse(destinationPath);
+             let suffix = 1;
+-            while (existsSync(destinationPath)) {
++            while (sessionDestinationExists(destinationPath)) {
+                 destinationPath = join(sessionDir, `${name}-${suffix++}${ext}`);
+             }
++            destinationPath = validateSessionDestination(destinationPath);
+         }
          const beforeResult = await this.emitBeforeSwitch("resume", destinationPath);
          if (beforeResult.cancelled) {
              return beforeResult;
          }
          const previousSessionFile = this.session.sessionFile;
--        if (resolve(destinationPath) !== resolvedPath) {
--            copyFileSync(resolvedPath, destinationPath);
+-        if (!sourceAlreadyStored) {
+-            copyFileSync(resolvedPath, destinationPath, constants.COPYFILE_EXCL);
 +        let sessionManager;
-+        if (sameFile) {
++        if (sourceAlreadyStored) {
 +            sessionManager = SessionManager.fromValidated(imported, sessionDir, cwdOverride);
 +        }
 +        else {
@@ -81,9 +92,11 @@
          assertSessionCwdExists(sessionManager, this.cwd);
          await this.teardownCurrent("resume", sessionManager.getSessionFile());
          this.apply(await this.createRuntime({
+diff --git a/dist/core/package-manager.js b/dist/core/package-manager.js
+index 696e98c..fb047d5 100644
 --- a/dist/core/package-manager.js
 +++ b/dist/core/package-manager.js
-@@ -34,11 +34,12 @@
+@@ -34,11 +34,12 @@ import { readPiManifest } from "./pi-manifest.js";
  const NETWORK_TIMEOUT_MS = 10000;
  const UPDATE_CHECK_CONCURRENCY = 4;
  const GIT_UPDATE_CONCURRENCY = 4;
@@ -100,7 +113,7 @@
  }
  function isExactNpmVersion(version) {
      return valid(version ?? "") !== null;
-@@ -616,6 +617,7 @@
+@@ -616,6 +617,7 @@ export class DefaultPackageManager {
          this.progressCallback = callback;
      }
      addSourceToSettings(source, options) {
@@ -108,7 +121,7 @@
          const scope = options?.local ? "project" : "user";
          const currentSettings = scope === "project" ? this.settingsManager.getProjectSettings() : this.settingsManager.getGlobalSettings();
          const currentPackages = currentSettings.packages ?? [];
-@@ -647,6 +649,7 @@
+@@ -647,6 +649,7 @@ export class DefaultPackageManager {
          return true;
      }
      removeSourceFromSettings(source, options) {
@@ -116,7 +129,7 @@
          const scope = options?.local ? "project" : "user";
          const currentSettings = scope === "project" ? this.settingsManager.getProjectSettings() : this.settingsManager.getGlobalSettings();
          const currentPackages = currentSettings.packages ?? [];
-@@ -762,6 +765,7 @@
+@@ -762,6 +765,7 @@ export class DefaultPackageManager {
          return configuredPackages;
      }
      async install(source, options) {
@@ -124,7 +137,7 @@
          const parsed = this.parseSource(source);
          const scope = options?.local ? "project" : "user";
          this.assertProjectTrustedForScope(scope);
-@@ -785,10 +789,12 @@
+@@ -785,10 +789,12 @@ export class DefaultPackageManager {
          });
      }
      async installAndPersist(source, options) {
@@ -137,7 +150,7 @@
          const parsed = this.parseSource(source);
          const scope = options?.local ? "project" : "user";
          this.assertProjectTrustedForScope(scope);
-@@ -808,10 +814,12 @@
+@@ -808,10 +814,12 @@ export class DefaultPackageManager {
          });
      }
      async removeAndPersist(source, options) {
@@ -150,7 +163,7 @@
          const globalSettings = this.settingsManager.getGlobalSettings();
          const projectSettings = this.settingsManager.getProjectSettings();
          const identity = source ? this.getPackageIdentity(source) : undefined;
-@@ -840,6 +848,7 @@
+@@ -840,6 +848,7 @@ export class DefaultPackageManager {
          await this.updateConfiguredSources(updateSources);
      }
      async updateConfiguredSources(sources) {
@@ -158,7 +171,7 @@
          if (isOfflineModeEnabled() || sources.length === 0) {
              return;
          }
-@@ -907,6 +916,7 @@
+@@ -907,6 +916,7 @@ export class DefaultPackageManager {
          }
      }
      async updateNpmBatch(sources, scope) {
@@ -166,7 +179,7 @@
          if (sources.length === 0) {
              return;
          }
-@@ -918,11 +928,15 @@
+@@ -918,11 +928,15 @@ export class DefaultPackageManager {
          });
      }
      async installNpmBatch(specs, scope) {
@@ -182,7 +195,7 @@
          if (isOfflineModeEnabled()) {
              return [];
          }
-@@ -992,44 +1006,18 @@
+@@ -992,44 +1006,18 @@ export class DefaultPackageManager {
                  this.resolveLocalExtensionSource(parsed, accumulator, filter, metadata, baseDir);
                  continue;
              }
@@ -232,7 +245,7 @@
                  metadata.baseDir = installedPath;
                  this.collectPackageResources(installedPath, accumulator, filter, metadata);
              }
-@@ -1068,6 +1056,7 @@
+@@ -1068,6 +1056,7 @@ export class DefaultPackageManager {
          }
      }
      async installParsedSource(parsed, scope) {
@@ -240,7 +253,7 @@
          if (parsed.type === "npm") {
              await this.installNpm(parsed, scope, scope === "temporary");
              return;
-@@ -1442,6 +1431,7 @@
+@@ -1442,6 +1431,7 @@ export class DefaultPackageManager {
          return packageManagerCommand ? basename(packageManagerCommand).replace(/\.(cmd|exe)$/i, "") : "";
      }
      async runNpmCommand(args, options) {
@@ -248,7 +261,7 @@
          const npmCommand = this.getNpmCommand();
          await this.runCommand(npmCommand.command, [...npmCommand.args, ...args], options);
      }
-@@ -1453,6 +1443,7 @@
+@@ -1453,6 +1443,7 @@ export class DefaultPackageManager {
          return ["install", "--omit=dev"];
      }
      runNpmCommandSync(args) {
@@ -256,7 +269,7 @@
          const npmCommand = this.getNpmCommand();
          return this.runCommandSync(npmCommand.command, [...npmCommand.args, ...args]);
      }
-@@ -1479,11 +1470,13 @@
+@@ -1479,11 +1470,13 @@ export class DefaultPackageManager {
          return ["install", ...specs, "--prefix", installRoot, "--legacy-peer-deps"];
      }
      async installNpm(source, scope, temporary) {
@@ -270,7 +283,7 @@
          const installRoot = this.getNpmInstallRoot(scope, false);
          if (!existsSync(installRoot)) {
              return;
-@@ -1500,6 +1493,7 @@
+@@ -1500,6 +1493,7 @@ export class DefaultPackageManager {
          await this.runNpmCommand(args);
      }
      async installGit(source, scope) {
@@ -278,7 +291,7 @@
          const targetDir = this.getGitInstallPath(source, scope);
          if (existsSync(targetDir)) {
              if (source.ref) {
-@@ -1533,6 +1527,7 @@
+@@ -1533,6 +1527,7 @@ export class DefaultPackageManager {
          }
      }
      async updateGit(source, scope) {
@@ -286,7 +299,7 @@
          const targetDir = this.getGitInstallPath(source, scope);
          if (!existsSync(targetDir)) {
              await this.installGit(source, scope);
-@@ -1569,6 +1564,7 @@
+@@ -1569,6 +1564,7 @@ export class DefaultPackageManager {
          }
      }
      async repairMissingGitDependencies(targetDir) {
@@ -294,7 +307,7 @@
          if (!this.hasMissingGitDependencies(targetDir))
              return;
          await this.runNpmCommand(this.getGitDependencyInstallArgs(), { cwd: targetDir });
-@@ -1577,6 +1573,7 @@
+@@ -1577,6 +1573,7 @@ export class DefaultPackageManager {
          return join(dirname(targetDir), `.${basename(targetDir)}.pi-update-incomplete`);
      }
      async cleanAndInstallGitDependencies(targetDir, markerPath) {
@@ -302,7 +315,7 @@
          // Clean untracked files (extensions should be pristine). If this fails after
          // deleting dependencies, repair them so the existing extension still loads.
          try {
-@@ -1593,6 +1590,7 @@
+@@ -1593,6 +1590,7 @@ export class DefaultPackageManager {
          rmSync(markerPath, { force: true });
      }
      async ensureGitRef(targetDir, fetchArgs, ref) {
@@ -310,7 +323,7 @@
          // Fetch only the ref we will reset to, avoiding unrelated branch/tag noise.
          await this.runCommand("git", fetchArgs, { cwd: targetDir });
          const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
-@@ -1619,6 +1617,7 @@
+@@ -1619,6 +1617,7 @@ export class DefaultPackageManager {
          await this.cleanAndInstallGitDependencies(targetDir, markerPath);
      }
      async refreshTemporaryGitSource(source, sourceStr) {
@@ -318,7 +331,7 @@
          if (isOfflineModeEnabled()) {
              return;
          }
-@@ -1632,12 +1631,14 @@
+@@ -1632,12 +1631,14 @@ export class DefaultPackageManager {
          }
      }
      async removeGit(source, scope) {
@@ -333,7 +346,7 @@
          if (!installRoot)
              return;
          const resolvedRoot = resolve(installRoot);
-@@ -1661,6 +1662,7 @@
+@@ -1661,6 +1662,7 @@ export class DefaultPackageManager {
          }
      }
      ensureNpmProject(installRoot) {
@@ -341,7 +354,7 @@
          if (!existsSync(installRoot)) {
              mkdirSync(installRoot, { recursive: true });
          }
-@@ -1673,6 +1675,7 @@
+@@ -1673,6 +1675,7 @@ export class DefaultPackageManager {
          }
      }
      ensureGitIgnore(dir) {
@@ -349,7 +362,7 @@
          if (!existsSync(dir)) {
              mkdirSync(dir, { recursive: true });
          }
-@@ -2092,6 +2095,7 @@
+@@ -2092,6 +2095,7 @@ export class DefaultPackageManager {
          };
      }
      spawnCommand(command, args, options) {
@@ -357,7 +370,7 @@
          const env = getEnv();
          return spawnProcess(command, args, {
              cwd: options?.cwd,
-@@ -2100,6 +2104,7 @@
+@@ -2100,6 +2104,7 @@ export class DefaultPackageManager {
          });
      }
      spawnCaptureCommand(command, args, options) {
@@ -365,7 +378,7 @@
          const baseEnv = getEnv();
          const env = options?.env ? { ...baseEnv, ...options.env } : baseEnv;
          return spawnProcess(command, args, {
-@@ -2109,6 +2114,7 @@
+@@ -2109,6 +2114,7 @@ export class DefaultPackageManager {
          });
      }
      runCommandCapture(command, args, options) {
@@ -373,7 +386,7 @@
          return new Promise((resolvePromise, reject) => {
              const child = this.spawnCaptureCommand(command, args, options);
              let stdout = "";
-@@ -2148,6 +2154,7 @@
+@@ -2148,6 +2154,7 @@ export class DefaultPackageManager {
          });
      }
      runCommand(command, args, options) {
@@ -381,7 +394,7 @@
          return new Promise((resolvePromise, reject) => {
              const child = this.spawnCommand(command, args, options);
              child.on("error", reject);
-@@ -2162,6 +2169,7 @@
+@@ -2162,6 +2169,7 @@ export class DefaultPackageManager {
          });
      }
      runCommandSync(command, args) {
@@ -389,17 +402,18 @@
          const env = getEnv();
          const result = spawnProcessSync(command, args, {
              stdio: ["ignore", "pipe", "pipe"],
+diff --git a/dist/core/session-manager.js b/dist/core/session-manager.js
+index 0ddbb9c..408063e 100644
 --- a/dist/core/session-manager.js
 +++ b/dist/core/session-manager.js
-@@ -1,14 +1,116 @@
- import { uuidv7 } from "@earendil-works/pi-ai";
+@@ -1,14 +1,125 @@
+ import { getCurrentSystemMessage, uuidv7, } from "@earendil-works/pi-ai";
  import { randomUUID } from "crypto";
 -import { appendFileSync, closeSync, createReadStream, existsSync, mkdirSync, openSync, readdirSync, readSync, statSync, writeFileSync, } from "fs";
--import { readdir, stat } from "fs/promises";
--import { join, resolve } from "path";
 +import { closeSync, constants, createReadStream, existsSync, fstatSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, readdirSync, statSync, writeFileSync, } from "fs";
-+import { readdir } from "fs/promises";
-+import { isAbsolute, join, relative, resolve, sep } from "path";
+ import { readdir, stat } from "fs/promises";
+-import { basename, join, resolve } from "path";
++import { basename, isAbsolute, join, relative, resolve, sep } from "path";
  import { createInterface } from "readline";
  import { StringDecoder } from "string_decoder";
 -import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
@@ -477,7 +491,7 @@
 +        throw error;
 +    }
 +}
-+export function validateSessionDestination(filePath) {
++function inspectSessionDestination(filePath) {
 +    const root = validatedSessionRoot();
 +    const resolvedPath = normalizePath(filePath);
 +    const parent = realpathSync(resolve(resolvedPath, ".."));
@@ -487,13 +501,22 @@
 +        const alias = lstatSync(resolvedPath);
 +        if (!alias.isFile() || alias.isSymbolicLink())
 +            throw new Error("Pi session target must be an existing regular file");
-+        throw new Error("Pi session destination already exists");
++        return { resolvedPath, exists: true };
 +    }
 +    catch (error) {
 +        if (error?.code !== "ENOENT")
 +            throw error;
++        return { resolvedPath, exists: false };
 +    }
-+    return resolvedPath;
++}
++export function sessionDestinationExists(filePath) {
++    return inspectSessionDestination(filePath).exists;
++}
++export function validateSessionDestination(filePath) {
++    const destination = inspectSessionDestination(filePath);
++    if (destination.exists)
++        throw new Error("Pi session destination already exists");
++    return destination.resolvedPath;
 +}
 +export function writeSessionDestination(filePath, content) {
 +    const resolvedPath = validateSessionDestination(filePath);
@@ -512,7 +535,7 @@
  function createSessionId() {
      return uuidv7();
  }
-@@ -274,50 +376,68 @@
+@@ -322,50 +433,68 @@ function parseSessionEntryLine(line) {
      }
  }
  /** Exported for testing */
@@ -618,7 +641,7 @@
  }
  /**
   * Inspect a physical line while searching for the first parsed session entry.
-@@ -334,8 +454,7 @@
+@@ -382,8 +511,7 @@ function parseSessionHeaderCandidate(line) {
          return null;
      return entry;
  }
@@ -628,7 +651,7 @@
      try {
          const decoder = new StringDecoder("utf8");
          const buffer = Buffer.allocUnsafe(SESSION_HEADER_READ_BUFFER_SIZE);
-@@ -373,16 +492,29 @@
+@@ -421,16 +549,29 @@ function readSessionHeader(filePath) {
          throw new SessionHeaderScanLimitError(filePath);
      }
      finally {
@@ -662,44 +685,52 @@
          return null;
      }
  }
-@@ -401,10 +533,10 @@
+@@ -449,14 +590,12 @@ export function findMostRecentSession(sessionDir, cwd) {
          const files = readdirSync(resolvedSessionDir)
-             .filter((f) => f.endsWith(".jsonl"))
-             .map((f) => join(resolvedSessionDir, f))
--            .map((path) => ({ path, header: readSessionHeaderForDiscovery(path) }))
--            .filter((file) => file.header !== null &&
--            (!resolvedCwd || sessionCwdMatches(getSessionHeaderCwd(file.header), resolvedCwd)))
--            .map(({ path }) => ({ path, mtime: statSync(path).mtime }))
+             .filter((file) => file.endsWith(".jsonl"))
+             .map((file) => join(resolvedSessionDir, file))
+-            .map((path) => ({ path, mtime: statSync(path).mtimeMs }))
+-            .sort((a, b) => b.mtime - a.mtime);
+-        for (const { path } of files) {
+-            const header = readSessionHeaderForDiscovery(path);
+-            if (header && (!resolvedCwd || sessionCwdMatches(getSessionHeaderCwd(header), resolvedCwd)))
+-                return path;
+-        }
+-        return null;
 +            .map((path) => ({ path, discovered: readSessionHeaderForDiscovery(path) }))
 +            .filter((file) => file.discovered !== null && file.discovered.header !== null &&
 +            (!resolvedCwd || sessionCwdMatches(getSessionHeaderCwd(file.discovered.header), resolvedCwd)))
 +            .map(({ path, discovered }) => ({ path, mtime: discovered.mtime }))
-             .sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
-         return files[0]?.path || null;
++            .sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
++        return files[0]?.path || null;
      }
-@@ -440,8 +572,10 @@
+     catch {
+         // Directory access and stat races make recent-session discovery unavailable.
+@@ -489,9 +628,11 @@ function getMessageActivityTime(entry) {
+     const t = new Date(entry.timestamp).getTime();
      return Number.isNaN(t) ? undefined : t;
  }
- async function buildSessionInfo(filePath) {
+-async function buildSessionInfo(filePath, signal, fileStats) {
++async function buildSessionInfo(filePath, signal) {
 +    let opened;
      try {
--        const stats = await stat(filePath);
+-        const stats = fileStats ?? (await stat(filePath));
 +        opened = openValidatedSessionFile(filePath);
 +        const stats = opened.stats;
          let header = null;
          let messageCount = 0;
          let firstMessage = "";
-@@ -449,7 +583,7 @@
+@@ -499,7 +640,7 @@ async function buildSessionInfo(filePath, signal, fileStats) {
          let name;
          let lastActivityTime;
          const rl = createInterface({
--            input: createReadStream(filePath, { encoding: "utf8" }),
-+            input: createReadStream(filePath, { encoding: "utf8", fd: opened.fd, autoClose: false }),
+-            input: createReadStream(filePath, { encoding: "utf8", signal }),
++            input: createReadStream(filePath, { encoding: "utf8", fd: opened.fd, autoClose: false, signal }),
              crlfDelay: Infinity,
          });
          for await (const line of rl) {
-@@ -512,6 +646,10 @@
-     catch {
+@@ -563,6 +704,10 @@ async function buildSessionInfo(filePath, signal, fileStats) {
+         signal?.throwIfAborted();
          return null;
      }
 +    finally {
@@ -708,8 +739,17 @@
 +    }
  }
  const MAX_CONCURRENT_SESSION_INFO_LOADS = 10;
- async function buildSessionInfosWithConcurrency(files, onLoaded) {
-@@ -586,6 +724,7 @@
+ const MAX_CONCURRENT_SESSION_DISCOVERY_LOADS = 64;
+@@ -586,7 +731,7 @@ function sortSessionInfos(sessions) {
+ }
+ function buildSessionInfosWithConcurrency(files, onLoaded, signal) {
+     return mapWithConcurrency(files, MAX_CONCURRENT_SESSION_INFO_LOADS, async (file, index) => {
+-        const info = await buildSessionInfo(file.path, signal, file.stats);
++        const info = await buildSessionInfo(file.path, signal);
+         onLoaded(info, index);
+         return info;
+     }, signal);
+@@ -632,6 +777,7 @@ async function listSessionsFromDir(dir, onProgress, signal) {
  export class SessionManager {
      sessionId = "";
      sessionFile;
@@ -717,7 +757,7 @@
      sessionDir;
      cwd;
      persist;
-@@ -595,7 +734,7 @@
+@@ -641,7 +787,7 @@ export class SessionManager {
      labelsById = new Map();
      labelTimestampsById = new Map();
      leafId = null;
@@ -726,16 +766,16 @@
          this.cwd = resolvePath(cwd);
          this.sessionDir = normalizePath(sessionDir);
          this.persist = persist;
-@@ -603,7 +742,7 @@
+@@ -649,7 +795,7 @@ export class SessionManager {
              mkdirSync(this.sessionDir, { recursive: true });
          }
          if (sessionFile) {
 -            this._setSessionFile(sessionFile, preloadedFileEntries);
 +            this._setSessionFile(sessionFile, preloadedFileEntries, validatedFileIdentity, validatedMissingNewline);
          }
-         else {
-             this.newSession(newSessionOptions);
-@@ -613,19 +752,43 @@
+         else if (preloadedFileEntries?.length) {
+             this._loadEntries(preloadedFileEntries, newSessionOptions);
+@@ -662,19 +808,44 @@ export class SessionManager {
      setSessionFile(sessionFile) {
          this._setSessionFile(sessionFile);
      }
@@ -743,12 +783,13 @@
 +    _setSessionFile(sessionFile, preloadedFileEntries, validatedFileIdentity, validatedMissingNewline) {
          this.sessionFile = resolvePath(sessionFile);
 -        if (existsSync(this.sessionFile)) {
--            this.fileEntries = preloadedFileEntries ?? loadEntriesFromFile(this.sessionFile);
+-            const entries = preloadedFileEntries ?? loadEntriesFromFile(this.sessionFile);
 +        if (sessionPathExists(this.sessionFile)) {
++            let entries;
 +            if (preloadedFileEntries) {
 +                if (!validatedFileIdentity)
 +                    throw new Error("Preloaded session entries require a validated file identity");
-+                this.fileEntries = preloadedFileEntries;
++                entries = preloadedFileEntries;
 +                this.sessionFileIdentity = validatedFileIdentity;
 +                if (validatedMissingNewline) {
 +                    const opened = openValidatedSessionFile(this.sessionFile, constants.O_WRONLY | constants.O_APPEND, this.sessionFileIdentity);
@@ -762,12 +803,12 @@
 +            }
 +            else {
 +                const loaded = loadValidatedEntries(this.sessionFile);
-+                this.fileEntries = loaded.entries;
++                entries = loaded.entries;
 +                this.sessionFileIdentity = loaded.identity;
 +            }
              // If file was empty, initialize it with a valid session header. If it was
              // non-empty but did not parse as a pi session, fail without modifying it.
-             if (this.fileEntries.length === 0) {
+             if (entries.length === 0) {
                  const explicitPath = this.sessionFile;
 -                if (statSync(explicitPath).size > 0) {
 +                const opened = openValidatedSessionFile(explicitPath, constants.O_RDONLY, this.sessionFileIdentity);
@@ -783,7 +824,7 @@
                  this._rewriteFile();
                  this.flushed = true;
                  return;
-@@ -645,6 +808,7 @@
+@@ -689,6 +860,7 @@ export class SessionManager {
          }
      }
      newSession(options) {
@@ -791,7 +832,7 @@
          if (options?.id !== undefined) {
              assertValidSessionId(options.id);
          }
-@@ -695,8 +859,19 @@
+@@ -754,8 +926,19 @@ export class SessionManager {
      _rewriteFile() {
          if (!this.persist || !this.sessionFile)
              return;
@@ -812,7 +853,7 @@
              for (const entry of this.fileEntries) {
                  writeFileSync(fd, `${JSON.stringify(entry)}\n`);
              }
-@@ -723,13 +898,22 @@
+@@ -782,13 +965,22 @@ export class SessionManager {
      getSessionFile() {
          return this.sessionFile;
      }
@@ -836,7 +877,7 @@
              }
              else {
                  // Mark as not flushed so when assistant arrives, all entries get written
-@@ -738,7 +922,9 @@
+@@ -797,7 +989,9 @@ export class SessionManager {
              return;
          }
          if (!this.flushed) {
@@ -847,7 +888,7 @@
              try {
                  for (const e of this.fileEntries) {
                      writeFileSync(fd, `${JSON.stringify(e)}\n`);
-@@ -750,7 +936,13 @@
+@@ -809,7 +1003,13 @@ export class SessionManager {
              this.flushed = true;
          }
          else {
@@ -862,7 +903,7 @@
          }
      }
      _appendEntry(entry) {
-@@ -1186,28 +1378,14 @@
+@@ -1323,28 +1523,14 @@ export class SessionManager {
       * @param sessionDir Optional session directory for /new or /branch. If omitted, derives from file's parent.
       * @param cwdOverride Optional cwd override instead of the session header cwd.
       */
@@ -899,7 +940,7 @@
      }
      /**
       * Continue the most recent session, or create new if none.
-@@ -1266,13 +1444,10 @@
+@@ -1403,13 +1589,10 @@ export class SessionManager {
              cwd: resolvedTargetCwd,
              parentSession: resolvedSourcePath,
          };
@@ -917,9 +958,21 @@
          return new SessionManager(resolvedTargetCwd, dir, newSessionFile, true);
      }
      /**
+@@ -1427,7 +1610,8 @@ export class SessionManager {
+                 if (!file.endsWith(".jsonl"))
+                     continue;
+                 const path = join(dir, file);
+-                const header = readSessionHeaderForDiscovery(path);
++                const discovered = readSessionHeaderForDiscovery(path);
++                const header = discovered?.header;
+                 if (header?.id !== id)
+                     continue;
+                 if (filterCwd && !sessionCwdMatches(getSessionHeaderCwd(header), resolvedCwd))
+diff --git a/dist/main.js b/dist/main.js
+index 8b91f3d..fafb669 100644
 --- a/dist/main.js
 +++ b/dist/main.js
-@@ -433,7 +433,12 @@
+@@ -439,7 +439,12 @@ async function promptForMissingSessionCwd(issue, settingsManager) {
          { label: "Cancel", value: undefined },
      ]);
  }

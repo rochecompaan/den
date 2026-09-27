@@ -1,0 +1,106 @@
+--- a/dist/modes/interactive/components/tool-execution.js
++++ b/dist/modes/interactive/components/tool-execution.js
+@@ -1,9 +1,11 @@
+-import { Box, Container, getCapabilities, Image, MouseRegion, Spacer, Text, } from "@earendil-works/pi-tui";
++import { Box, Container, getCapabilities, Image, MouseRegion, Spacer, Text, truncateToWidth, } from "@earendil-works/pi-tui";
+ import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.js";
+ import { convertToPng } from "../../../utils/image-convert.js";
+ import { theme } from "../theme/theme.js";
+ import { keyHint } from "./keybinding-hints.js";
+ const FALLBACK_PREVIEW_LINES = 10;
++const FALLBACK_PREVIEW_TEXT_CHARACTERS = 10_000;
++const FALLBACK_PREVIEW_COLUMNS = 500;
+ export class ToolExecutionComponent extends Container {
+     contentBox;
+     contentText;
+@@ -91,16 +93,13 @@
+         return new Text(theme.fg("toolTitle", theme.bold(this.toolName)), 0, 0);
+     }
+     createResultFallback() {
+-        const output = this.getTextOutput();
+-        if (!output) {
++        const { output, displayLines, truncationReason } = this.getFallbackPreview();
++        if (!output && !truncationReason) {
+             return undefined;
+         }
+-        const lines = output.split("\n");
+-        const displayLines = this.expanded ? lines : lines.slice(0, FALLBACK_PREVIEW_LINES);
+-        const remaining = lines.length - displayLines.length;
+         let text = displayLines.map((line) => theme.fg("toolOutput", line)).join("\n");
+-        if (remaining > 0) {
+-            text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
++        if (truncationReason) {
++            text += this.formatExpansionHint(truncationReason);
+         }
+         return new Text(text, 0, 0);
+     }
+@@ -319,7 +318,53 @@
+         }
+     }
+     getTextOutput() {
+-        return getRenderedTextOutput(this.result, this.showImages);
++        if (!this.result || this.expanded) {
++            return {
++                text: getRenderedTextOutput(this.result, this.showImages),
++                inputTruncated: false,
++            };
++        }
++        let remainingCharacters = FALLBACK_PREVIEW_TEXT_CHARACTERS;
++        let inputTruncated = false;
++        const content = this.result.content.flatMap((block) => {
++            if (block.type !== "text" || block.text === undefined) {
++                return [block];
++            }
++            if (remainingCharacters === 0) {
++                inputTruncated ||= block.text.length > 0;
++                return [];
++            }
++            const text = block.text.slice(0, remainingCharacters);
++            remainingCharacters -= text.length;
++            inputTruncated ||= text.length < block.text.length;
++            return [{ ...block, text }];
++        });
++        return {
++            text: getRenderedTextOutput({ ...this.result, content }, this.showImages),
++            inputTruncated,
++        };
++    }
++    getFallbackPreview() {
++        const { text: output, inputTruncated } = this.getTextOutput();
++        const lines = output.split("\n");
++        if (this.expanded) {
++            return { output, displayLines: lines };
++        }
++        const previewLines = lines.slice(0, FALLBACK_PREVIEW_LINES);
++        const displayLines = previewLines.map((line) => truncateToWidth(line, FALLBACK_PREVIEW_COLUMNS));
++        const remainingLines = lines.length - previewLines.length;
++        const hasTruncatedLine = displayLines.some((line, index) => line !== previewLines[index]);
++        const truncationReason = inputTruncated
++            ? "output truncated"
++            : remainingLines > 0
++                ? `${remainingLines} more lines`
++                : hasTruncatedLine
++                    ? "line truncated"
++                    : undefined;
++        return { output, displayLines, truncationReason };
++    }
++    formatExpansionHint(reason) {
++        return `${theme.fg("muted", `\n... (${reason},`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+     }
+     formatToolExecution() {
+         let text = theme.fg("toolTitle", theme.bold(this.toolName));
+@@ -327,9 +372,12 @@
+         if (content) {
+             text += `\n\n${content}`;
+         }
+-        const output = this.getTextOutput();
++        const { output, displayLines, truncationReason } = this.getFallbackPreview();
+         if (output) {
+-            text += `\n${output}`;
++            text += `\n${displayLines.join("\n")}`;
++        }
++        if (truncationReason) {
++            text += this.formatExpansionHint(truncationReason);
+         }
+         return text;
+     }

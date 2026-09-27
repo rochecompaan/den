@@ -118,7 +118,7 @@ func TestRunRejectsPiArgumentsBeforeRepoWolfOrHomeResolution(t *testing.T) {
 	homeResolved := false
 	code := runWithLifecycleAndHome(context.Background(), manifest.Manifest{
 		Agent: manifest.Agent{
-			ArgumentPolicy:   "pi-0.84.4",
+			ArgumentPolicy:   "pi-0.87.1",
 			ReservedFlags:    []string{"--session-dir", "--session", "--fork", "--export", "--extension", "-e", "--skill", "--prompt-template", "--theme"},
 			ReservedCommands: []string{"install", "remove", "uninstall", "update", "list", "config"},
 		},

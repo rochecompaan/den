@@ -4,15 +4,16 @@ let
   pi = import ../packages/pi-coding-agent.nix { inherit pkgs; };
   inherit (pkgs) lib;
   expected = {
-    tarballHash = "sha256-W852bRnDzroY8/uq2RxEnJ+dc5gfnjQA7O+TIAbwaWg=";
-    lockHash = "sha256-/xfQaHHRD9Riiv+hqSHfFzvx+GBeByzCqgpO5Oi0cc4=";
-    npmDepsHash = "sha256-rSUYLw/RoIZ2f6gMwpSUdDqGECFUnm0KnNu/uCLYbpE=";
+    tarballHash = "sha256-FCPuPGHnyWRk4cvzyNwk0wVss0EJlcNnGpjD7MUnVA8=";
+    lockHash = "sha256-Cjn4JlMJY+XeEZYSBgoWLWvTZslBD0qnFk1HFzY9Za4=";
+    npmDepsHash = "sha256-6INJmrxolx1pKeYMejhJdOuMHkas8mJJwOGfSaM4bDI=";
+    toolResultPreviewPatchHash = "sha256-A8He1FEx49gnZ9FMVnWsqgKQaq5JrVeCvggxzwLLZkQ=";
   };
   hostileExtension = ./fixtures/pi/hostile-package-extension.ts;
   credentialFile = pkgs.writeText "pi-package-credential-fixture" "den-pi-credential-must-not-enter-derivation";
 in
 assert pi.pname == "pi-coding-agent";
-assert pi.version == "0.84.4";
+assert pi.version == "0.87.1";
 assert lib.versionAtLeast pi.nodejs.version "22.19.0";
 assert pi.tarballHash == expected.tarballHash;
 assert pi.lockHash == expected.lockHash;
@@ -21,6 +22,11 @@ assert pi.actualLockHash == builtins.convertHash {
   toHashFormat = "base16";
 };
 assert pi.npmDepsHash == expected.npmDepsHash;
+assert pi.toolResultPreviewPatchHash == expected.toolResultPreviewPatchHash;
+assert pi.actualToolResultPreviewPatchHash == builtins.convertHash {
+  hash = expected.toolResultPreviewPatchHash;
+  toHashFormat = "base16";
+};
 assert pi.actualPatchHash == builtins.convertHash {
   hash = pi.patchHash;
   toHashFormat = "base16";
@@ -41,7 +47,7 @@ pkgs.runCommand "pi-package"
     test -f "${pi.packageRoot}/dist/modes/interactive/assets/clankolas.png"
     test -f "${pi.packageRoot}/dist/modes/interactive/theme/dark.json"
     test "$(${pkgs.jq}/bin/jq -r .name "${pi.packageRoot}/package.json")" = "@earendil-works/pi-coding-agent"
-    test "$(${pkgs.jq}/bin/jq -r .version "${pi.packageRoot}/package.json")" = "0.84.4"
+    test "$(${pkgs.jq}/bin/jq -r .version "${pi.packageRoot}/package.json")" = "0.87.1"
     while IFS= read -r dependency; do
       test -f "${pi.packageRoot}/node_modules/$dependency/package.json" || {
         echo "missing direct runtime dependency: $dependency" >&2
@@ -77,7 +83,7 @@ pkgs.runCommand "pi-package"
       const [major, minor] = process.versions.node.split(".").map(Number);
       process.exit(major === 22 && minor >= 19 ? 0 : 1);
     '
-    test "$("$pi/bin/pi" --version)" = "0.84.4"
+    test "$("$pi/bin/pi" --version)" = "0.87.1"
     ! ${pkgs.gnugrep}/bin/grep -E '(npm|git|curl|wget|fetch)' "$pi/bin/pi"
     credential=$(cat "$credentialFile")
     ! ${pkgs.gnugrep}/bin/grep -R -F -q -- "$credential" "$pi"
@@ -100,6 +106,12 @@ pkgs.runCommand "pi-package"
     writeFileSync(outside, session("hostile", hostileCwd));
 
     const { AgentSessionRuntime } = await import(process.env.PI_SESSION_RUNTIME);
+    const { SessionManager } = await import(process.env.PI_SESSION_MANAGER);
+    const exactSession = join(sessionRoot, "exact-session.jsonl");
+    writeFileSync(exactSession, session("exact-session", trustedCwd));
+    if (SessionManager.findById(trustedCwd, "exact-session", sessionRoot) !== exactSession) {
+      throw new Error("exact session ID lookup failed");
+    }
     let loadedCwd;
     const currentSession = {
       sessionFile: undefined,
@@ -174,6 +186,7 @@ pkgs.runCommand "pi-package"
     EOF
     PI_CODING_AGENT_SESSION_DIR="$TMPDIR/sessions" \
       PI_SESSION_RUNTIME="${pi.packageRoot}/dist/core/agent-session-runtime.js" \
+      PI_SESSION_MANAGER="${pi.packageRoot}/dist/core/session-manager.js" \
       "${pi.nodejs}/bin/node" "$TMPDIR/session-switch.mjs"
 
     state="$TMPDIR/state"
@@ -283,7 +296,7 @@ pkgs.runCommand "pi-package"
 
     env -i HOME="$TMPDIR/home" PATH= PI_CODING_AGENT_DIR="$state" \
       "$pi/bin/pi" --version > "$TMPDIR/empty-path-version"
-    test "$(cat "$TMPDIR/empty-path-version")" = "0.84.4"
+    test "$(cat "$TMPDIR/empty-path-version")" = "0.87.1"
     env -i HOME="$TMPDIR/home" PI_CODING_AGENT_DIR="$state" \
       ${pkgs.coreutils}/bin/timeout 10 "$pi/bin/pi" --mode rpc \
       < /dev/null > "$TMPDIR/rpc.out" 2>&1

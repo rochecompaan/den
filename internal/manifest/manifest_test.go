@@ -109,7 +109,7 @@ func TestLoadRejectsUnsafeAgentContractValues(t *testing.T) {
 
 func TestLoadRejectsArgumentPolicyTableMismatch(t *testing.T) {
 	pi := strings.ReplaceAll(validManifest, `"name":"claude"`, `"name":"pi"`)
-	pi = strings.ReplaceAll(pi, `"commandName":"claude","argumentPolicy":"claude","mandatoryArgs":["--safe"],"resourceArgs":[],"reservedFlags":["--settings","--permission-mode","--dangerously-skip-permissions","--plugin-dir","--mcp-config","--strict-mcp-config","--setting-sources"],"reservedCommands":[]`, `"commandName":"pi","argumentPolicy":"pi-0.84.4","mandatoryArgs":[],"resourceArgs":[],"reservedFlags":["--session-dir","--session","--fork","--export","--extension","-e","--skill","--prompt-template","--theme"],"reservedCommands":["install","remove","uninstall","update","list","config"]`)
+	pi = strings.ReplaceAll(pi, `"commandName":"claude","argumentPolicy":"claude","mandatoryArgs":["--safe"],"resourceArgs":[],"reservedFlags":["--settings","--permission-mode","--dangerously-skip-permissions","--plugin-dir","--mcp-config","--strict-mcp-config","--setting-sources"],"reservedCommands":[]`, `"commandName":"pi","argumentPolicy":"pi-0.87.1","mandatoryArgs":[],"resourceArgs":[],"reservedFlags":["--session-dir","--session","--fork","--export","--extension","-e","--skill","--prompt-template","--theme"],"reservedCommands":["install","remove","uninstall","update","list","config"]`)
 	if _, err := Load(writeManifest(t, pi)); err != nil {
 		t.Fatalf("Load() rejected Pi policy table: %v", err)
 	}
