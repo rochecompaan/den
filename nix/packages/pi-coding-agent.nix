@@ -3,22 +3,29 @@
 let
   inherit (pkgs) lib;
   pname = "pi-coding-agent";
-  version = "0.84.4";
+  version = "0.87.1";
   packageName = "@earendil-works/pi-coding-agent";
-  tarballHash = "sha256-W852bRnDzroY8/uq2RxEnJ+dc5gfnjQA7O+TIAbwaWg=";
-  lockHash = "sha256-/xfQaHHRD9Riiv+hqSHfFzvx+GBeByzCqgpO5Oi0cc4=";
-  npmDepsHash = "sha256-rSUYLw/RoIZ2f6gMwpSUdDqGECFUnm0KnNu/uCLYbpE=";
-  patchHash = "sha256-0DVX2CG8Wrcz1yG5kHp/hBIL51r4UwmuAe+RdlmI7jE=";
-  lock = ./pi-0.84.4-package-lock.json;
-  patch = ../../patches/pi-0.84.4-den-hardening.patch;
+  tarballHash = "sha256-FCPuPGHnyWRk4cvzyNwk0wVss0EJlcNnGpjD7MUnVA8=";
+  lockHash = "sha256-Cjn4JlMJY+XeEZYSBgoWLWvTZslBD0qnFk1HFzY9Za4=";
+  npmDepsHash = "sha256-6INJmrxolx1pKeYMejhJdOuMHkas8mJJwOGfSaM4bDI=";
+  patchHash = "sha256-po9h3qvFu3S1shL1oUQ1GMC7VAJwRy0nRPtQOK9k0AY=";
+  toolResultPreviewPatchHash = "sha256-A8He1FEx49gnZ9FMVnWsqgKQaq5JrVeCvggxzwLLZkQ=";
+  lock = ./pi-0.87.1-package-lock.json;
+  patch = ../../patches/pi-0.87.1-den-hardening.patch;
+  toolResultPreviewPatch = ./pi-tool-result-preview-dist.patch;
   actualLockHash = builtins.hashFile "sha256" lock;
   actualPatchHash = builtins.hashFile "sha256" patch;
+  actualToolResultPreviewPatchHash = builtins.hashFile "sha256" toolResultPreviewPatch;
   expectedLockHash = builtins.convertHash {
     hash = lockHash;
     toHashFormat = "base16";
   };
   expectedPatchHash = builtins.convertHash {
     hash = patchHash;
+    toHashFormat = "base16";
+  };
+  expectedToolResultPreviewPatchHash = builtins.convertHash {
+    hash = toolResultPreviewPatchHash;
     toHashFormat = "base16";
   };
 in
@@ -28,6 +35,8 @@ assert lib.assertMsg (actualLockHash == expectedLockHash)
   "Pi package lock changed without updating its pinned hash";
 assert lib.assertMsg (actualPatchHash == expectedPatchHash)
   "Pi hardening patch changed without updating its pinned hash";
+assert lib.assertMsg (actualToolResultPreviewPatchHash == expectedToolResultPreviewPatchHash)
+  "Pi tool-result preview patch changed without updating its pinned hash";
 pkgs.buildNpmPackage (finalAttrs: {
   inherit pname version npmDepsHash;
   nodejs = pkgs.nodejs_22;
@@ -36,13 +45,20 @@ pkgs.buildNpmPackage (finalAttrs: {
     hash = tarballHash;
   };
 
-  patches = [ patch ];
+  patches = [ patch toolResultPreviewPatch ];
   postPatch = ''
     rm npm-shrinkwrap.json
     cp ${lock} package-lock.json
   '';
   dontNpmBuild = true;
+  doCheck = true;
   nativeBuildInputs = [ pkgs.makeWrapper ];
+  checkPhase = ''
+    runHook preCheck
+    PI_PACKAGE_ROOT="$PWD" PI_PACKAGE_DIR="$PWD" \
+      ${pkgs.nodejs_22}/bin/node ${./pi-tool-result-preview.test.mjs}
+    runHook postCheck
+  '';
 
   installPhase = ''
     runHook preInstall
@@ -55,11 +71,13 @@ pkgs.buildNpmPackage (finalAttrs: {
   '';
 
   passthru = {
-    inherit actualLockHash actualPatchHash lockHash npmDepsHash patchHash tarballHash;
+    inherit actualLockHash actualPatchHash actualToolResultPreviewPatchHash lockHash npmDepsHash patchHash
+      tarballHash toolResultPreviewPatchHash;
     nodejs = pkgs.nodejs_22;
     packageRoot = "${finalAttrs.finalPackage}/lib/node_modules/${packageName}";
     packageLock = lock;
     hardeningPatch = patch;
+    inherit toolResultPreviewPatch;
   };
 
   meta = {

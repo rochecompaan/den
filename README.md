@@ -300,7 +300,7 @@ runtime values and must not be put in Nix configuration.
 All configured resources must be Nix paths or packages that become immutable
 store paths. Den accepts extensions, Pi packages, skills, prompt templates, and
 themes, preserves list order within each configured subgroup, and supplies none
-by default. Pi 0.84.4 resolves each resource type independently in this order:
+by default. Pi 0.87.1 resolves each resource type independently in this order:
 
 1. Extensions: direct configured extensions, configured-package extensions,
    then enabled trusted-project and user extensions.
