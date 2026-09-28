@@ -109,6 +109,9 @@ mkAgentSandbox {
       {
         name = "agent";
         explicitPath = options.agentDir;
+        managedFiles = lib.mapAttrsToList
+          (destination: source: { inherit destination source; })
+          options.stateFiles.agent;
         inheritedEnvironment = "PI_CODING_AGENT_DIR";
         defaultPath = ".local/state/den/pi/agent";
         defaultWritablePaths = [ ];
@@ -117,6 +120,7 @@ mkAgentSandbox {
       {
         name = "session";
         explicitPath = options.sessionDir;
+        managedFiles = [ ];
         inheritedEnvironment = "PI_CODING_AGENT_SESSION_DIR";
         defaultPath = ".local/state/den/pi/sessions";
         defaultWritablePaths = [ ];

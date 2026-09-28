@@ -228,6 +228,10 @@ let
   pi = inputs.den.lib.${system}.mkPi {
     agentDir = null;
     sessionDir = null;
+    stateFiles.agent = {
+      "settings.json" = settingsFile;
+      "profiles/pi-subagents/openai.json" = "${profiles}/openai.json";
+    };
     extraPkgs = [ pkgs.neovim ];
     resources = {
       extensions = [ ./pi/extension.ts ];
@@ -250,6 +254,10 @@ programs.den.pi = {
   enable = true;
   agentDir = null;
   sessionDir = null;
+  stateFiles.agent = {
+    "settings.json" = settingsFile;
+    "profiles/pi-subagents/openai.json" = "${profiles}/openai.json";
+  };
   extraPkgs = [ pkgs.neovim ];
   resources = {
     extensions = [ ];
@@ -294,6 +302,20 @@ sessions remain confined to the selected session directory. Den does not import
 host `.pi/agent`, host `auth.json`, or host-global `.agents` resources from
 either the invoking-account home or runtime home. Provider credentials remain
 runtime values and must not be put in Nix configuration.
+
+`stateFiles.agent` declares authoritative Nix-store files or directories to
+restore as links below the selected agent directory:
+
+```nix
+stateFiles.agent = {
+  "settings.json" = settingsFile;
+  "profiles/pi-subagents/openai.json" = "${profiles}/openai.json";
+};
+```
+
+Den replaces these leaves before every launch; all unlisted paths remain
+mutable. It rejects parent symlinks and directory leaves, and it does not
+import host credentials.
 
 ### Pi resources and project trust
 
@@ -474,8 +496,19 @@ tree. All values are optional. These are the current defaults:
 }
 ```
 
-For either module, put these values below `programs.den.claude`. The modules
-also add an `enable` Boolean, which defaults to `false`.
+For Pi, replace `configDir` with `agentDir` and `sessionDir`, and it also
+accepts `stateFiles.agent` for authoritative store-backed agent state:
+
+```nix
+stateFiles.agent = {
+  "settings.json" = settingsFile;
+  "profiles/pi-subagents/openai.json" = "${profiles}/openai.json";
+};
+```
+
+For Claude, put these values below `programs.den.claude`; put Pi values below
+`programs.den.pi`. The modules also add an `enable` Boolean, which defaults to
+`false`.
 
 `configDir` and each `socketPath` are `null` or absolute path strings.
 `extraPkgs` is a list of Nix packages. Each `hostPorts` value is a unique list

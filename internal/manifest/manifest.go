@@ -63,12 +63,17 @@ type SecurityAdapter struct {
 	Arguments []string `json:"arguments"`
 }
 type StateBinding struct {
-	Name                 string        `json:"name"`
-	ExplicitPath         *string       `json:"explicitPath"`
-	InheritedEnvironment string        `json:"inheritedEnvironment"`
-	DefaultPath          string        `json:"defaultPath"`
-	DefaultWritablePaths []string      `json:"defaultWritablePaths"`
-	Exports              []StateExport `json:"exports"`
+	Name                 string             `json:"name"`
+	ExplicitPath         *string            `json:"explicitPath"`
+	InheritedEnvironment string             `json:"inheritedEnvironment"`
+	DefaultPath          string             `json:"defaultPath"`
+	DefaultWritablePaths []string           `json:"defaultWritablePaths"`
+	Exports              []StateExport      `json:"exports"`
+	ManagedFiles         []ManagedStateFile `json:"managedFiles"`
+}
+type ManagedStateFile struct {
+	Destination string `json:"destination"`
+	Source      string `json:"source"`
 }
 type StateExport struct {
 	Kind          string `json:"kind"`
@@ -226,6 +231,23 @@ func (s StateBinding) validate() error {
 			return errors.New("manifest field stateBindings.exports is invalid")
 		}
 	}
+	return s.validateManagedFiles()
+}
+
+func (s StateBinding) validateManagedFiles() error {
+	seen := make(map[string]struct{}, len(s.ManagedFiles))
+	for _, file := range s.ManagedFiles {
+		if !safeRelativePath(file.Destination) {
+			return errors.New("manifest field stateBindings.managedFiles.destination is invalid")
+		}
+		if _, exists := seen[file.Destination]; exists {
+			return errors.New("manifest field stateBindings.managedFiles has duplicate managed destination")
+		}
+		seen[file.Destination] = struct{}{}
+		if !safeStorePath(file.Source) {
+			return errors.New("manifest field stateBindings.managedFiles.source is invalid")
+		}
+	}
 	return nil
 }
 
@@ -262,6 +284,20 @@ func safeDefaultPath(path string) bool {
 		return false
 	}
 	return filepath.IsAbs(path) || (path != "." && path != ".." && !strings.HasPrefix(path, ".."+string(filepath.Separator)))
+}
+func safeRelativePath(path string) bool {
+	if path == "" || filepath.IsAbs(path) || filepath.Clean(path) != path || strings.IndexByte(path, 0) >= 0 || strings.ContainsAny(path, "\r\n") {
+		return false
+	}
+	for _, component := range strings.Split(path, string(filepath.Separator)) {
+		if component == "" || component == "." || component == ".." {
+			return false
+		}
+	}
+	return true
+}
+func safeStorePath(path string) bool {
+	return safePath(path) && strings.HasPrefix(path, "/nix/store/")
 }
 func validateArguments(field string, values []string) error {
 	for _, value := range values {

@@ -1,6 +1,9 @@
 package launch
 
-import "github.com/rochecompaan/den/internal/configdir"
+import (
+	"github.com/rochecompaan/den/internal/configdir"
+	"github.com/rochecompaan/den/internal/managedstate"
+)
 
 // StateInputs are generic state exports and Fence filesystem inputs.
 type StateInputs struct {
@@ -31,6 +34,21 @@ func StateInputsFrom(handles []*configdir.Handle) StateInputs {
 		}
 	}
 	return inputs
+}
+
+func managedRoot(handle *configdir.Handle) managedstate.Root {
+	return managedstate.Root{
+		Path: handle.CanonicalPath, Device: handle.Device, Inode: handle.Inode,
+	}
+}
+
+func revalidateStateHandles(handles []*configdir.Handle) error {
+	for _, handle := range handles {
+		if err := handle.Revalidate(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func closeStateHandles(handles []*configdir.Handle) error {

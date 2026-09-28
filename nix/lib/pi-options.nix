@@ -6,6 +6,7 @@ let
   defaults = {
     agentDir = null;
     sessionDir = null;
+    stateFiles = { agent = { }; };
     extraPkgs = [ ];
     bundles = [ ];
     resources = {
@@ -30,15 +31,28 @@ let
       hostPorts = [ ];
     };
   };
-  allowedRootOptions = [ "agentDir" "sessionDir" "extraPkgs" "bundles" "resources" "docker" "podman" ];
+  allowedRootOptions = [ "agentDir" "sessionDir" "stateFiles" "extraPkgs" "bundles" "resources" "docker" "podman" ];
   allowedResourceOptions = [ "extensions" "packages" "skills" "promptTemplates" "themes" ];
+  allowedStateFileBindings = [ "agent" ];
   allowedContainerOptions = [ "enable" "package" "composePackage" "socketPath" "hostPorts" ];
   hasOnly = allowed: value: lib.all (name: builtins.elem name allowed) (builtins.attrNames value);
   isAbsoluteString = value: builtins.isString value && builtins.match "^/.*" value != null;
   isPackage = value: lib.isDerivation value;
   isResource = value: builtins.isPath value || isPackage value;
+  isStoreSource = value:
+    isResource value
+    || (builtins.isString value
+        && lib.hasPrefix "${builtins.storeDir}/" value
+        && builtins.hasContext value);
+  isSafeDestination = destination:
+    let components = lib.splitString "/" destination; in
+    destination != ""
+    && builtins.match "^/.*" destination == null
+    && builtins.match ".*[\r\n].*" destination == null
+    && lib.all (component: component != "" && component != "." && component != "..") components;
   isPort = value: builtins.isInt value && value >= 1 && value <= 65535;
   resources = defaults.resources // (raw.resources or { });
+  stateFiles = defaults.stateFiles // (raw.stateFiles or { });
   docker = defaults.docker // (raw.docker or { });
   podman = defaults.podman // (raw.podman or { });
   validResources =
@@ -60,6 +74,15 @@ let
     assert lib.assertMsg (value.enable || value.hostPorts == [ ])
       "${name}.hostPorts requires ${name}.enable = true";
     value;
+  validStateFiles =
+    assert lib.assertMsg (builtins.isAttrs stateFiles) "Pi stateFiles must be an attribute set";
+    assert lib.assertMsg (hasOnly allowedStateFileBindings stateFiles) "Pi stateFiles has an unknown binding";
+    assert lib.assertMsg (builtins.isAttrs stateFiles.agent) "Pi stateFiles.agent must be an attribute set";
+    assert lib.assertMsg (lib.all isSafeDestination (builtins.attrNames stateFiles.agent))
+      "Pi stateFiles.agent destinations must be safe relative paths";
+    assert lib.assertMsg (lib.all isStoreSource (builtins.attrValues stateFiles.agent))
+      "Pi stateFiles.agent sources must be Nix store paths";
+    stateFiles;
 in
 assert lib.assertMsg (builtins.isAttrs raw) "Pi options must be an attribute set";
 assert lib.assertMsg (hasOnly allowedRootOptions raw) "Pi has an unknown option";
@@ -67,6 +90,7 @@ assert lib.assertMsg (!(raw ? agentDir) || raw.agentDir == null || isAbsoluteStr
   "agentDir must be null or an absolute string";
 assert lib.assertMsg (!(raw ? sessionDir) || raw.sessionDir == null || isAbsoluteString raw.sessionDir)
   "sessionDir must be null or an absolute string";
+assert lib.assertMsg (!(raw ? stateFiles) || builtins.isAttrs raw.stateFiles) "stateFiles must be an attribute set";
 assert lib.assertMsg (!(raw ? extraPkgs) || (builtins.isList raw.extraPkgs && lib.all isPackage raw.extraPkgs))
   "extraPkgs must be a list of packages";
 assert lib.assertMsg (!(raw ? bundles) || (builtins.isList raw.bundles && lib.all isPackage raw.bundles))
@@ -77,6 +101,7 @@ assert lib.assertMsg (!(raw ? podman) || builtins.isAttrs raw.podman) "podman mu
 {
   agentDir = raw.agentDir or defaults.agentDir;
   sessionDir = raw.sessionDir or defaults.sessionDir;
+  stateFiles.agent = lib.mapAttrs (_: source: "${source}") validStateFiles.agent;
   extraPkgs = raw.extraPkgs or defaults.extraPkgs;
   bundles = raw.bundles or defaults.bundles;
   inherit validResources;

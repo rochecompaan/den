@@ -81,11 +81,9 @@ func runFenceWithTemporary(
 		fmt.Fprintln(stderr, "Fence policy write failed")
 		return 1
 	}
-	for _, handle := range handles {
-		if err := handle.Revalidate(); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
+	if err := revalidateStateHandles(handles); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
 	if darwinRevalidate != nil {
 		if err := darwinRevalidate(); err != nil {
