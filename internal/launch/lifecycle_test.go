@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/rochecompaan/den/internal/configdir"
 	"github.com/rochecompaan/den/internal/container"
 	"github.com/rochecompaan/den/internal/environment"
+	"github.com/rochecompaan/den/internal/managedstate"
 	"github.com/rochecompaan/den/internal/manifest"
 	"github.com/rochecompaan/den/internal/repowolf"
 )
@@ -143,6 +145,131 @@ func TestRunRejectsPiArgumentsBeforeRepoWolfOrHomeResolution(t *testing.T) {
 	if code != 1 || repoWolfRead || homeResolved {
 		t.Fatalf("runWithLifecycleAndHome() = %d, RepoWolf read = %t, home resolved = %t", code, repoWolfRead, homeResolved)
 	}
+}
+
+func TestRunRestoresManagedStateBeforeLifecycle(t *testing.T) {
+	launcherManifest, values, agentDirectory := managedLaunchFixture(t)
+	managed := []manifest.ManagedStateFile{{Destination: "settings.json", Source: "/nix/store/settings.json"}}
+	restored := false
+	code := runWithLifecycleAndHomeAndRestore(context.Background(), launcherManifest, nil,
+		lookup(values), os.Lstat, os.Environ, environment.Build, &bytes.Buffer{},
+		func(context.Context, manifest.Manifest, []string, repowolf.Config, []*configdir.Handle, StateInputs, func() error, []string, container.Socket, container.Socket, io.Writer) int {
+			if !restored {
+				t.Fatal("lifecycle ran before managed state restoration")
+			}
+			return 17
+		},
+		func() (string, error) { return values["HOME"], nil },
+		func(root managedstate.Root, files []manifest.ManagedStateFile) (managedstate.Result, error) {
+			if root.Path != agentDirectory || root.Device == 0 || root.Inode == 0 {
+				t.Fatalf("managed root = %#v, want identity for %q", root, agentDirectory)
+			}
+			if !reflect.DeepEqual(files, managed) {
+				t.Fatalf("managed files = %#v, want %#v", files, managed)
+			}
+			restored = true
+			return managedstate.Result{}, nil
+		},
+	)
+	if code != 17 {
+		t.Fatalf("runWithLifecycleAndHomeAndRestore() = %d, want 17", code)
+	}
+}
+
+func TestRunStopsBeforeLifecycleWhenManagedStateFails(t *testing.T) {
+	launcherManifest, values, _ := managedLaunchFixture(t)
+	var stderr bytes.Buffer
+	lifecycleCalled := false
+	code := runWithLifecycleAndHomeAndRestore(context.Background(), launcherManifest, nil,
+		lookup(values), os.Lstat, os.Environ, environment.Build, &stderr,
+		func(context.Context, manifest.Manifest, []string, repowolf.Config, []*configdir.Handle, StateInputs, func() error, []string, container.Socket, container.Socket, io.Writer) int {
+			lifecycleCalled = true
+			return 0
+		},
+		func() (string, error) { return values["HOME"], nil },
+		func(managedstate.Root, []manifest.ManagedStateFile) (managedstate.Result, error) {
+			return managedstate.Result{}, errors.New(`managed state "settings.json": parent is a symbolic link`)
+		},
+	)
+	if code != 1 || lifecycleCalled || strings.TrimSpace(stderr.String()) != `managed state "settings.json": parent is a symbolic link` {
+		t.Fatalf("code = %d, lifecycle called = %t, stderr = %q", code, lifecycleCalled, stderr.String())
+	}
+}
+
+func TestRunRevalidatesStateAfterManagedMutation(t *testing.T) {
+	launcherManifest, values, agentDirectory := managedLaunchFixture(t)
+	if err := os.Mkdir(agentDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	lifecycleCalled := false
+	code := runWithLifecycleAndHomeAndRestore(context.Background(), launcherManifest, nil,
+		lookup(values), os.Lstat, os.Environ, environment.Build, &stderr,
+		func(context.Context, manifest.Manifest, []string, repowolf.Config, []*configdir.Handle, StateInputs, func() error, []string, container.Socket, container.Socket, io.Writer) int {
+			lifecycleCalled = true
+			return 0
+		},
+		func() (string, error) { return values["HOME"], nil },
+		func(root managedstate.Root, _ []manifest.ManagedStateFile) (managedstate.Result, error) {
+			if err := os.Chmod(root.Path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return managedstate.Result{}, nil
+		},
+	)
+	if code != 1 || lifecycleCalled || strings.TrimSpace(stderr.String()) != "custom configuration directory changed before launch" {
+		t.Fatalf("code = %d, lifecycle called = %t, stderr = %q", code, lifecycleCalled, stderr.String())
+	}
+}
+
+func TestRunCommitsPartiallyMutatedManagedRoot(t *testing.T) {
+	launcherManifest, values, agentDirectory := managedLaunchFixture(t)
+	var stderr bytes.Buffer
+	code := runWithLifecycleAndHomeAndRestore(context.Background(), launcherManifest, nil,
+		lookup(values), os.Lstat, os.Environ, environment.Build, &stderr,
+		func(context.Context, manifest.Manifest, []string, repowolf.Config, []*configdir.Handle, StateInputs, func() error, []string, container.Socket, container.Socket, io.Writer) int {
+			t.Fatal("lifecycle ran after partial managed state restoration")
+			return 0
+		},
+		func() (string, error) { return values["HOME"], nil },
+		func(managedstate.Root, []manifest.ManagedStateFile) (managedstate.Result, error) {
+			return managedstate.Result{Mutated: true}, errors.New(`managed state "settings.json": parent is a symbolic link`)
+		},
+	)
+	if code != 1 {
+		t.Fatalf("runWithLifecycleAndHomeAndRestore() = %d, want 1", code)
+	}
+	if info, err := os.Lstat(agentDirectory); err != nil || !info.IsDir() {
+		t.Fatalf("partially mutated managed root = %v, %v; want retained directory", info, err)
+	}
+	if strings.Contains(stderr.String(), "configuration directory rollback failed") {
+		t.Fatalf("stderr reported rollback failure: %q", stderr.String())
+	}
+}
+
+func managedLaunchFixture(t *testing.T) (manifest.Manifest, map[string]string, string) {
+	t.Helper()
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	agentDirectory := filepath.Join(root, "agent")
+	ca := filepath.Join(root, "ca.pem")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ca, []byte("certificate"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	managed := []manifest.ManagedStateFile{{Destination: "settings.json", Source: "/nix/store/settings.json"}}
+	return manifest.Manifest{
+			Platform: "darwin", ACLProbe: []string{writeStateProbe(t)},
+			StateBindings: []manifest.StateBinding{{
+				Name: "agent", ExplicitPath: &agentDirectory, ManagedFiles: managed,
+				InheritedEnvironment: "PI_CODING_AGENT_DIR", Exports: []manifest.StateExport{{Kind: "environment", Name: "PI_CODING_AGENT_DIR"}},
+			}},
+		}, map[string]string{
+			"REPOWOLF_ENDPOINT": "https://broker.example.test/", "REPOWOLF_TOKEN": "rw1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+			"REPOWOLF_CA_FILE": ca, "HOME": home,
+		}, agentDirectory
 }
 
 func TestLifecycleCommitControlsCustomConfigurationRollback(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 const validManifest = `{
  "version":2,"platform":"linux","fenceExecutable":"/nix/store/fence/bin/fence","repoWolfClientDir":"/nix/store/repowolf","basePolicy":"/nix/store/policy.json","closurePathsFile":"/nix/store/closures","scratchRoot":"/tmp","aclProbe":["/usr/bin/getfacl"],"protectedPathPatterns":["~/.ssh/id_*"],"pathEntries":["/nix/store/bin"],
  "agent":{"name":"claude","executable":"/nix/store/claude/bin/claude","commandName":"claude","argumentPolicy":"claude","mandatoryArgs":["--safe"],"resourceArgs":[],"reservedFlags":["--settings","--permission-mode","--dangerously-skip-permissions","--plugin-dir","--mcp-config","--strict-mcp-config","--setting-sources"],"reservedCommands":[],"environment":{"scrub":[],"set":{}},"packageDirectory":null,"securityAdapter":null},
- "stateBindings":[{"name":"config","explicitPath":null,"inheritedEnvironment":"CLAUDE_CONFIG_DIR","defaultPath":"","defaultWritablePaths":[],"exports":[{"kind":"environment","name":"CLAUDE_CONFIG_DIR","exportDefault":false}]}],
+ "stateBindings":[{"name":"config","explicitPath":null,"inheritedEnvironment":"CLAUDE_CONFIG_DIR","defaultPath":"","defaultWritablePaths":[],"exports":[{"kind":"environment","name":"CLAUDE_CONFIG_DIR","exportDefault":false}],"managedFiles":[{"destination":"settings.json","source":"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-settings.json"}]}],
  "docker":{"enable":false,"socketPath":null,"hostPorts":[],"clientPrograms":[]},"podman":{"enable":false,"socketPath":null,"hostPorts":[],"clientPrograms":[]}
 }`
 
@@ -32,7 +32,7 @@ func TestLoadVersion2RejectsVersionOneAndUnknown(t *testing.T) {
 }
 
 func TestLoadVersion2RequiresBindingAndAllowsRelativeDefault(t *testing.T) {
-	withoutBindings := strings.Replace(validManifest, `"stateBindings":[{"name":"config","explicitPath":null,"inheritedEnvironment":"CLAUDE_CONFIG_DIR","defaultPath":"","defaultWritablePaths":[],"exports":[{"kind":"environment","name":"CLAUDE_CONFIG_DIR","exportDefault":false}]}],`, `"stateBindings":[],`, 1)
+	withoutBindings := strings.Replace(validManifest, `"stateBindings":[{"name":"config","explicitPath":null,"inheritedEnvironment":"CLAUDE_CONFIG_DIR","defaultPath":"","defaultWritablePaths":[],"exports":[{"kind":"environment","name":"CLAUDE_CONFIG_DIR","exportDefault":false}],"managedFiles":[{"destination":"settings.json","source":"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-settings.json"}]}],`, `"stateBindings":[],`, 1)
 	if _, err := Load(writeManifest(t, withoutBindings)); err == nil {
 		t.Fatal("Load() accepted empty stateBindings")
 	}
@@ -53,6 +53,12 @@ func TestValidateStateBinding(t *testing.T) {
 		{"unsafe inherited name", `"CLAUDE_CONFIG_DIR"`, `"CLAUDE-CONFIG"`, "stateBindings"},
 		{"unsafe default path", `"defaultPath":""`, `"defaultPath":"../escape"`, "defaultPath"},
 		{"newline default path", `"defaultPath":""`, `"defaultPath":"bad\npath"`, "defaultPath"},
+		{"absolute managed destination", `"destination":"settings.json"`, `"destination":"/settings.json"`, "managedFiles.destination"},
+		{"dot managed destination", `"destination":"settings.json"`, `"destination":"profiles/./settings.json"`, "managedFiles.destination"},
+		{"parent managed destination", `"destination":"settings.json"`, `"destination":"profiles/../settings.json"`, "managedFiles.destination"},
+		{"empty managed destination", `"destination":"settings.json"`, `"destination":""`, "managedFiles.destination"},
+		{"outside-store managed source", `"source":"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-settings.json"`, `"source":"/tmp/settings.json"`, "managedFiles.source"},
+		{"unclean managed source", `"source":"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-settings.json"`, `"source":"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dir/../settings.json"`, "managedFiles.source"},
 	}
 	if _, err := Load(writeManifest(t, strings.Replace(validManifest, `"version":2`, `"version":2,"unexpected":true`, 1))); err == nil {
 		t.Fatal("Load accepted unknown field")
@@ -64,6 +70,20 @@ func TestValidateStateBinding(t *testing.T) {
 				t.Fatalf("Load() error = %v, want %q", err, test.field)
 			}
 		})
+	}
+}
+
+func TestValidateStateBindingRejectsDuplicateManagedDestination(t *testing.T) {
+	duplicate := strings.Replace(
+		validManifest,
+		`"managedFiles":[{"destination":"settings.json","source":"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-settings.json"}]`,
+		`"managedFiles":[`+
+			`{"destination":"settings.json","source":"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-settings.json"},`+
+			`{"destination":"settings.json","source":"/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-settings.json"}]`,
+		1,
+	)
+	if _, err := Load(writeManifest(t, duplicate)); err == nil || !strings.Contains(err.Error(), "duplicate managed destination") {
+		t.Fatalf("Load() error = %v, want duplicate managed destination", err)
 	}
 }
 

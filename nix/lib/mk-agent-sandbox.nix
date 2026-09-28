@@ -55,9 +55,18 @@ let
   dockerClientPrograms = clientPrograms options.docker dockerPackages [ "docker" "docker-compose" ];
   podmanClientPrograms = clientPrograms options.podman podmanPackages [ "podman" "podman-compose" ];
   requiredPrograms = [ adapter.agent.executable ] ++ dockerClientPrograms ++ podmanClientPrograms;
+  managedStateSources = lib.concatMap
+    (binding: map (file: file.source) (binding.managedFiles or [ ]))
+    stateBindings;
+  managedStateClosure = pkgs.linkFarm "den-managed-state-sources"
+    (lib.imap0 (index: source: {
+      name = toString index;
+      path = source;
+    }) managedStateSources);
   closureRoots = (map (name: deps.${name}) requiredDependencies)
     ++ adapterRuntimePackages ++ adapterClosureOnlyPackages
-    ++ dockerPackages ++ podmanPackages ++ options.extraPkgs;
+    ++ dockerPackages ++ podmanPackages ++ options.extraPkgs
+    ++ lib.optional (managedStateSources != [ ]) managedStateClosure;
   closure = pkgs.closureInfo {
     rootPaths = closureRoots;
   };

@@ -7,6 +7,7 @@ let
   fakeDockerCompose = pkgs.writeShellScriptBin "docker-compose" "exit 0";
   fakePodman = pkgs.writeShellScriptBin "podman" "exit 0";
   fakePodmanCompose = pkgs.writeShellScriptBin "podman-compose" "exit 0";
+  settings = pkgs.writeText "pi-module-settings.json" ''{"theme":"default"}\n'';
   resourcePackage = pkgs.runCommand "pi-module-resource-package" { } ''
     mkdir -p "$out/prompts"
     printf '{"name":"pi-module-resource","pi":{"prompts":["prompts/one.md"]}}\n' > "$out/package.json"
@@ -23,6 +24,7 @@ let
     enable = true;
     agentDir = "/tmp/den-pi-agent";
     sessionDir = "/tmp/den-pi-sessions";
+    stateFiles.agent."settings.json" = settings;
     extraPkgs = [ fakeExtra ];
     inherit resources;
     docker = {
@@ -95,6 +97,8 @@ assert !homeDisabled.config.programs.den.pi.docker.enable;
 assert !devenvDisabled.programs.den.pi.podman.enable;
 assert homeEnabled.config.programs.den.pi.resources == resources;
 assert devenvEnabled.programs.den.pi.resources == resources;
+assert homeEnabled.config.programs.den.pi.stateFiles.agent."settings.json" == settings;
+assert devenvEnabled.programs.den.pi.stateFiles.agent."settings.json" == settings;
 assert homeEnabled.config.programs.den.pi.docker.hostPorts == [ 2376 2375 ];
 assert devenvEnabled.programs.den.pi.podman.hostPorts == [ 8081 8080 ];
 assert count expectedPi.outPath homeEnabled.config.home.packages == 1;
@@ -105,10 +109,15 @@ assert count expectedPi.outPath devenvBoth.packages == 1;
 assert count expectedClaude.outPath devenvBoth.packages == 1;
 assert paths homePiDisabled.config.home.packages == paths homeClaude.config.home.packages;
 assert paths devenvPiDisabled.packages == paths devenvClaude.packages;
-pkgs.runCommand "pi-module-api" { } ''
+pkgs.runCommand "pi-module-api"
+  { nativeBuildInputs = [ pkgs.jq ]; manifest = expectedPi.denManifest; inherit settings; }
+  ''
   test -x ${expectedPi}/bin/pi
   test -x ${expectedClaude}/bin/claude
   test ! -e ${expectedPi}/bin/claude
   test ! -e ${expectedClaude}/bin/pi
+  jq -e --arg settings "$settings" '
+    .stateBindings[0].managedFiles == [{destination:"settings.json", source:$settings}]
+  ' "$manifest"
   touch "$out"
 ''

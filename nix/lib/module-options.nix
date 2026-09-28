@@ -106,6 +106,11 @@ in
         default = null;
         description = "The Pi session directory, or null to use runtime discovery.";
       };
+      stateFiles.agent = mkOption {
+        type = types.attrsOf (types.oneOf [ types.path types.package (types.strMatching "^/nix/store/.*") ]);
+        default = { };
+        description = "Authoritative Nix-store files or directories restored as links below the selected Pi agent directory before each launch.";
+      };
       extraPkgs = mkOption {
         type = types.listOf types.package;
         default = [ ];

@@ -17,6 +17,7 @@ import (
 	"github.com/rochecompaan/den/internal/container"
 	"github.com/rochecompaan/den/internal/environment"
 	"github.com/rochecompaan/den/internal/fence"
+	"github.com/rochecompaan/den/internal/managedstate"
 	"github.com/rochecompaan/den/internal/manifest"
 	"github.com/rochecompaan/den/internal/repowolf"
 )
@@ -25,6 +26,7 @@ type environmentBuilder func([]string, environment.Controlled) []string
 type accountHomeResolver func() (string, error)
 
 type lifecycleRunner func(context.Context, manifest.Manifest, []string, repowolf.Config, []*configdir.Handle, StateInputs, func() error, []string, container.Socket, container.Socket, io.Writer) int
+type managedStateRestorer func(managedstate.Root, []manifest.ManagedStateFile) (managedstate.Result, error)
 
 // Run executes one validated launcher manifest.
 func Run(ctx context.Context, launcherManifest manifest.Manifest, arguments []string) int {
@@ -65,6 +67,22 @@ func runWithLifecycleAndHome(
 	stderr io.Writer,
 	lifecycle lifecycleRunner,
 	resolveAccountHome accountHomeResolver,
+) (exitCode int) {
+	return runWithLifecycleAndHomeAndRestore(ctx, launcherManifest, userArguments, lookup, lstat, environ, build, stderr, lifecycle, resolveAccountHome, managedstate.Restore)
+}
+
+func runWithLifecycleAndHomeAndRestore(
+	ctx context.Context,
+	launcherManifest manifest.Manifest,
+	userArguments []string,
+	lookup func(string) (string, bool),
+	lstat func(string) (fs.FileInfo, error),
+	environ func() []string,
+	build environmentBuilder,
+	stderr io.Writer,
+	lifecycle lifecycleRunner,
+	resolveAccountHome accountHomeResolver,
+	restore managedStateRestorer,
 ) (exitCode int) {
 	if launcherManifest.Agent.ArgumentPolicy != "" {
 		if err := arguments.Validate(launcherManifest.Agent.ArgumentPolicy, launcherManifest.Agent.ReservedFlags, launcherManifest.Agent.ReservedCommands, userArguments); err != nil {
@@ -118,6 +136,20 @@ func runWithLifecycleAndHome(
 			exitCode = 1
 		}
 	}()
+	for index, binding := range launcherManifest.StateBindings {
+		result, restoreErr := restore(managedRoot(handles[index]), binding.ManagedFiles)
+		if result.Mutated {
+			handles[index].Commit()
+		}
+		if restoreErr != nil {
+			fmt.Fprintln(stderr, restoreErr)
+			return 1
+		}
+	}
+	if err := revalidateStateHandles(handles); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	state := StateInputsFrom(handles)
 	var revalidateDarwinSettings func() error
 	if launcherManifest.Agent.Name == "claude" && launcherManifest.Platform == "darwin" {
