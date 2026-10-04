@@ -322,7 +322,7 @@ import host credentials.
 All configured resources must be Nix paths or packages that become immutable
 store paths. Den accepts extensions, Pi packages, skills, prompt templates, and
 themes, preserves list order within each configured subgroup, and supplies none
-by default. Pi 0.87.1 resolves each resource type independently in this order:
+by default. Pi 1.0.2 resolves each resource type independently in this order:
 
 1. Extensions: direct configured extensions, configured-package extensions,
    then enabled trusted-project and user extensions.
@@ -334,8 +334,9 @@ by default. Pi 0.87.1 resolves each resource type independently in this order:
    then direct configured themes.
 
 For same-name resources, Pi keeps the first resource and reports the later
-loser. Discovery-disable flags omit only the corresponding ambient user/project
-subgroup; mandatory configured resources retain their order.
+loser. Discovery-disable flags omit the corresponding ambient user/project
+resources. `--no-extensions` also disables built-in extensions. Mandatory
+configured resources retain their order.
 
 Pi's normal project-trust gate remains authoritative. After a project is
 trusted, Pi may load repository-local resources from `.pi` and

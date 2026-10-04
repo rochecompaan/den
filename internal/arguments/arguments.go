@@ -22,7 +22,7 @@ func Validate(policy string, reservedFlags, reservedCommands, userArgs []string)
 			return errors.New("manifest Claude argument policy is invalid")
 		}
 		return claude.ValidateArguments(userArgs)
-	case "pi-0.87.1":
+	case "pi-1.0.2":
 		return piargs.Validate(reservedFlags, reservedCommands, userArgs)
 	default:
 		return errors.New("manifest argument policy is invalid")
