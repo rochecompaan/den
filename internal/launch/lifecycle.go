@@ -132,13 +132,17 @@ func generatePolicy(
 	}
 	return policy.Generate(policy.Base(base), policy.Dynamic{
 		Platform: launcherManifest.Platform, RepoWolfHostname: config.Hostname, CAFile: config.CAFile,
-		ClosurePaths: closures, Worktree: worktree, ScratchDir: scratchDir,
+		StoreDir: storeDirectory, ClosurePaths: closures, Worktree: worktree, ScratchDir: scratchDir,
 		StatePaths: state.WritablePaths, DeniedWritePaths: state.DeniedWritePaths,
 		ProtectedPaths: protectedStatePaths(handles), UnixSockets: sockets,
 		HostPorts:  container.CombinePorts(launcherManifest.Docker.HostPorts, launcherManifest.Podman.HostPorts),
 		PolicyFile: policyFile,
 	})
 }
+
+// storeDirectory is the Nix store that the sandbox can read and execute.
+// Tests replace it with a private directory.
+var storeDirectory = "/nix/store"
 
 func closurePaths(path string) ([]string, error) {
 	contents, err := os.ReadFile(path)

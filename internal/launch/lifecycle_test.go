@@ -3,12 +3,14 @@ package launch
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,14 +31,20 @@ func TestRunStartsFenceWithReadOnlyPolicyAndCleansTemporaryDirectories(t *testin
 	closures := filepath.Join(root, "closures")
 	fence := filepath.Join(root, "fence")
 	agent := filepath.Join(root, "agent")
+	store := useTestStore(t, root)
+	closure := filepath.Join(store, "package")
+	if err := os.Mkdir(closure, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	for path, contents := range map[string]string{
 		ca:       "certificate",
 		base:     "{}\n",
-		closures: root + "\n",
+		closures: closure + "\n",
 		fence: `#!/bin/sh
 set -eu
 printf '%s\n' "$@" > "$FENCE_ARGS"
 printf '%s' "$DEN_FENCE_POLICY_FILE" > "$FENCE_POLICY"
+cp "$DEN_FENCE_POLICY_FILE" "$FENCE_POLICY_COPY"
 stat -c %a "$DEN_FENCE_POLICY_FILE" > "$FENCE_MODE"
 while [ "$1" != -- ]; do shift; done
 shift
@@ -55,6 +63,7 @@ exec "$@"
 	fenceArgs := filepath.Join(root, "fence-args")
 	policyPath := filepath.Join(root, "policy-path")
 	policyMode := filepath.Join(root, "policy-mode")
+	policyCopy := filepath.Join(root, "policy-copy")
 	agentArgs := filepath.Join(root, "agent-args")
 	agentTMP := filepath.Join(root, "agent-tmp")
 	agentCA := filepath.Join(root, "agent-ca")
@@ -65,6 +74,7 @@ exec "$@"
 		"FENCE_ARGS":        fenceArgs,
 		"FENCE_POLICY":      policyPath,
 		"FENCE_MODE":        policyMode,
+		"FENCE_POLICY_COPY": policyCopy,
 		"AGENT_ARGS":        agentArgs,
 		"AGENT_TMP":         agentTMP,
 		"AGENT_CA":          agentCA,
@@ -93,6 +103,26 @@ exec "$@"
 	policy := readLifecycleFile(t, policyPath)
 	if _, err := os.Lstat(policy); !os.IsNotExist(err) {
 		t.Fatalf("policy was not cleaned up: %v", err)
+	}
+	var written struct {
+		Filesystem struct {
+			AllowRead    []string `json:"allowRead"`
+			AllowExecute []string `json:"allowExecute"`
+		} `json:"filesystem"`
+	}
+	if err := json.Unmarshal([]byte(readLifecycleFile(t, policyCopy)), &written); err != nil {
+		t.Fatal(err)
+	}
+	canonicalStore, err := filepath.EvalSymlinks(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grants := written.Filesystem
+	if !slices.Contains(grants.AllowRead, canonicalStore) || !slices.Contains(grants.AllowExecute, canonicalStore) {
+		t.Fatalf("policy does not grant the store: %#v", grants)
+	}
+	if canonicalClosure := filepath.Join(canonicalStore, "package"); slices.Contains(grants.AllowRead, canonicalClosure) || slices.Contains(grants.AllowExecute, canonicalClosure) {
+		t.Fatalf("policy grants the closure path separately: %#v", grants)
 	}
 	tmp := readLifecycleFile(t, agentTMP)
 	if !strings.Contains(tmp, "/den-") || !strings.Contains(tmp, "/scratch-") {
@@ -328,7 +358,7 @@ func TestLifecycleCommitsEveryStateDirectoryAfterChildStart(t *testing.T) {
 	}
 	for path, contents := range map[string]string{
 		base:     `{"allowPty":true,"network":{"allowedDomains":[],"deniedDomains":[]},"filesystem":{"defaultDenyRead":true,"strictDenyRead":true,"allowGitConfig":true,"allowRead":[],"allowExecute":[],"allowWrite":[],"denyRead":[],"denyWrite":[]},"command":{"deny":[],"useDefaults":true}}`,
-		closures: root + "\n",
+		closures: filepath.Join(useTestStore(t, root), "package") + "\n",
 		fence: `#!/bin/sh
 while [ "$1" != -- ]; do shift; done
 shift
@@ -404,7 +434,7 @@ func TestRunFencePreservesChildStatusWhenTemporaryCleanupFails(t *testing.T) {
 	fence := filepath.Join(root, "fence")
 	agent := filepath.Join(root, "agent")
 	for path, contents := range map[string]string{
-		ca: "certificate", base: "{}\n", closures: root + "\n",
+		ca: "certificate", base: "{}\n", closures: filepath.Join(useTestStore(t, root), "package") + "\n",
 		fence: "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n",
 		agent: "#!/bin/sh\nexit 17\n",
 	} {
@@ -510,6 +540,19 @@ func TestRunRejectsDarwinSecurityOverridesBeforeStartingFence(t *testing.T) {
 			}
 		})
 	}
+}
+
+// useTestStore points the launcher at a private store directory below root.
+func useTestStore(t *testing.T, root string) string {
+	t.Helper()
+	store := filepath.Join(root, "store")
+	if err := os.Mkdir(store, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	original := storeDirectory
+	storeDirectory = store
+	t.Cleanup(func() { storeDirectory = original })
+	return store
 }
 
 func testTemporaryPair(root string) temporaryPair {

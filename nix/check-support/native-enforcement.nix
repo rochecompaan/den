@@ -68,6 +68,9 @@ let
         effective-deny)
           ! cat "$1"
           ;;
+        store-readable)
+          test "$(cat "$1")" = "unrelated store content"
+          ;;
         implicit-host-linux)
           sh -c 'printf mutation > "$1"' den "$1" 2>/dev/null || true
           sh -c 'printf child > "$1"' den "$2" 2>/dev/null || true
@@ -159,7 +162,7 @@ let
       }];
     };
   };
-  unrelatedStoreFile = pkgs.writeText "den-native-unrelated" "must remain unreadable\n";
+  unrelatedStoreFile = pkgs.writeText "den-native-unrelated" "unrelated store content\n";
   resolverACLSource = if pkgs.stdenv.isDarwin then "resolver_acl_darwin.c" else "resolver_acl_other.c";
   resolverHelper = pkgs.stdenv.mkDerivation {
     pname = "den-native-resolver-helper";

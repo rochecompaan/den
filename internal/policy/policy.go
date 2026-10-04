@@ -22,6 +22,7 @@ type Dynamic struct {
 	Platform         string
 	RepoWolfHostname string
 	CAFile           string
+	StoreDir         string
 	ClosurePaths     []string
 	Worktree         string
 	ScratchDir       string
@@ -109,13 +110,27 @@ func Generate(base Base, dynamic Dynamic) ([]byte, error) {
 	policy.Filesystem.AllowRead = appendUnique(policy.Filesystem.AllowRead, ca)
 	policy.Filesystem.DenyWrite = appendUnique(policy.Filesystem.DenyWrite, ca)
 
-	for _, path := range dynamic.ClosurePaths {
-		resolved, err := canonicalPath("closure path", path)
+	if len(dynamic.ClosurePaths) > 0 {
+		store, err := canonicalPath("store directory", dynamic.StoreDir)
 		if err != nil {
 			return nil, err
 		}
-		policy.Filesystem.AllowRead = appendUnique(policy.Filesystem.AllowRead, resolved)
-		policy.Filesystem.AllowExecute = appendUnique(policy.Filesystem.AllowExecute, resolved)
+		if info, err := os.Stat(store); err != nil || !info.IsDir() {
+			return nil, errors.New("policy: store directory must be an existing directory")
+		}
+		for _, path := range dynamic.ClosurePaths {
+			resolved, err := canonicalPath("closure path", path)
+			if err != nil {
+				return nil, err
+			}
+			if !strings.HasPrefix(resolved, store+string(os.PathSeparator)) {
+				return nil, errors.New("policy: closure path must resolve inside the store directory")
+			}
+		}
+		// Fence copies every grant into one command-line argument, so one store
+		// grant keeps that argument within Linux's limit for any closure size.
+		policy.Filesystem.AllowRead = appendUnique(policy.Filesystem.AllowRead, store)
+		policy.Filesystem.AllowExecute = appendUnique(policy.Filesystem.AllowExecute, store)
 	}
 
 	worktree, err := addWritable(&policy, "worktree", dynamic.Worktree)

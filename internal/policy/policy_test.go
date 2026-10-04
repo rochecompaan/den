@@ -1,7 +1,9 @@
 package policy
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -92,8 +94,8 @@ func TestGenerateDynamicPolicyByPlatform(t *testing.T) {
 		t.Run(platform, func(t *testing.T) {
 			dynamic := Dynamic{
 				Platform: platform, RepoWolfHostname: "broker.example.test", CAFile: paths.ca,
-				ClosurePaths: []string{paths.closureRead, paths.closureExec},
-				Worktree:     paths.worktree, ScratchDir: paths.scratch, StatePaths: []string{paths.state + string(os.PathSeparator)},
+				StoreDir: paths.store, ClosurePaths: []string{paths.closureRead, paths.closureExec},
+				Worktree: paths.worktree, ScratchDir: paths.scratch, StatePaths: []string{paths.state + string(os.PathSeparator)},
 				DeniedWritePaths: []string{paths.defaultState + string(os.PathSeparator)},
 				UnixSockets:      []string{paths.socket}, HostPorts: []uint16{6379, 5432, 6379}, PolicyFile: paths.policy,
 			}
@@ -111,14 +113,17 @@ func TestGenerateDynamicPolicyByPlatform(t *testing.T) {
 				t.Fatalf("generated JSON: %v", err)
 			}
 
-			for _, path := range []string{paths.ca, paths.closureRead, paths.closureExec, paths.worktree, paths.scratch, paths.state, paths.socket, paths.policy} {
+			for _, path := range []string{paths.ca, paths.store, paths.worktree, paths.scratch, paths.state, paths.socket, paths.policy} {
 				if !contains(got.Filesystem.AllowRead, path) {
 					t.Errorf("allowRead missing %q", path)
 				}
 			}
+			if !contains(got.Filesystem.AllowExecute, paths.store) {
+				t.Errorf("allowExecute missing %q", paths.store)
+			}
 			for _, path := range []string{paths.closureRead, paths.closureExec} {
-				if !contains(got.Filesystem.AllowExecute, path) {
-					t.Errorf("allowExecute missing %q", path)
+				if contains(got.Filesystem.AllowRead, path) || contains(got.Filesystem.AllowExecute, path) {
+					t.Errorf("closure path %q was granted separately from the store", path)
 				}
 			}
 			for _, path := range []string{paths.worktree, paths.scratch, paths.state, paths.socket} {
@@ -320,6 +325,70 @@ func TestGenerateDeniesAccountAndRuntimeCredentialPathsForReadAndWrite(t *testin
 	}
 }
 
+// Fence copies every filesystem grant into one command-line argument, so the
+// policy must not grow with the closure.
+func TestGenerateGrantsTheStoreOnceForAnyClosureSize(t *testing.T) {
+	root := t.TempDir()
+	paths := makePaths(t, root)
+	generate := func(closures []string) []byte {
+		t.Helper()
+		dynamic := testDynamic(paths)
+		dynamic.StoreDir = paths.store
+		dynamic.ClosurePaths = closures
+		encoded, err := Generate(Base(readBase(t)), dynamic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	closures := make([]string, 0, 500)
+	for index := range 500 {
+		path := filepath.Join(paths.store, fmt.Sprintf("%032d-package", index))
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		closures = append(closures, path)
+	}
+	one := generate(closures[:1])
+	if all := generate(closures); !bytes.Equal(one, all) {
+		t.Fatalf("policy grows with the closure: %d bytes for one path, %d bytes for %d paths", len(one), len(all), len(closures))
+	}
+	var got document
+	if err := json.Unmarshal(one, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(got.Filesystem.AllowRead, paths.store) || !contains(got.Filesystem.AllowExecute, paths.store) {
+		t.Fatalf("store was not granted: %#v", got.Filesystem)
+	}
+}
+
+func TestGenerateRejectsClosurePathsOutsideTheStore(t *testing.T) {
+	root := t.TempDir()
+	paths := makePaths(t, root)
+	escape := filepath.Join(paths.store, "escape")
+	if err := os.Symlink(paths.worktree, escape); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*Dynamic){
+		"path outside the store": func(d *Dynamic) { d.ClosurePaths = []string{paths.worktree} },
+		"symlink out of store":   func(d *Dynamic) { d.ClosurePaths = []string{escape} },
+		"no store directory":     func(d *Dynamic) { d.StoreDir = "" },
+		"store is not a directory": func(d *Dynamic) {
+			d.StoreDir = paths.ca
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := testDynamic(paths)
+			d.StoreDir = paths.store
+			d.ClosurePaths = []string{paths.closureRead}
+			mutate(&d)
+			if _, err := Generate(Base(readBase(t)), d); err == nil {
+				t.Fatal("Generate succeeded")
+			}
+		})
+	}
+}
+
 func TestGenerateRejectsInvalidInputsAndUnknownFields(t *testing.T) {
 	root := t.TempDir()
 	paths := makePaths(t, root)
@@ -406,7 +475,7 @@ func protectedPaths(t *testing.T) []string {
 	return result
 }
 
-type testPaths struct{ ca, closureRead, closureExec, worktree, scratch, state, defaultState, socket, policy string }
+type testPaths struct{ ca, store, closureRead, closureExec, worktree, scratch, state, defaultState, socket, policy string }
 
 func makePaths(t *testing.T, root string) testPaths {
 	t.Helper()
@@ -419,7 +488,7 @@ func makePaths(t *testing.T, root string) testPaths {
 			t.Errorf("remove socket directory: %v", err)
 		}
 	})
-	p := testPaths{ca: filepath.Join(root, "ca.pem"), closureRead: filepath.Join(root, "closure-read"), closureExec: filepath.Join(root, "closure-exec"), worktree: filepath.Join(root, "worktree"), scratch: filepath.Join(root, "scratch"), state: filepath.Join(root, "state"), defaultState: filepath.Join(root, "default-state"), socket: filepath.Join(socketDir, "daemon.sock"), policy: filepath.Join(root, "policy", "fence.json")}
+	p := testPaths{ca: filepath.Join(root, "ca.pem"), store: filepath.Join(root, "store"), closureRead: filepath.Join(root, "store", "closure-read"), closureExec: filepath.Join(root, "store", "closure-exec"), worktree: filepath.Join(root, "worktree"), scratch: filepath.Join(root, "scratch"), state: filepath.Join(root, "state"), defaultState: filepath.Join(root, "default-state"), socket: filepath.Join(socketDir, "daemon.sock"), policy: filepath.Join(root, "policy", "fence.json")}
 	for _, dir := range []string{p.closureRead, p.closureExec, p.worktree, p.scratch, p.state, p.defaultState, filepath.Dir(p.policy)} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
