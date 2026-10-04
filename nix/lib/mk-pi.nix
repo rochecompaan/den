@@ -56,7 +56,7 @@ let
   '';
   piAgent = pkgs.writeShellScript "den-pi-agent" (darwinInputValidation + piAgentSource);
 in
-assert lib.assertMsg (pi.version == "0.87.1") "Den requires Pi 0.87.1; refusing unknown version ${pi.version}";
+assert lib.assertMsg (pi.version == "1.0.2") "Den requires Pi 1.0.2; refusing unknown version ${pi.version}";
 assert lib.assertMsg (pi.actualPatchHash == builtins.convertHash { hash = pi.patchHash; toHashFormat = "base16"; })
   "Pi hardening patch hash drifted";
 assert lib.assertMsg (pi.actualToolResultPreviewPatchHash == builtins.convertHash {
@@ -89,7 +89,7 @@ mkAgentSandbox {
     agent = {
       name = "pi";
       executable = "${piAgent}";
-      argumentPolicy = "pi-0.87.1";
+      argumentPolicy = "pi-1.0.2";
       mandatoryArgs = [ ];
       resourceArgs = normalizedResources.resourceArgs;
       reservedFlags = [ "--session-dir" "--session" "--fork" "--export" "--extension" "-e" "--skill" "--prompt-template" "--theme" ];

@@ -14,12 +14,12 @@ func TestValidateArguments(t *testing.T) {
 		flags, commands, user []string
 		wantErr               bool
 	}{
-		{"Pi policy", "pi-0.87.1", piFlags, piCommands, []string{"--continue"}, false},
+		{"Pi policy", "pi-1.0.2", piFlags, piCommands, []string{"--continue"}, false},
 		{"Claude policy rejects plugin dir", "claude", claudeFlags, nil, []string{"--plugin-dir", "plugin"}, true},
 		{"Claude policy allows continue", "claude", claudeFlags, nil, []string{"--continue"}, false},
 		{"unknown policy is invalid", "unknown", nil, nil, nil, true},
-		{"Pi manifest flags must match", "pi-0.87.1", piFlags[:len(piFlags)-1], piCommands, nil, true},
-		{"Pi manifest commands must match", "pi-0.87.1", piFlags, piCommands[:len(piCommands)-1], nil, true},
+		{"Pi manifest flags must match", "pi-1.0.2", piFlags[:len(piFlags)-1], piCommands, nil, true},
+		{"Pi manifest commands must match", "pi-1.0.2", piFlags, piCommands[:len(piCommands)-1], nil, true},
 		{"Claude manifest flags must match", "claude", nil, nil, nil, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -46,7 +46,7 @@ pkgs.runCommand "pi-adapter"
     ${pkgs.jq}/bin/jq -e '
       .agent.name == "pi" and
       .agent.commandName == "pi" and
-      .agent.argumentPolicy == "pi-0.87.1" and
+      .agent.argumentPolicy == "pi-1.0.2" and
       .agent.environment.scrub == ["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "PI_PACKAGE_DIR", "PI_OFFLINE"] and
       .agent.environment.set.PI_OFFLINE == "1" and
       .agent.packageDirectory.name == "PI_PACKAGE_DIR" and

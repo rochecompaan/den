@@ -1,4 +1,4 @@
-// Package piargs validates Pi 0.87.1 launcher arguments.
+// Package piargs validates Pi 1.0.2 launcher arguments.
 package piargs
 
 import (

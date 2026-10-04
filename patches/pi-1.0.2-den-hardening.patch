@@ -1,5 +1,4 @@
 diff --git a/dist/core/agent-session-runtime.js b/dist/core/agent-session-runtime.js
-index e335510..90b5f2f 100644
 --- a/dist/core/agent-session-runtime.js
 +++ b/dist/core/agent-session-runtime.js
 @@ -1,9 +1,9 @@
@@ -14,7 +13,7 @@ index e335510..90b5f2f 100644
  /**
   * Thrown when /import references a JSONL file path that does not exist.
   */
-@@ -126,12 +126,15 @@ export class AgentSessionRuntime {
+@@ -126,12 +126,15 @@
          }
      }
      async switchSession(sessionPath, options) {
@@ -32,16 +31,16 @@ index e335510..90b5f2f 100644
          assertSessionCwdExists(sessionManager, this.cwd);
          await this.teardownCurrent("resume", sessionManager.getSessionFile());
          this.apply(await this.createRuntime({
-@@ -216,7 +219,7 @@ export class AgentSessionRuntime {
+@@ -216,7 +219,7 @@
              if (!existsSync(currentSessionFile)) {
-                 throw new Error("This session has not been saved yet. Wait for the first assistant response before cloning or forking it.");
+                 throw new Error("This session has not been saved yet. Send a message before cloning or forking it.");
              }
 -            const sessionManager = SessionManager.open(currentSessionFile, sessionDir);
 +            const sessionManager = SessionManager.open(currentSessionFile, sessionDir, undefined, this.session.sessionManager.getSessionFileIdentity());
              const forkedSessionPath = sessionManager.createBranchedSession(targetLeafId);
              if (!forkedSessionPath) {
                  throw new Error("Failed to create forked session");
-@@ -257,31 +260,42 @@ export class AgentSessionRuntime {
+@@ -257,31 +260,42 @@
       */
      async importFromJsonl(inputPath, cwdOverride) {
          const resolvedPath = resolvePath(inputPath);
@@ -80,6 +79,8 @@ index e335510..90b5f2f 100644
          const previousSessionFile = this.session.sessionFile;
 -        if (!sourceAlreadyStored) {
 -            copyFileSync(resolvedPath, destinationPath, constants.COPYFILE_EXCL);
+-        }
+-        const sessionManager = SessionManager.open(destinationPath, sessionDir, cwdOverride);
 +        let sessionManager;
 +        if (sourceAlreadyStored) {
 +            sessionManager = SessionManager.fromValidated(imported, sessionDir, cwdOverride);
@@ -87,16 +88,14 @@ index e335510..90b5f2f 100644
 +        else {
 +            writeSessionDestination(destinationPath, imported.content);
 +            sessionManager = SessionManager.open(destinationPath, sessionDir, cwdOverride);
-         }
--        const sessionManager = SessionManager.open(destinationPath, sessionDir, cwdOverride);
++        }
          assertSessionCwdExists(sessionManager, this.cwd);
          await this.teardownCurrent("resume", sessionManager.getSessionFile());
          this.apply(await this.createRuntime({
 diff --git a/dist/core/package-manager.js b/dist/core/package-manager.js
-index 696e98c..fb047d5 100644
 --- a/dist/core/package-manager.js
 +++ b/dist/core/package-manager.js
-@@ -34,11 +34,12 @@ import { readPiManifest } from "./pi-manifest.js";
+@@ -35,11 +35,12 @@
  const NETWORK_TIMEOUT_MS = 10000;
  const UPDATE_CHECK_CONCURRENCY = 4;
  const GIT_UPDATE_CONCURRENCY = 4;
@@ -113,7 +112,7 @@ index 696e98c..fb047d5 100644
  }
  function isExactNpmVersion(version) {
      return valid(version ?? "") !== null;
-@@ -616,6 +617,7 @@ export class DefaultPackageManager {
+@@ -622,6 +623,7 @@
          this.progressCallback = callback;
      }
      addSourceToSettings(source, options) {
@@ -121,7 +120,7 @@ index 696e98c..fb047d5 100644
          const scope = options?.local ? "project" : "user";
          const currentSettings = scope === "project" ? this.settingsManager.getProjectSettings() : this.settingsManager.getGlobalSettings();
          const currentPackages = currentSettings.packages ?? [];
-@@ -647,6 +649,7 @@ export class DefaultPackageManager {
+@@ -653,6 +655,7 @@
          return true;
      }
      removeSourceFromSettings(source, options) {
@@ -129,7 +128,7 @@ index 696e98c..fb047d5 100644
          const scope = options?.local ? "project" : "user";
          const currentSettings = scope === "project" ? this.settingsManager.getProjectSettings() : this.settingsManager.getGlobalSettings();
          const currentPackages = currentSettings.packages ?? [];
-@@ -762,6 +765,7 @@ export class DefaultPackageManager {
+@@ -781,6 +784,7 @@
          return configuredPackages;
      }
      async install(source, options) {
@@ -137,7 +136,7 @@ index 696e98c..fb047d5 100644
          const parsed = this.parseSource(source);
          const scope = options?.local ? "project" : "user";
          this.assertProjectTrustedForScope(scope);
-@@ -785,10 +789,12 @@ export class DefaultPackageManager {
+@@ -804,10 +808,12 @@
          });
      }
      async installAndPersist(source, options) {
@@ -150,7 +149,7 @@ index 696e98c..fb047d5 100644
          const parsed = this.parseSource(source);
          const scope = options?.local ? "project" : "user";
          this.assertProjectTrustedForScope(scope);
-@@ -808,10 +814,12 @@ export class DefaultPackageManager {
+@@ -827,10 +833,12 @@
          });
      }
      async removeAndPersist(source, options) {
@@ -163,7 +162,7 @@ index 696e98c..fb047d5 100644
          const globalSettings = this.settingsManager.getGlobalSettings();
          const projectSettings = this.settingsManager.getProjectSettings();
          const identity = source ? this.getPackageIdentity(source) : undefined;
-@@ -840,6 +848,7 @@ export class DefaultPackageManager {
+@@ -859,6 +867,7 @@
          await this.updateConfiguredSources(updateSources);
      }
      async updateConfiguredSources(sources) {
@@ -171,7 +170,7 @@ index 696e98c..fb047d5 100644
          if (isOfflineModeEnabled() || sources.length === 0) {
              return;
          }
-@@ -907,6 +916,7 @@ export class DefaultPackageManager {
+@@ -926,6 +935,7 @@
          }
      }
      async updateNpmBatch(sources, scope) {
@@ -179,7 +178,7 @@ index 696e98c..fb047d5 100644
          if (sources.length === 0) {
              return;
          }
-@@ -918,11 +928,15 @@ export class DefaultPackageManager {
+@@ -937,11 +947,15 @@
          });
      }
      async installNpmBatch(specs, scope) {
@@ -195,7 +194,7 @@ index 696e98c..fb047d5 100644
          if (isOfflineModeEnabled()) {
              return [];
          }
-@@ -992,44 +1006,18 @@ export class DefaultPackageManager {
+@@ -1011,30 +1025,10 @@
                  this.resolveLocalExtensionSource(parsed, accumulator, filter, metadata, baseDir);
                  continue;
              }
@@ -227,8 +226,9 @@ index 696e98c..fb047d5 100644
 +                if (!existsSync(installedPath))
 +                    continue;
                  metadata.baseDir = installedPath;
+                 metadata.packageRoot = installedPath;
                  this.collectPackageResources(installedPath, accumulator, filter, metadata);
-                 continue;
+@@ -1042,14 +1036,8 @@
              }
              if (parsed.type === "git") {
                  const installedPath = this.getGitInstallPath(parsed, resolvedScope);
@@ -243,9 +243,9 @@ index 696e98c..fb047d5 100644
 +                if (!existsSync(installedPath))
 +                    continue;
                  metadata.baseDir = installedPath;
+                 metadata.packageRoot = installedPath;
                  this.collectPackageResources(installedPath, accumulator, filter, metadata);
-             }
-@@ -1068,6 +1056,7 @@ export class DefaultPackageManager {
+@@ -1090,6 +1078,7 @@
          }
      }
      async installParsedSource(parsed, scope) {
@@ -253,23 +253,23 @@ index 696e98c..fb047d5 100644
          if (parsed.type === "npm") {
              await this.installNpm(parsed, scope, scope === "temporary");
              return;
-@@ -1442,6 +1431,7 @@ export class DefaultPackageManager {
-         return packageManagerCommand ? basename(packageManagerCommand).replace(/\.(cmd|exe)$/i, "") : "";
+@@ -1477,6 +1466,7 @@
+         return wrappedPackageManagers[0] ?? directCommand;
      }
      async runNpmCommand(args, options) {
 +        denyPackageMutation();
          const npmCommand = this.getNpmCommand();
          await this.runCommand(npmCommand.command, [...npmCommand.args, ...args], options);
      }
-@@ -1453,6 +1443,7 @@ export class DefaultPackageManager {
-         return ["install", "--omit=dev"];
+@@ -1499,6 +1489,7 @@
+         }
      }
      runNpmCommandSync(args) {
 +        denyPackageMutation();
          const npmCommand = this.getNpmCommand();
          return this.runCommandSync(npmCommand.command, [...npmCommand.args, ...args]);
      }
-@@ -1479,11 +1470,13 @@ export class DefaultPackageManager {
+@@ -1525,11 +1516,13 @@
          return ["install", ...specs, "--prefix", installRoot, "--legacy-peer-deps"];
      }
      async installNpm(source, scope, temporary) {
@@ -283,7 +283,7 @@ index 696e98c..fb047d5 100644
          const installRoot = this.getNpmInstallRoot(scope, false);
          if (!existsSync(installRoot)) {
              return;
-@@ -1500,6 +1493,7 @@ export class DefaultPackageManager {
+@@ -1546,6 +1539,7 @@
          await this.runNpmCommand(args);
      }
      async installGit(source, scope) {
@@ -291,7 +291,7 @@ index 696e98c..fb047d5 100644
          const targetDir = this.getGitInstallPath(source, scope);
          if (existsSync(targetDir)) {
              if (source.ref) {
-@@ -1533,6 +1527,7 @@ export class DefaultPackageManager {
+@@ -1579,6 +1573,7 @@
          }
      }
      async updateGit(source, scope) {
@@ -299,7 +299,7 @@ index 696e98c..fb047d5 100644
          const targetDir = this.getGitInstallPath(source, scope);
          if (!existsSync(targetDir)) {
              await this.installGit(source, scope);
-@@ -1569,6 +1564,7 @@ export class DefaultPackageManager {
+@@ -1615,6 +1610,7 @@
          }
      }
      async repairMissingGitDependencies(targetDir) {
@@ -307,7 +307,7 @@ index 696e98c..fb047d5 100644
          if (!this.hasMissingGitDependencies(targetDir))
              return;
          await this.runNpmCommand(this.getGitDependencyInstallArgs(), { cwd: targetDir });
-@@ -1577,6 +1573,7 @@ export class DefaultPackageManager {
+@@ -1623,6 +1619,7 @@
          return join(dirname(targetDir), `.${basename(targetDir)}.pi-update-incomplete`);
      }
      async cleanAndInstallGitDependencies(targetDir, markerPath) {
@@ -315,7 +315,7 @@ index 696e98c..fb047d5 100644
          // Clean untracked files (extensions should be pristine). If this fails after
          // deleting dependencies, repair them so the existing extension still loads.
          try {
-@@ -1593,6 +1590,7 @@ export class DefaultPackageManager {
+@@ -1639,6 +1636,7 @@
          rmSync(markerPath, { force: true });
      }
      async ensureGitRef(targetDir, fetchArgs, ref) {
@@ -323,7 +323,7 @@ index 696e98c..fb047d5 100644
          // Fetch only the ref we will reset to, avoiding unrelated branch/tag noise.
          await this.runCommand("git", fetchArgs, { cwd: targetDir });
          const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
-@@ -1619,6 +1617,7 @@ export class DefaultPackageManager {
+@@ -1665,6 +1663,7 @@
          await this.cleanAndInstallGitDependencies(targetDir, markerPath);
      }
      async refreshTemporaryGitSource(source, sourceStr) {
@@ -331,7 +331,7 @@ index 696e98c..fb047d5 100644
          if (isOfflineModeEnabled()) {
              return;
          }
-@@ -1632,12 +1631,14 @@ export class DefaultPackageManager {
+@@ -1678,12 +1677,14 @@
          }
      }
      async removeGit(source, scope) {
@@ -346,7 +346,7 @@ index 696e98c..fb047d5 100644
          if (!installRoot)
              return;
          const resolvedRoot = resolve(installRoot);
-@@ -1661,6 +1662,7 @@ export class DefaultPackageManager {
+@@ -1707,6 +1708,7 @@
          }
      }
      ensureNpmProject(installRoot) {
@@ -354,7 +354,7 @@ index 696e98c..fb047d5 100644
          if (!existsSync(installRoot)) {
              mkdirSync(installRoot, { recursive: true });
          }
-@@ -1673,6 +1675,7 @@ export class DefaultPackageManager {
+@@ -1719,6 +1721,7 @@
          }
      }
      ensureGitIgnore(dir) {
@@ -362,7 +362,7 @@ index 696e98c..fb047d5 100644
          if (!existsSync(dir)) {
              mkdirSync(dir, { recursive: true });
          }
-@@ -2092,6 +2095,7 @@ export class DefaultPackageManager {
+@@ -2139,6 +2142,7 @@
          };
      }
      spawnCommand(command, args, options) {
@@ -370,7 +370,7 @@ index 696e98c..fb047d5 100644
          const env = getEnv();
          return spawnProcess(command, args, {
              cwd: options?.cwd,
-@@ -2100,6 +2104,7 @@ export class DefaultPackageManager {
+@@ -2147,6 +2151,7 @@
          });
      }
      spawnCaptureCommand(command, args, options) {
@@ -378,7 +378,7 @@ index 696e98c..fb047d5 100644
          const baseEnv = getEnv();
          const env = options?.env ? { ...baseEnv, ...options.env } : baseEnv;
          return spawnProcess(command, args, {
-@@ -2109,6 +2114,7 @@ export class DefaultPackageManager {
+@@ -2156,6 +2161,7 @@
          });
      }
      runCommandCapture(command, args, options) {
@@ -386,7 +386,7 @@ index 696e98c..fb047d5 100644
          return new Promise((resolvePromise, reject) => {
              const child = this.spawnCaptureCommand(command, args, options);
              let stdout = "";
-@@ -2148,6 +2154,7 @@ export class DefaultPackageManager {
+@@ -2195,6 +2201,7 @@
          });
      }
      runCommand(command, args, options) {
@@ -394,7 +394,7 @@ index 696e98c..fb047d5 100644
          return new Promise((resolvePromise, reject) => {
              const child = this.spawnCommand(command, args, options);
              child.on("error", reject);
-@@ -2162,6 +2169,7 @@ export class DefaultPackageManager {
+@@ -2209,6 +2216,7 @@
          });
      }
      runCommandSync(command, args) {
@@ -403,7 +403,6 @@ index 696e98c..fb047d5 100644
          const result = spawnProcessSync(command, args, {
              stdio: ["ignore", "pipe", "pipe"],
 diff --git a/dist/core/session-manager.js b/dist/core/session-manager.js
-index 0ddbb9c..408063e 100644
 --- a/dist/core/session-manager.js
 +++ b/dist/core/session-manager.js
 @@ -1,14 +1,125 @@
@@ -535,7 +534,7 @@ index 0ddbb9c..408063e 100644
  function createSessionId() {
      return uuidv7();
  }
-@@ -322,50 +433,68 @@ function parseSessionEntryLine(line) {
+@@ -322,50 +433,68 @@
      }
  }
  /** Exported for testing */
@@ -608,14 +607,19 @@ index 0ddbb9c..408063e 100644
      }
      finally {
 -        closeSync(fd);
-+        closeSync(opened.fd);
-     }
+-    }
 -    // Validate session header before repairing the file.
 -    if (entries.length === 0)
 -        return entries;
 -    const header = entries[0];
 -    if (header.type !== "session" || typeof header.id !== "string") {
 -        return [];
+-    }
+-    if (pending)
+-        appendFileSync(resolvedFilePath, "\n");
+-    return entries;
++        closeSync(opened.fd);
++    }
 +}
 +/** Exported for testing */
 +export function loadEntriesFromFile(filePath) {
@@ -634,14 +638,11 @@ index 0ddbb9c..408063e 100644
 +    }
 +    finally {
 +        closeSync(opened.fd);
-     }
--    if (pending)
--        appendFileSync(resolvedFilePath, "\n");
--    return entries;
++    }
  }
  /**
   * Inspect a physical line while searching for the first parsed session entry.
-@@ -382,8 +511,7 @@ function parseSessionHeaderCandidate(line) {
+@@ -382,8 +511,7 @@
          return null;
      return entry;
  }
@@ -651,7 +652,7 @@ index 0ddbb9c..408063e 100644
      try {
          const decoder = new StringDecoder("utf8");
          const buffer = Buffer.allocUnsafe(SESSION_HEADER_READ_BUFFER_SIZE);
-@@ -421,16 +549,29 @@ function readSessionHeader(filePath) {
+@@ -421,16 +549,29 @@
          throw new SessionHeaderScanLimitError(filePath);
      }
      finally {
@@ -685,7 +686,7 @@ index 0ddbb9c..408063e 100644
          return null;
      }
  }
-@@ -449,14 +590,12 @@ export function findMostRecentSession(sessionDir, cwd) {
+@@ -449,14 +590,12 @@
          const files = readdirSync(resolvedSessionDir)
              .filter((file) => file.endsWith(".jsonl"))
              .map((file) => join(resolvedSessionDir, file))
@@ -706,7 +707,7 @@ index 0ddbb9c..408063e 100644
      }
      catch {
          // Directory access and stat races make recent-session discovery unavailable.
-@@ -489,9 +628,11 @@ function getMessageActivityTime(entry) {
+@@ -489,9 +628,11 @@
      const t = new Date(entry.timestamp).getTime();
      return Number.isNaN(t) ? undefined : t;
  }
@@ -720,7 +721,7 @@ index 0ddbb9c..408063e 100644
          let header = null;
          let messageCount = 0;
          let firstMessage = "";
-@@ -499,7 +640,7 @@ async function buildSessionInfo(filePath, signal, fileStats) {
+@@ -499,7 +640,7 @@
          let name;
          let lastActivityTime;
          const rl = createInterface({
@@ -729,7 +730,7 @@ index 0ddbb9c..408063e 100644
              crlfDelay: Infinity,
          });
          for await (const line of rl) {
-@@ -563,6 +704,10 @@ async function buildSessionInfo(filePath, signal, fileStats) {
+@@ -563,6 +704,10 @@
          signal?.throwIfAborted();
          return null;
      }
@@ -740,7 +741,7 @@ index 0ddbb9c..408063e 100644
  }
  const MAX_CONCURRENT_SESSION_INFO_LOADS = 10;
  const MAX_CONCURRENT_SESSION_DISCOVERY_LOADS = 64;
-@@ -586,7 +731,7 @@ function sortSessionInfos(sessions) {
+@@ -586,7 +731,7 @@
  }
  function buildSessionInfosWithConcurrency(files, onLoaded, signal) {
      return mapWithConcurrency(files, MAX_CONCURRENT_SESSION_INFO_LOADS, async (file, index) => {
@@ -749,7 +750,7 @@ index 0ddbb9c..408063e 100644
          onLoaded(info, index);
          return info;
      }, signal);
-@@ -632,6 +777,7 @@ async function listSessionsFromDir(dir, onProgress, signal) {
+@@ -632,6 +777,7 @@
  export class SessionManager {
      sessionId = "";
      sessionFile;
@@ -757,7 +758,7 @@ index 0ddbb9c..408063e 100644
      sessionDir;
      cwd;
      persist;
-@@ -641,7 +787,7 @@ export class SessionManager {
+@@ -641,7 +787,7 @@
      labelsById = new Map();
      labelTimestampsById = new Map();
      leafId = null;
@@ -766,7 +767,7 @@ index 0ddbb9c..408063e 100644
          this.cwd = resolvePath(cwd);
          this.sessionDir = normalizePath(sessionDir);
          this.persist = persist;
-@@ -649,7 +795,7 @@ export class SessionManager {
+@@ -649,7 +795,7 @@
              mkdirSync(this.sessionDir, { recursive: true });
          }
          if (sessionFile) {
@@ -775,7 +776,7 @@ index 0ddbb9c..408063e 100644
          }
          else if (preloadedFileEntries?.length) {
              this._loadEntries(preloadedFileEntries, newSessionOptions);
-@@ -662,19 +808,44 @@ export class SessionManager {
+@@ -662,19 +808,44 @@
      setSessionFile(sessionFile) {
          this._setSessionFile(sessionFile);
      }
@@ -824,7 +825,7 @@ index 0ddbb9c..408063e 100644
                  this._rewriteFile();
                  this.flushed = true;
                  return;
-@@ -689,6 +860,7 @@ export class SessionManager {
+@@ -689,6 +860,7 @@
          }
      }
      newSession(options) {
@@ -832,7 +833,7 @@ index 0ddbb9c..408063e 100644
          if (options?.id !== undefined) {
              assertValidSessionId(options.id);
          }
-@@ -754,8 +926,19 @@ export class SessionManager {
+@@ -754,8 +926,19 @@
      _rewriteFile() {
          if (!this.persist || !this.sessionFile)
              return;
@@ -853,34 +854,20 @@ index 0ddbb9c..408063e 100644
              for (const entry of this.fileEntries) {
                  writeFileSync(fd, `${JSON.stringify(entry)}\n`);
              }
-@@ -782,13 +965,22 @@ export class SessionManager {
+@@ -781,6 +964,9 @@
+     }
      getSessionFile() {
          return this.sessionFile;
-     }
++    }
 +    getSessionFileIdentity() {
 +        return this.sessionFileIdentity ? { ...this.sessionFileIdentity } : undefined;
-+    }
-     _persist(entry) {
-         if (!this.persist || !this.sessionFile)
-             return;
-         const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
-         if (!hasAssistant) {
-             if (this.flushed) {
--                appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
-+                const opened = openValidatedSessionFile(this.sessionFile, constants.O_WRONLY | constants.O_APPEND, this.sessionFileIdentity);
-+                try {
-+                    writeFileSync(opened.fd, `${JSON.stringify(entry)}\n`);
-+                }
-+                finally {
-+                    closeSync(opened.fd);
-+                }
-             }
-             else {
-                 // Mark as not flushed so when assistant arrives, all entries get written
-@@ -797,7 +989,9 @@ export class SessionManager {
-             return;
-         }
+     }
+     /**
+      * A new session file is created only once the session contains a user or assistant message.
+@@ -797,7 +983,9 @@
          if (!this.flushed) {
+             if (!this._hasConversation())
+                 return;
 -            const fd = openSync(this.sessionFile, "wx");
 +            const destination = validateSessionDestination(this.sessionFile);
 +            const fd = openSync(destination, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
@@ -888,7 +875,7 @@ index 0ddbb9c..408063e 100644
              try {
                  for (const e of this.fileEntries) {
                      writeFileSync(fd, `${JSON.stringify(e)}\n`);
-@@ -809,7 +1003,13 @@ export class SessionManager {
+@@ -809,7 +997,13 @@
              this.flushed = true;
          }
          else {
@@ -903,7 +890,7 @@ index 0ddbb9c..408063e 100644
          }
      }
      _appendEntry(entry) {
-@@ -1323,28 +1523,14 @@ export class SessionManager {
+@@ -1323,28 +1517,14 @@
       * @param sessionDir Optional session directory for /new or /branch. If omitted, derives from file's parent.
       * @param cwdOverride Optional cwd override instead of the session header cwd.
       */
@@ -940,7 +927,7 @@ index 0ddbb9c..408063e 100644
      }
      /**
       * Continue the most recent session, or create new if none.
-@@ -1403,13 +1589,10 @@ export class SessionManager {
+@@ -1403,13 +1583,10 @@
              cwd: resolvedTargetCwd,
              parentSession: resolvedSourcePath,
          };
@@ -958,7 +945,7 @@ index 0ddbb9c..408063e 100644
          return new SessionManager(resolvedTargetCwd, dir, newSessionFile, true);
      }
      /**
-@@ -1427,7 +1610,8 @@ export class SessionManager {
+@@ -1427,7 +1604,8 @@
                  if (!file.endsWith(".jsonl"))
                      continue;
                  const path = join(dir, file);
@@ -969,10 +956,9 @@ index 0ddbb9c..408063e 100644
                      continue;
                  if (filterCwd && !sessionCwdMatches(getSessionHeaderCwd(header), resolvedCwd))
 diff --git a/dist/main.js b/dist/main.js
-index 8b91f3d..fafb669 100644
 --- a/dist/main.js
 +++ b/dist/main.js
-@@ -439,7 +439,12 @@ async function promptForMissingSessionCwd(issue, settingsManager) {
+@@ -446,7 +446,12 @@
          { label: "Cancel", value: undefined },
      ]);
  }

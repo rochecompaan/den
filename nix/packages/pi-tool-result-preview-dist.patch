@@ -1,10 +1,11 @@
+diff --git a/dist/modes/interactive/components/tool-execution.js b/dist/modes/interactive/components/tool-execution.js
 --- a/dist/modes/interactive/components/tool-execution.js
 +++ b/dist/modes/interactive/components/tool-execution.js
 @@ -1,9 +1,11 @@
 -import { Box, Container, getCapabilities, Image, MouseRegion, Spacer, Text, } from "@earendil-works/pi-tui";
 +import { Box, Container, getCapabilities, Image, MouseRegion, Spacer, Text, truncateToWidth, } from "@earendil-works/pi-tui";
- import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.js";
- import { convertToPng } from "../../../utils/image-convert.js";
+ import { formatToolCallWithArgs, getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.js";
+ import { ensurePngTranscoder } from "../../../utils/image-convert.js";
  import { theme } from "../theme/theme.js";
  import { keyHint } from "./keybinding-hints.js";
  const FALLBACK_PREVIEW_LINES = 10;
@@ -13,8 +14,8 @@
  export class ToolExecutionComponent extends Container {
      contentBox;
      contentText;
-@@ -91,16 +93,13 @@
-         return new Text(theme.fg("toolTitle", theme.bold(this.toolName)), 0, 0);
+@@ -92,16 +94,13 @@
+         return new Text(formatToolCallWithArgs(this.toolName, this.args, theme, this.expanded), 0, 0);
      }
      createResultFallback() {
 -        const output = this.getTextOutput();
@@ -34,7 +35,7 @@
          }
          return new Text(text, 0, 0);
      }
-@@ -319,7 +318,53 @@
+@@ -296,7 +295,53 @@
          }
      }
      getTextOutput() {
@@ -89,7 +90,7 @@
      }
      formatToolExecution() {
          let text = theme.fg("toolTitle", theme.bold(this.toolName));
-@@ -327,9 +372,12 @@
+@@ -304,9 +349,12 @@
          if (content) {
              text += `\n\n${content}`;
          }

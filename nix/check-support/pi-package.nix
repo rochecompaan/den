@@ -4,16 +4,16 @@ let
   pi = import ../packages/pi-coding-agent.nix { inherit pkgs; };
   inherit (pkgs) lib;
   expected = {
-    tarballHash = "sha256-FCPuPGHnyWRk4cvzyNwk0wVss0EJlcNnGpjD7MUnVA8=";
-    lockHash = "sha256-Cjn4JlMJY+XeEZYSBgoWLWvTZslBD0qnFk1HFzY9Za4=";
-    npmDepsHash = "sha256-6INJmrxolx1pKeYMejhJdOuMHkas8mJJwOGfSaM4bDI=";
-    toolResultPreviewPatchHash = "sha256-A8He1FEx49gnZ9FMVnWsqgKQaq5JrVeCvggxzwLLZkQ=";
+    tarballHash = "sha256-7aWueHU0O9kC/+VXGPtlskBtewOr7MXLidjkuwnO7aI=";
+    lockHash = "sha256-Wgiqy9iKrXsLQqarwW33T80stN49CvbOu7/oMjl2kcA=";
+    npmDepsHash = "sha256-09pPcE8QZLAezIm84ezQIdhAr385WvvvoVQNAv26Dio=";
+    toolResultPreviewPatchHash = "sha256-OaFDQQl4+8r3jFjzvCEjfxY15hHMFBI39w1WE/ZP7E0=";
   };
   hostileExtension = ./fixtures/pi/hostile-package-extension.ts;
   credentialFile = pkgs.writeText "pi-package-credential-fixture" "den-pi-credential-must-not-enter-derivation";
 in
 assert pi.pname == "pi-coding-agent";
-assert pi.version == "0.87.1";
+assert pi.version == "1.0.2";
 assert lib.versionAtLeast pi.nodejs.version "22.19.0";
 assert pi.tarballHash == expected.tarballHash;
 assert pi.lockHash == expected.lockHash;
@@ -47,7 +47,7 @@ pkgs.runCommand "pi-package"
     test -f "${pi.packageRoot}/dist/modes/interactive/assets/clankolas.png"
     test -f "${pi.packageRoot}/dist/modes/interactive/theme/dark.json"
     test "$(${pkgs.jq}/bin/jq -r .name "${pi.packageRoot}/package.json")" = "@earendil-works/pi-coding-agent"
-    test "$(${pkgs.jq}/bin/jq -r .version "${pi.packageRoot}/package.json")" = "0.87.1"
+    test "$(${pkgs.jq}/bin/jq -r .version "${pi.packageRoot}/package.json")" = "1.0.2"
     while IFS= read -r dependency; do
       test -f "${pi.packageRoot}/node_modules/$dependency/package.json" || {
         echo "missing direct runtime dependency: $dependency" >&2
@@ -83,7 +83,7 @@ pkgs.runCommand "pi-package"
       const [major, minor] = process.versions.node.split(".").map(Number);
       process.exit(major === 22 && minor >= 19 ? 0 : 1);
     '
-    test "$("$pi/bin/pi" --version)" = "0.87.1"
+    test "$("$pi/bin/pi" --version)" = "1.0.2"
     ! ${pkgs.gnugrep}/bin/grep -E '(npm|git|curl|wget|fetch)' "$pi/bin/pi"
     credential=$(cat "$credentialFile")
     ! ${pkgs.gnugrep}/bin/grep -R -F -q -- "$credential" "$pi"
@@ -296,7 +296,7 @@ pkgs.runCommand "pi-package"
 
     env -i HOME="$TMPDIR/home" PATH= PI_CODING_AGENT_DIR="$state" \
       "$pi/bin/pi" --version > "$TMPDIR/empty-path-version"
-    test "$(cat "$TMPDIR/empty-path-version")" = "0.87.1"
+    test "$(cat "$TMPDIR/empty-path-version")" = "1.0.2"
     env -i HOME="$TMPDIR/home" PI_CODING_AGENT_DIR="$state" \
       ${pkgs.coreutils}/bin/timeout 10 "$pi/bin/pi" --mode rpc \
       < /dev/null > "$TMPDIR/rpc.out" 2>&1
