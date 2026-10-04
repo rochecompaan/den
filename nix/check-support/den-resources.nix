@@ -38,6 +38,24 @@ let
   invalidBundleSettings = pkgs.runCommand "invalid-bundle-settings" {
     passthru.denResources.claude.settings = [ true ];
   } "mkdir $out";
+  storeStringSkill = "${parts.skill}/fixture-bundle-skill";
+  storeStringExtension = "${parts.piExtension}/index.ts";
+  storeStringBundle = pkgs.runCommand "store-string-bundle" {
+    passthru.denResources = {
+      claude.skills = [ storeStringSkill ];
+      pi.extensions = [ storeStringExtension ];
+    };
+  } "mkdir $out";
+  claudeStringMerged = denResources { agent = "claude"; bundles = [ storeStringBundle ]; resources = emptyClaude; };
+  piStringMerged = denResources { agent = "pi"; bundles = [ storeStringBundle ]; resources = emptyPi; };
+  piViaStringBundle = mkPiAdapter { bundles = [ storeStringBundle ]; };
+  piViaStringInline = mkPiAdapter { resources.extensions = [ storeStringExtension ]; };
+  contextFreeBundleResource = pkgs.runCommand "context-free-bundle-resource" {
+    passthru.denResources.claude.skills = [ (builtins.unsafeDiscardStringContext storeStringSkill) ];
+  } "mkdir $out";
+  traversalBundleResource = pkgs.runCommand "traversal-bundle-resource" {
+    passthru.denResources.claude.skills = [ "${parts.skill}/../escape" ];
+  } "mkdir $out";
   duplicateMcp = denResources {
     agent = "claude";
     bundles = [ bundle ];
@@ -56,11 +74,18 @@ assert piMerged.packages == [ ];
 assert piViaBundle.adapter.agent.resourceArgs == piViaInline.adapter.agent.resourceArgs;
 assert builtins.elem "--extension" piViaBundle.adapter.agent.resourceArgs;
 assert builtins.elem "--skill" piViaBundle.adapter.agent.resourceArgs;
+# store-path strings that keep their package context are resources
+assert claudeStringMerged.skills == [ storeStringSkill ];
+assert piStringMerged.extensions == [ storeStringExtension ];
+assert piViaStringBundle.adapter.agent.resourceArgs == piViaStringInline.adapter.agent.resourceArgs;
+assert builtins.elem storeStringExtension piViaStringBundle.adapter.agent.resourceArgs;
 # rejection table
 assert fails (denResources { agent = "claude"; bundles = [ badBundleNoPassthru ]; resources = emptyClaude; });
 assert fails (denResources { agent = "claude"; bundles = [ badBundleAgent ]; resources = emptyClaude; });
 assert fails (denResources { agent = "claude"; bundles = [ badBundleClass ]; resources = emptyClaude; });
 assert fails (denResources { agent = "claude"; bundles = [ mutableBundleResource ]; resources = emptyClaude; });
+assert fails (denResources { agent = "claude"; bundles = [ contextFreeBundleResource ]; resources = emptyClaude; });
+assert fails (denResources { agent = "claude"; bundles = [ traversalBundleResource ]; resources = emptyClaude; });
 assert fails (denResources { agent = "claude"; bundles = [ malformedBundleList ]; resources = emptyClaude; });
 assert fails (denResources { agent = "claude"; bundles = [ invalidBundleMcp ]; resources = emptyClaude; });
 assert fails (denResources { agent = "claude"; bundles = [ invalidBundleSettings ]; resources = emptyClaude; });

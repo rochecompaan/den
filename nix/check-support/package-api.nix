@@ -40,6 +40,9 @@ let
   };
   defaults = claude.denOptions;
   fails = value: !(builtins.tryEval (builtins.deepSeq value value)).success;
+  fixtureParts = (import ./fixture-bundle.nix { inherit pkgs; }).fixtureParts;
+  storeStringSkill = "${fixtureParts.skill}/fixture-bundle-skill";
+  storeStringPlugin = "${fixtureParts.plugin}";
   mkAgentSandbox = import ../lib/mk-agent-sandbox.nix { inherit inputs pkgs; };
   fakeDependency = pkgs.writeShellScriptBin "package-api-dependency" "exit 0";
   dependencies = {
@@ -58,6 +61,9 @@ let
     inherit isDarwin pkgs;
   };
   adapter = (mkAdapter false) { };
+  storeStringAdapter = (mkAdapter false) {
+    resources = { skills = [ storeStringSkill ]; plugins = [ storeStringPlugin ]; };
+  };
   darwinAdapter = (mkAdapter true) { };
   fakeClaude = (pkgs.writeShellScriptBin "claude" ''
     mkdir -p "$CLAUDE_CAPTURE_DIR"
@@ -165,6 +171,10 @@ assert fails ((mkClaude { docker.unexpected = true; }).outPath);
 assert fails ((mkClaude { podman.unexpected = true; }).outPath);
 assert fails ((mkClaude { resourceBundles = [ ]; }).outPath);
 assert fails ((mkClaude { claudeResources = [ ]; }).outPath);
+assert builtins.elem storeStringPlugin storeStringAdapter.adapter.agent.resourceArgs;
+assert fails ((mkClaude { resources.skills = [ "/tmp/mutable-skill" ]; }).outPath);
+assert fails ((mkClaude { resources.skills = [ (builtins.unsafeDiscardStringContext storeStringSkill) ]; }).outPath);
+assert fails ((mkClaude { resources.plugins = [ "${fixtureParts.plugin}/../escape" ]; }).outPath);
 pkgs.runCommand "package-api"
   {
     nativeBuildInputs = [ pkgs.coreutils pkgs.jq ] ++ expectedBuildFailures;

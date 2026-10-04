@@ -11,7 +11,7 @@ let
   bundleName = bundle: bundle.name or "<unnamed>";
   hasOnly = allowed: value: lib.all (name: builtins.elem name allowed) (builtins.attrNames value);
   force = values: lib.foldl' (result: value: builtins.seq value result) true values;
-  isResource = value: lib.isDerivation value || builtins.isPath value;
+  inherit (import ./store-resource.nix { inherit lib; }) isResource;
   isSettingsFragment = value: isResource value || (builtins.isAttrs value && !lib.isDerivation value);
 
   validateContribution = bundle: agentName: contribution:
@@ -28,7 +28,7 @@ let
         assert lib.assertMsg (builtins.isList entries)
           "${bundleLabel} ${agentName}.${class} must be a list";
         assert lib.assertMsg (lib.all isEntry entries)
-          "${bundleLabel} ${agentName}.${class} must contain only Nix paths or packages";
+          "${bundleLabel} ${agentName}.${class} must contain only Nix paths, packages, or store path strings";
         entries;
       validateAttrs = class:
         let entries = contribution.${class}; in

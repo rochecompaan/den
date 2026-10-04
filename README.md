@@ -319,8 +319,8 @@ import host credentials.
 
 ### Pi resources and project trust
 
-All configured resources must be Nix paths or packages that become immutable
-store paths. Den accepts extensions, Pi packages, skills, prompt templates, and
+All configured resources must be Nix paths, packages, or store-path strings
+that become immutable store paths. Den accepts extensions, Pi packages, skills, prompt templates, and
 themes, preserves list order within each configured subgroup, and supplies none
 by default. Pi 1.0.2 resolves each resource type independently in this order:
 
@@ -354,7 +354,8 @@ no supported runtime package installation or self-update path.
 ### Inject agent resources
 
 Den can inject immutable resources for Claude and Pi. All resources use store
-paths only. Den supplies no resources by default.
+paths only. A resource is a Nix path, a package, or a store-path string such as
+`"${pkg}/skills"`. Den supplies no resources by default.
 
 Configure Claude skills, plugins, MCP servers, and settings with these
 options:
@@ -364,8 +365,8 @@ programs.den.claude = {
   enable = true;
   bundles = [ pkg ]; # Packages with passthru.denResources
   resources = {
-    skills = [ path-or-package ];
-    plugins = [ path-or-package ];
+    skills = [ resource ];
+    plugins = [ resource ];
     mcpServers = {
       codegraph = {
         command = "${pkgs.codegraph}/bin/codegraph-mcp";
@@ -433,7 +434,8 @@ example.
 
 Resource security rules:
 
-- Store paths only.
+- Store paths only. A store-path string must keep the Nix string context of
+  its package and must not contain a `..` component.
 - Settings fragments cannot set `disableAllHooks` or `apiKeyHelper`, cannot
   override `ANTHROPIC_*` env, and cannot reference the Fence hook.
 - MCP commands must be store paths with package references.
