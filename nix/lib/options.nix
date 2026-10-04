@@ -34,7 +34,7 @@ let
   hasOnly = allowed: value: lib.all (name: builtins.elem name allowed) (builtins.attrNames value);
   isAbsoluteString = value: builtins.isString value && builtins.match "^/.*" value != null;
   isPackage = value: lib.isDerivation value;
-  isResource = value: builtins.isPath value || isPackage value;
+  inherit (import ./store-resource.nix { inherit lib; }) isResource;
   isSettingsFragment = value: isResource value || (builtins.isAttrs value && !isPackage value);
   isPort = value: builtins.isInt value && value >= 1 && value <= 65535;
   resources = defaults.resources // (raw.resources or { });
@@ -44,7 +44,7 @@ let
     assert lib.assertMsg (hasOnly allowedResourceOptions resources) "Claude resources has an unknown option";
     assert lib.assertMsg
       (lib.all (name: builtins.isList resources.${name} && lib.all isResource resources.${name}) [ "skills" "plugins" ])
-      "Claude resources must contain only Nix paths or packages";
+      "Claude resources must contain only Nix paths, packages, or store path strings";
     assert lib.assertMsg (builtins.isAttrs resources.mcpServers && lib.all builtins.isAttrs (builtins.attrValues resources.mcpServers))
       "Claude mcpServers must be an attribute set of server definitions";
     assert lib.assertMsg (builtins.isList resources.settings && lib.all isSettingsFragment resources.settings)

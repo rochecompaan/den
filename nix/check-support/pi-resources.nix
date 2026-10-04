@@ -36,6 +36,16 @@ let
     podman = { };
   };
   invalid = value: !(builtins.tryEval value).success;
+  storeStringPrompt = "${resourcePackageFirst}/prompts/collision.md";
+  # Reachable only through a store-path string, so the closure check proves the
+  # string context carries the package into the Fence closure.
+  stringOnlyPackage = pkgs.runCommand "pi-string-only-resource" { } ''
+    mkdir -p "$out/prompts"
+    printf 'string prompt\n' > "$out/prompts/string.md"
+  '';
+  stringOnlyPi = mkPi { inherit inputs pkgs; } {
+    resources.promptTemplates = [ "${stringOnlyPackage}/prompts/string.md" ];
+  };
   piPackage = import ../packages/pi-coding-agent.nix { inherit pkgs; };
   resourceCollisions = pkgs.runCommand "pi-resource-collisions"
     {
@@ -110,9 +120,22 @@ assert lib.assertMsg (invalid (options { unknown = true; })) "Pi options accepte
 assert lib.assertMsg (invalid (options { agentDir = "relative"; })) "Pi options accepted a relative agent directory";
 assert lib.assertMsg (invalid (options { sessionDir = "relative"; })) "Pi options accepted a relative session directory";
 assert lib.assertMsg (invalid (options { resources.extensions = [ "/tmp/mutable.ts" ]; }).resources) "Pi options accepted a mutable resource string";
+assert lib.assertMsg ((options { resources.promptTemplates = [ storeStringPrompt ]; }).resources.promptTemplates == [ storeStringPrompt ]) "Pi options rejected a store path string";
+assert lib.assertMsg (invalid (options { resources.promptTemplates = [ (builtins.unsafeDiscardStringContext storeStringPrompt) ]; }).resources) "Pi options accepted a store path string without context";
+assert lib.assertMsg (invalid (options { resources.promptTemplates = [ "${resourcePackageFirst}/../escape.md" ]; }).resources) "Pi options accepted a store path string with a parent component";
 assert lib.assertMsg (configured.resources.extensions == resources.extensions) "Pi options changed extension order";
-pkgs.runCommand "pi-resources" { resourceDiagnostics = pi.resourceDiagnostics; inherit resourceCollisions; } ''
-  test -e "$resourceDiagnostics"
-  test -e "$resourceCollisions"
-  touch "$out"
-''
+pkgs.runCommand "pi-resources"
+  {
+    nativeBuildInputs = [ pkgs.jq ];
+    resourceDiagnostics = pi.resourceDiagnostics;
+    stringOnlyDiagnostics = stringOnlyPi.resourceDiagnostics;
+    stringOnlyManifest = stringOnlyPi.denManifest;
+    inherit resourceCollisions stringOnlyPackage;
+  }
+  ''
+    test -e "$resourceDiagnostics"
+    test -e "$resourceCollisions"
+    test -e "$stringOnlyDiagnostics"
+    grep -Fqx "$stringOnlyPackage" "$(jq -r .closurePathsFile "$stringOnlyManifest")"
+    touch "$out"
+  ''

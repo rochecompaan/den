@@ -38,12 +38,7 @@ let
   hasOnly = allowed: value: lib.all (name: builtins.elem name allowed) (builtins.attrNames value);
   isAbsoluteString = value: builtins.isString value && builtins.match "^/.*" value != null;
   isPackage = value: lib.isDerivation value;
-  isResource = value: builtins.isPath value || isPackage value;
-  isStoreSource = value:
-    isResource value
-    || (builtins.isString value
-        && lib.hasPrefix "${builtins.storeDir}/" value
-        && builtins.hasContext value);
+  inherit (import ./store-resource.nix { inherit lib; }) isResource;
   isSafeDestination = destination:
     let components = lib.splitString "/" destination; in
     destination != ""
@@ -58,7 +53,7 @@ let
   validResources =
     assert lib.assertMsg (hasOnly allowedResourceOptions resources) "Pi resources has an unknown option";
     assert lib.assertMsg (lib.all (name: builtins.isList resources.${name} && lib.all isResource resources.${name}) allowedResourceOptions)
-      "Pi resources must contain only Nix paths or packages";
+      "Pi resources must contain only Nix paths, packages, or store path strings";
     resources;
   validContainer = name: value:
     assert lib.assertMsg (hasOnly allowedContainerOptions value) "${name} has an unknown option";
@@ -80,7 +75,7 @@ let
     assert lib.assertMsg (builtins.isAttrs stateFiles.agent) "Pi stateFiles.agent must be an attribute set";
     assert lib.assertMsg (lib.all isSafeDestination (builtins.attrNames stateFiles.agent))
       "Pi stateFiles.agent destinations must be safe relative paths";
-    assert lib.assertMsg (lib.all isStoreSource (builtins.attrValues stateFiles.agent))
+    assert lib.assertMsg (lib.all isResource (builtins.attrValues stateFiles.agent))
       "Pi stateFiles.agent sources must be Nix store paths";
     stateFiles;
 in

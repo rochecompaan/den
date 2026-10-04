@@ -14,6 +14,7 @@ let
 in
 assert fails ((mkPi { stateFiles.agent."../escape" = settings; }).outPath);
 assert fails ((mkPi { stateFiles.agent."settings.json" = "/tmp/settings.json"; }).outPath);
+assert fails ((mkPi { stateFiles.agent."settings.json" = "${settings}/../escape"; }).outPath);
 pkgs.runCommand "pi-managed-state"
   {
     nativeBuildInputs = [ pkgs.coreutils pkgs.jq ];
