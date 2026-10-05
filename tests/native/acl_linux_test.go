@@ -3,7 +3,6 @@
 package native
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,9 +45,9 @@ func testImplicitHostWrites(t *testing.T, fixture *nativeFixture) {
 		_ = os.Remove(sentinel)
 		_ = os.Remove(parent)
 	})
-	result := launchWithManifest(t, fixture, func(document map[string]any) {
-		document["basePolicy"] = linuxTmpfsControlPolicy(t, fixture, document["basePolicy"].(string))
-	}, "implicit-host-linux", sentinel, child)
+	// Launch with the production policy: an existing host /tmp/fence must not
+	// replace the private /tmp/fence that Fence bootstraps inside the sandbox.
+	result := fixture.launch("implicit-host-linux", sentinel, child)
 	requireSuccess(t, result)
 	contents, err := os.ReadFile(sentinel)
 	if err != nil || string(contents) != string(baseline) {
@@ -57,38 +56,6 @@ func testImplicitHostWrites(t *testing.T, fixture *nativeFixture) {
 	if fileExists(child) {
 		t.Fatal("Fence inner tmpfs created a host temporary child")
 	}
-}
-
-func linuxTmpfsControlPolicy(t *testing.T, fixture *nativeFixture, base string) string {
-	t.Helper()
-	contents, err := os.ReadFile(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document map[string]any
-	if err := json.Unmarshal(contents, &document); err != nil {
-		t.Fatal(err)
-	}
-	filesystem := document["filesystem"].(map[string]any)
-	entries := filesystem["denyWrite"].([]any)
-	filtered := entries[:0]
-	for _, entry := range entries {
-		path, _ := entry.(string)
-		if !strings.HasPrefix(path, "/tmp/fence") {
-			filtered = append(filtered, entry)
-		}
-	}
-	filesystem["denyWrite"] = filtered
-	delete(document["command"].(map[string]any), "runtimeExecPolicy")
-	encoded, err := json.Marshal(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(fixture.root, "linux-tmpfs-control-policy.json")
-	if err := os.WriteFile(path, encoded, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
 }
 
 func TestLinuxACLGrantRejected(t *testing.T) {
