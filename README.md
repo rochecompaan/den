@@ -612,8 +612,8 @@ not replace `HOME`.
 
 ## Extra packages and `PATH`
 
-`extraPkgs` adds tools only to the generated Claude artifact, sandbox policy,
-and sandbox `PATH`. It does not add packages to the host package set, user
+`extraPkgs` adds tools only to the generated Claude artifact, its Nix
+closure, and sandbox `PATH`. It does not add packages to the host package set, user
 profile, or host `PATH`. Nix store paths remain visible to the host as normal
 Nix artifacts.
 
@@ -812,8 +812,13 @@ operations. The sandbox `gh` command is the credential-free RepoWolf client.
 Direct web, API, archive, raw-content, release-asset, HTTPS, and SSH traffic to
 denied Git hosts remains blocked.
 
-The launch working tree and selected Claude state are writable. Nix store
-closures are read-only. Fence denies normal credential locations, including
+The launch working tree and selected Claude state are writable. The sandbox
+can read and execute the whole Nix store, but cannot write to it. Den checks
+that every path in the agent's closure resolves inside the store, then grants
+the store as one path. Per-path grants would make Fence's Linux command line
+grow with the closure until it exceeds the kernel's argument limit. Because
+any store path is readable, never put secrets in the Nix store. Fence denies
+normal credential locations, including
 SSH, GnuPG, cloud, Kubernetes, Docker, registry, netrc, Git, and Cargo
 credentials. Filesystem denials take precedence over grants and symbolic-link
 paths.

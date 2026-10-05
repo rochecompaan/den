@@ -39,7 +39,8 @@ JSON. Den then made only these policy changes:
   enforcement. The generator removes that Linux-only setting on macOS.
 
 At launch, Den adds the exact RepoWolf broker hostname, a read-only CA file,
-validated closure and operational reads, selected writable worktree/state/
+a read and execute grant for the Nix store after it checks that every closure
+path resolves inside it, operational reads, selected writable worktree/state/
 scratch/socket paths, platform-specific socket and host-port fields, and
 higher-precedence write denials for default state in custom mode, repository
 Git configuration, and the private policy file and directory. Writable entries

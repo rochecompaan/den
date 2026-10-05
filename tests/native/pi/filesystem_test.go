@@ -186,7 +186,7 @@ func TestPiNativeFileToolsAndHomeAliasesStayInsideFence(t *testing.T) {
 	if _, err := os.Stat(store); err != nil {
 		t.Fatal(err)
 	}
-	denied = append(denied, unrelated, store)
+	denied = append(denied, unrelated)
 	before := snapshotPaths(t, fixture.invokingHome, fixture.runtimeHome, unrelated, store)
 	encoded, _ := json.Marshal(denied)
 	policyReport := filepath.Join(fixture.root, "fence-policy.json")
@@ -233,6 +233,13 @@ func TestPiNativeFileToolsAndHomeAliasesStayInsideFence(t *testing.T) {
   record("native-tools-edit-denied:"+path);
   record("native-tools-denied:"+path);
  }
+ // Den grants the whole Nix store read-only, including paths outside the closure.
+ const store = `+jsonString(store)+`;
+ assert.match(JSON.stringify(await read.execute("store", {path: store})), /unrelated store content/);
+ record("native-tools-store-read-allowed:" + store);
+ await assert.rejects(write.execute("store", {path: store, content: "escaped"}), /EACCES|EPERM|EROFS|permission/i, "native-tools-store-write unexpectedly resolved");
+ await assert.rejects(edit.execute("store", {path: store, edits: [{oldText: "unrelated", newText: "escaped"}]}), /EACCES|EPERM|EROFS|permission/i, "native-tools-store-edit unexpectedly resolved");
+ record("native-tools-store-write-denied:" + store);
  record("native-tools-control");
  `, []string{"DEN_NATIVE_PI_FENCE_POLICY_REPORT=" + policyReport}, func(document map[string]any) {
 		document["fenceExecutable"] = os.Getenv("DEN_NATIVE_PI_FENCE_INPUT_RECORDER")

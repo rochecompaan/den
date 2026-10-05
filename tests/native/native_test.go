@@ -228,9 +228,14 @@ func TestFilesystemEnforcement(t *testing.T) {
 	})
 
 	t.Run("effective_policy_denies_unrelated_paths", func(t *testing.T) {
-		requireSuccess(t, fixture.launch("effective-deny", os.Getenv("DEN_NATIVE_UNRELATED_STORE_FILE")))
 		requireSuccess(t, fixture.launch("effective-deny", secret))
 		testImplicitHostWrites(t, fixture)
+	})
+
+	// Den grants the whole Nix store, so a store path outside the closure is
+	// readable.
+	t.Run("nix_store_is_readable", func(t *testing.T) {
+		requireSuccess(t, fixture.launch("store-readable", os.Getenv("DEN_NATIVE_UNRELATED_STORE_FILE")))
 	})
 
 	t.Run("allowed_user_argument", func(t *testing.T) {
