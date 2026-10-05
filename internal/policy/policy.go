@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -181,6 +182,7 @@ func Generate(base Base, dynamic Dynamic) ([]byte, error) {
 			return nil, err
 		}
 		policy.Filesystem.AllowRead = appendUnique(policy.Filesystem.AllowRead, reads...)
+		policy.Filesystem.DenyWrite = removeValues(policy.Filesystem.DenyWrite, darwinOnlyDenyWrites...)
 	} else {
 		policy.Filesystem.AllowRead = appendUnique(policy.Filesystem.AllowRead, darwinOperationalReads...)
 		policy.Command.RuntimeExecPolicy = ""
@@ -194,6 +196,22 @@ func Generate(base Base, dynamic Dynamic) ([]byte, error) {
 		return nil, fmt.Errorf("policy: encode: %w", err)
 	}
 	return append(encoded, '\n'), nil
+}
+
+// darwinOnlyDenyWrites close Fence's shared host temporary directory, which
+// macOS Fence grants as writable. Linux Fence gives each sandbox a private
+// /tmp and skips that grant. On Linux a denial would read-only bind an existing
+// host /tmp/fence over the directory that Fence bootstraps inside the sandbox.
+var darwinOnlyDenyWrites = []string{"/tmp/fence", "/tmp/fence/**", "/private/tmp/fence", "/private/tmp/fence/**"}
+
+func removeValues(values []string, removals ...string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if !slices.Contains(removals, value) {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func removeHomePatterns(patterns []string) []string {

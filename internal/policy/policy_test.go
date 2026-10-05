@@ -145,9 +145,17 @@ func TestGenerateDynamicPolicyByPlatform(t *testing.T) {
 			if !contains(got.Network.AllowedDomains, "broker.example.test") {
 				t.Fatal("broker hostname missing")
 			}
+			fenceTemporaryPaths := []string{"/tmp/fence", "/tmp/fence/**", "/private/tmp/fence", "/private/tmp/fence/**"}
 			if platform == "linux" {
 				if got.Command.RuntimeExecPolicy != "argv" {
 					t.Fatal("Linux argv policy missing")
+				}
+				// Linux Fence keeps /tmp private, and a denial would bind an
+				// existing host /tmp/fence over Fence's bootstrap directory.
+				for _, path := range fenceTemporaryPaths {
+					if contains(got.Filesystem.DenyWrite, path) {
+						t.Errorf("Linux denyWrite contains Fence temporary path %q", path)
+					}
 				}
 				if !reflect.DeepEqual(got.Network.AllowLocalOutboundPorts, []uint16{5432, 6379}) || got.Network.AllowLocalOutbound == nil || !*got.Network.AllowLocalOutbound {
 					t.Fatalf("Linux ports = %#v", got.Network)
@@ -163,6 +171,11 @@ func TestGenerateDynamicPolicyByPlatform(t *testing.T) {
 			} else {
 				if got.Command.RuntimeExecPolicy != "" {
 					t.Fatalf("Darwin runtime policy = %q", got.Command.RuntimeExecPolicy)
+				}
+				for _, path := range fenceTemporaryPaths {
+					if !contains(got.Filesystem.DenyWrite, path) {
+						t.Errorf("Darwin denyWrite missing Fence temporary path %q", path)
+					}
 				}
 				if len(got.Network.AllowLocalOutboundPorts) != 0 || got.Network.AllowLocalOutbound == nil || !*got.Network.AllowLocalOutbound {
 					t.Fatalf("Darwin ports = %#v", got.Network)

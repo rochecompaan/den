@@ -72,6 +72,10 @@ let
           test "$(cat "$1")" = "unrelated store content"
           ;;
         implicit-host-linux)
+          if cat "$1" 2>/dev/null; then
+            echo "host /tmp/fence was visible inside the sandbox" >&2
+            exit 1
+          fi
           sh -c 'printf mutation > "$1"' den "$1" 2>/dev/null || true
           sh -c 'printf child > "$1"' den "$2" 2>/dev/null || true
           ;;
