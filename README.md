@@ -294,6 +294,11 @@ Den selects each Pi state directory independently in this order:
 3. The Den default under the runtime home: `.local/state/den/pi/agent` or
    `.local/state/den/pi/sessions`.
 
+When a default directory or its parents are missing, Den creates them with mode
+`0700`. It first checks that each existing ancestor is a real directory that
+no other user can write to. Den does not create parents for paths from steps 1
+or 2.
+
 Custom paths must be absolute, private, non-overlapping directories. Den exports
 the selected agent directory and exports the session directory both through the
 environment and Pi's `--session-dir` option. Pi configuration, `auth.json`, trust
