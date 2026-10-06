@@ -288,6 +288,70 @@ func TestBindingPlanRollsBackEveryCreatedDirectoryOnLaterFailure(t *testing.T) {
 	}
 }
 
+func TestBindingPlanCreatesMissingDefaultParentsAt0700(t *testing.T) {
+	root := t.TempDir()
+	home := privateDir(t, root, "home")
+	plan, err := PlanBindings([]manifest.StateBinding{{
+		Name: "agent", DefaultPath: ".local/state/den/pi/agent",
+		Exports: []manifest.StateExport{{Kind: "environment", Name: "AGENT"}},
+	}}, nil, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plan.Open("linux", safeDependencies(t)); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	for _, relative := range []string{".local", ".local/state", ".local/state/den", ".local/state/den/pi", ".local/state/den/pi/agent"} {
+		info, err := os.Lstat(filepath.Join(home, relative))
+		if err != nil {
+			t.Fatalf("Lstat(%q) error = %v", relative, err)
+		}
+		if !info.IsDir() || info.Mode().Perm() != 0o700 {
+			t.Fatalf("%s mode = %v, want drwx------", relative, info.Mode())
+		}
+	}
+}
+
+func TestBindingPlanCreatesNoDefaultParentsBelowUnsafeAncestor(t *testing.T) {
+	root := t.TempDir()
+	home := privateDir(t, root, "home")
+	if err := os.Chmod(home, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanBindings([]manifest.StateBinding{{
+		Name: "agent", DefaultPath: ".local/state/den/pi/agent",
+		Exports: []manifest.StateExport{{Kind: "environment", Name: "AGENT"}},
+	}}, nil, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plan.Open("linux", safeDependencies(t)); err == nil {
+		t.Fatal("Open() accepted a group-writable runtime home")
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".local")); !os.IsNotExist(err) {
+		t.Fatalf("parent created below unsafe ancestor: %v", err)
+	}
+}
+
+func TestBindingPlanCreatesNoParentsForCustomPaths(t *testing.T) {
+	root := t.TempDir()
+	home := privateDir(t, root, "home")
+	explicit := filepath.Join(root, "missing", "agent")
+	plan, err := PlanBindings([]manifest.StateBinding{{
+		Name: "agent", ExplicitPath: &explicit, DefaultPath: ".local/state/den/pi/agent",
+		Exports: []manifest.StateExport{{Kind: "environment", Name: "AGENT"}},
+	}}, nil, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plan.Open("linux", safeDependencies(t)); err == nil {
+		t.Fatal("Open() accepted a custom path with a missing parent")
+	}
+	if _, err := os.Lstat(filepath.Dir(explicit)); !os.IsNotExist(err) {
+		t.Fatalf("parent created for custom path: %v", err)
+	}
+}
+
 func TestPlanBindingsRejectsFinalSymlinkAndAllowsSiblingPrefix(t *testing.T) {
 	root := t.TempDir()
 	home := privateDir(t, root, "home")

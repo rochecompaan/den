@@ -47,10 +47,10 @@ func TestPiStateSelectionPrecedenceAndDefaultCreation(t *testing.T) {
 
 	t.Run("default", func(t *testing.T) {
 		fixture := newPiFixture(t)
-		defaultRoot := filepath.Join(fixture.runtimeHome, ".local/state/den/pi")
-		if err := os.MkdirAll(defaultRoot, 0o700); err != nil {
-			t.Fatal(err)
+		if pathExists(filepath.Join(fixture.runtimeHome, ".local")) {
+			t.Fatal("runtime home already contains .local")
 		}
+		defaultRoot := filepath.Join(fixture.runtimeHome, ".local/state/den/pi")
 		defaultAgent := filepath.Join(defaultRoot, "agent")
 		defaultSessions := filepath.Join(defaultRoot, "sessions")
 		result := fixture.launch(rpcInput(`{"id":"default","type":"prompt","message":"state selection"}`),

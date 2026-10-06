@@ -143,7 +143,14 @@ func (p BindingPlan) Open(platform string, acl ACLValidator) ([]*Handle, error) 
 			handles = append(handles, &Selection{Mode: Default, WritablePaths: binding.writable, DeniedDefaultPaths: binding.denied, ProtectedPaths: protected, binding: binding.spec, source: binding.source})
 			continue
 		}
-		selection, err := selectCustom(binding.path, p.runtimeHome, acl.ProtectedPathPatterns, Dependencies{ACLProbe: acl.ACLProbe, ProtectedHomes: acl.ProtectedHomes})
+		var selection Selection
+		var err error
+		if binding.source == defaultSource {
+			err = createMissingParents(binding.path, acl.ACLProbe)
+		}
+		if err == nil {
+			selection, err = selectCustom(binding.path, p.runtimeHome, acl.ProtectedPathPatterns, Dependencies{ACLProbe: acl.ACLProbe, ProtectedHomes: acl.ProtectedHomes})
+		}
 		if err != nil {
 			for index := len(handles) - 1; index >= 0; index-- {
 				_ = handles[index].Rollback()
@@ -160,6 +167,47 @@ func (p BindingPlan) Open(platform string, acl ACLValidator) ([]*Handle, error) 
 		handles = append(handles, &selection)
 	}
 	return handles, nil
+}
+
+// createMissingParents creates the missing parents of a default state
+// directory at 0700 after validating the deepest existing ancestor. Rollback
+// keeps these parents because they hold no state.
+func createMissingParents(path string, probeArguments []string) error {
+	var missing []string
+	existing := filepath.Dir(path)
+	for {
+		_, err := os.Lstat(existing)
+		if err == nil {
+			break
+		}
+		parent := filepath.Dir(existing)
+		if !os.IsNotExist(err) || parent == existing {
+			return errInvalid
+		}
+		missing = append(missing, existing)
+		existing = parent
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	probe, err := snapshotACLProbe(probeArguments)
+	if err != nil {
+		return err
+	}
+	ownerUID := uint32(os.Getuid())
+	ownerName, ownerID, err := invokingOwner(ownerUID)
+	if err != nil {
+		return errACL
+	}
+	if _, err := captureAncestors(existing, ownerUID, ownerName, ownerID, probe); err != nil {
+		return err
+	}
+	for index := len(missing) - 1; index >= 0; index-- {
+		if err := os.Mkdir(missing[index], 0o700); err != nil && !os.IsExist(err) {
+			return errInvalid
+		}
+	}
+	return nil
 }
 
 func (p BindingPlan) WritablePaths() []string {
