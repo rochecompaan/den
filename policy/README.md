@@ -43,14 +43,13 @@ JSON. Den then made only these policy changes:
   accepted `chroot` shared-binary limitation; enabled Linux argv-aware runtime
   enforcement. The generator removes that Linux-only setting on macOS.
 
-At launch, Den adds the exact RepoWolf broker hostname, a read-only CA file,
-a read and execute grant for the Nix store after it checks that every closure
-path resolves inside it, operational reads, selected writable worktree/state/
-scratch/socket paths, platform-specific socket and host-port fields, and
-higher-precedence write denials for default state in custom mode, repository
-Git configuration, and the private policy file and directory. Writable entries
-also receive read grants because macOS Fence treats read and write operations
-separately. Denials take precedence over grants.
+At launch, Den adds the exact RepoWolf broker hostname or IP address, a
+read-only CA file, validated closure and operational reads, selected writable
+worktree/state/scratch/socket paths, platform-specific socket and host-port
+fields, and higher-precedence write denials for default state in custom mode,
+repository Git configuration, and the private policy file and directory.
+Writable entries also receive read grants because macOS Fence treats read and
+write operations separately. Denials take precedence over grants.
 
 For requested container host ports, Linux receives the exact sorted,
 deduplicated list. macOS Fence cannot enforce an exact port list: any requested

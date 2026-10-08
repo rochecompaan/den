@@ -44,12 +44,20 @@ Set these three variables before each launch:
 `REPOWOLF_ENDPOINT` has these exact rules:
 
 - The scheme must be lowercase `https`.
-- The hostname must be lowercase ASCII DNS with at least two labels.
-- The hostname cannot have a trailing dot and cannot be an IP address.
+- The host must be a DNS name or an IPv4 or IPv6 address.
+- DNS names must be lowercase ASCII with at least two labels and no trailing dot.
+- IPv6 addresses must appear inside square brackets in the URL.
 - A port is optional. It must be from 1 through 65535, without a leading zero.
 - The path must be empty or `/`.
 - User information, a query, a fragment, and opaque URL forms are invalid.
 - The hostname cannot be GitHub, GitLab, Bitbucket, or a subdomain of one.
+
+Private IPv4 endpoints such as `https://172.17.0.1:8443` are supported.
+Den allows only the configured address through its network proxy.
+It does not enable general local-network access.
+The server's HTTPS certificate must cover the configured IP address.
+IPv6 addresses pass endpoint validation, but Fence 0.1.58 cannot connect to
+IPv6-literal endpoints.
 
 `REPOWOLF_TOKEN` must start with `rw1_`. The remaining 43 characters must be the
 canonical, unpadded Base64 URL encoding of exactly 32 bytes.
@@ -802,7 +810,8 @@ Unmatched outbound traffic is denied. The static allow list contains:
 - `proxy.golang.org` and `sum.golang.org`
 - `formulae.brew.sh`
 
-Each launch also allows the exact validated RepoWolf hostname. Den blocks
+Each launch also allows the exact validated RepoWolf hostname or IP address.
+Den blocks
 `github.com`, `*.github.com`, `githubusercontent.com`,
 `*.githubusercontent.com`, `gitlab.com`, `*.gitlab.com`, `bitbucket.org`, and
 `*.bitbucket.org`. Deny rules take precedence over allow rules.

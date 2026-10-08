@@ -63,8 +63,6 @@ func TestLoadEnvAcceptsOnlyCanonicalEndpoint(t *testing.T) {
 		"https://Broker.example.test",
 		"https://broker.example.test.",
 		"https://büroker.example.test",
-		"https://127.0.0.1",
-		"https://[::1]",
 		"https://github.com",
 		"https://api.github.com",
 		"https://gitlab.com",

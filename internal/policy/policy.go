@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -337,6 +338,9 @@ func addHostPorts(policy *document, platform string, ports []uint16) error {
 }
 
 func validateHostname(host string) error {
+	if net.ParseIP(host) != nil {
+		return nil
+	}
 	if host == "" || strings.ToLower(host) != host || strings.HasSuffix(host, ".") || len(host) > 253 {
 		return errors.New("policy: RepoWolf hostname is invalid")
 	}

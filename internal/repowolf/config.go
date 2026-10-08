@@ -57,14 +57,18 @@ func validEndpoint(value string) bool {
 		return false
 	}
 	hostname := parsed.Hostname()
-	if hostname == "" || net.ParseIP(hostname) != nil || !validHostname(hostname) || blockedHostname(hostname) {
+	if hostname == "" || (net.ParseIP(hostname) == nil && !validHostname(hostname)) || blockedHostname(hostname) {
 		return false
 	}
 	port := parsed.Port()
 	if port != "" && !validPort(port) {
 		return false
 	}
-	canonical := "https://" + hostname
+	host := hostname
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	canonical := "https://" + host
 	if port != "" {
 		canonical += ":" + port
 	}
