@@ -313,7 +313,7 @@ func TestBindingPlanCreatesMissingDefaultParentsAt0700(t *testing.T) {
 }
 
 func TestBindingPlanCreatesNoDefaultParentsBelowUnsafeAncestor(t *testing.T) {
-	root := t.TempDir()
+	root := unprotectedTestRoot(t)
 	home := privateDir(t, root, "home")
 	if err := os.Chmod(home, 0o770); err != nil {
 		t.Fatal(err)

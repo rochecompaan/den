@@ -303,9 +303,8 @@ Den selects each Pi state directory independently in this order:
    `.local/state/den/pi/sessions`.
 
 When a default directory or its parents are missing, Den creates them with mode
-`0700`. It first checks that each existing ancestor is a real directory that
-no other user can write to. Den does not create parents for paths from steps 1
-or 2.
+`0700`. It applies the [ancestor rules for custom state](#custom-mode) before
+creation. Den does not create parents for paths from steps 1 or 2.
 
 Custom paths must be absolute, private, non-overlapping directories. Den exports
 the selected agent directory and exports the session directory both through the
@@ -572,12 +571,21 @@ rejects an ACL that removes owner write access. Den inspects a new directory
 because a parent ACL can create inherited permissions. If that inspection
 fails, Den removes the new directory and stops.
 
-Den resolves existing parent components before validation. Each canonical
-ancestor must prevent replacement by another principal. An ancestor needs the
-sticky exception only if another principal can write it through group or other
-mode bits, or through an ACL. The sticky ancestor must be owned by root or the
-invoking user. A sticky directory restricts who can replace its entries. An
-ancestor writable only by its owner does not need the sticky bit.
+Den resolves existing parent components before validation. An ancestor forms a
+private boundary when the invoking user owns it and its exact mode is `0700`.
+It must have no special permission bits and no non-owner ACL access. Its parents
+must belong to root or the invoking user and pass the write checks below.
+
+Den allows writable ancestors beneath that private boundary because other
+accounts cannot reach them. It does not change their permissions. For example,
+a `0775` projects directory can remain writable beneath a private `0700` home.
+The state directory itself must still meet all the privacy rules above.
+
+Outside a private boundary, group or other write access requires the sticky
+exception. This rule also covers write access granted through an ACL. The
+sticky ancestor must belong to root or the invoking user. A sticky directory
+restricts who can replace its entries. An ancestor writable only by its owner
+does not need the sticky bit.
 
 The overlap validator uses protected roots, not filesystem deny globs. The
 protected directory roots are:
@@ -877,7 +885,8 @@ Do not replace it with a symbolic link.
 1. Use an absolute path with an existing, protected parent.
 2. Make sure that the invoking user owns the directory.
 3. Set the directory mode to `0700`.
-4. Remove non-owner ACL entries from the directory and its relevant ancestors.
+4. Remove non-owner ACL access from the directory and any ancestor used as its
+   private boundary.
 5. Remove a symbolic final path component.
 6. Choose a path that is separate from default state and credential paths.
 7. Start `claude` again.
@@ -896,9 +905,10 @@ chmod 0700 /absolute/config/path
 claude
 ```
 
-An ancestor needs the sticky exception only if another principal can write it
-through group or other mode bits, or through an ACL. An ancestor writable only
-by its owner does not need the sticky bit.
+A shared projects directory can remain writable when a private ancestor
+protects it. Outside that boundary, group, other, or ACL write access needs the
+sticky exception described above. An ancestor writable only by its owner does
+not need the sticky bit.
 
 On Linux, use the host ACL administration tools to remove extra ACL grants. On
 macOS, use the host ACL administration tools to remove inherited ACL grants.

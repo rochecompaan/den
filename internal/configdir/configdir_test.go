@@ -277,7 +277,7 @@ func TestSelectValidatesWritableAncestors(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
+			root := unprotectedTestRoot(t)
 			home := privateDir(t, root, "home")
 			parent := privateDir(t, root, "parent")
 			if err := os.Chmod(parent, test.mode); err != nil {
