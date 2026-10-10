@@ -115,7 +115,7 @@ func TestSelectRejectsWritableAncestorACLExceptSafeStickyAncestor(t *testing.T) 
 		{"writable ACL on sticky user-owned ancestor", true, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
+			root := unprotectedTestRoot(t)
 			home := privateDir(t, root, "home")
 			parent := privateDir(t, root, "parent")
 			if test.sticky {

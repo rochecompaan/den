@@ -273,7 +273,17 @@ func TestConfigDirectoryRacesFailClosed(t *testing.T) {
 	fixture := newNativeFixture(t)
 
 	t.Run("replaceable_ancestor", func(t *testing.T) {
-		ancestor := filepath.Join(fixture.root, "replaceable")
+		// The fixture root is private, so writable descendants are protected.
+		// Put this unsafe ancestor directly under the shared temporary directory.
+		ancestor, err := os.MkdirTemp("/tmp", "den-native-replaceable-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := os.RemoveAll(ancestor); err != nil {
+				t.Errorf("remove replaceable ancestor: %v", err)
+			}
+		})
 		state := filepath.Join(ancestor, "state")
 		if err := os.MkdirAll(state, 0o700); err != nil {
 			t.Fatal(err)
@@ -283,7 +293,7 @@ func TestConfigDirectoryRacesFailClosed(t *testing.T) {
 		}
 		marker := filepath.Join(fixture.worktree, "replaceable-started")
 		result := fixture.launchWith([]string{"CLAUDE_CONFIG_DIR=" + state}, "marker", marker)
-		if result.err == nil || fileExists(marker) {
+		if result.err == nil || fileExists(marker) || !strings.Contains(result.stderr, "custom configuration directory is not private") {
 			t.Fatalf("replaceable ancestor did not fail closed: %v / %s", result.err, result.stderr)
 		}
 	})
