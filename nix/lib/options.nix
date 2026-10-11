@@ -3,6 +3,7 @@
 raw:
 let
   lib = pkgs.lib;
+  normalizeNetwork = import ./network-options.nix { inherit lib; };
   defaults = {
     configDir = null;
     extraPkgs = [ ];
@@ -28,7 +29,7 @@ let
       hostPorts = [ ];
     };
   };
-  allowedRootOptions = [ "configDir" "extraPkgs" "resources" "bundles" "docker" "podman" ];
+  allowedRootOptions = [ "configDir" "extraPkgs" "resources" "bundles" "docker" "podman" "network" ];
   allowedResourceOptions = [ "skills" "plugins" "mcpServers" "settings" ];
   allowedContainerOptions = [ "enable" "package" "composePackage" "socketPath" "hostPorts" ];
   hasOnly = allowed: value: lib.all (name: builtins.elem name allowed) (builtins.attrNames value);
@@ -80,6 +81,7 @@ assert lib.assertMsg (!(raw ? podman) || builtins.isAttrs raw.podman) "podman mu
   configDir = raw.configDir or defaults.configDir;
   extraPkgs = raw.extraPkgs or defaults.extraPkgs;
   resources = validResources;
+  network = normalizeNetwork (raw.network or { });
   bundles = raw.bundles or defaults.bundles;
   docker = validContainer "docker" docker;
   podman = validContainer "podman" podman;

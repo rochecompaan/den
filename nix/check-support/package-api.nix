@@ -21,6 +21,7 @@ let
   fakePodman = pkgs.writeShellScriptBin "podman" "exit 0";
   fakePodmanCompose = pkgs.writeShellScriptBin "podman-compose" "exit 0";
   custom = mkClaude {
+    network.extraAllowedDomains = [ "package.api.example.test" ];
     configDir = "/tmp/den-claude-config";
     extraPkgs = [ fakeGh ];
     docker = {
@@ -61,6 +62,14 @@ let
     inherit isDarwin pkgs;
   };
   adapter = (mkAdapter false) { };
+  networkSandbox = network: mkAgentSandbox {
+    adapter = adapter.adapter;
+    configDir = null;
+    extraPkgs = [ ];
+    docker = { };
+    podman = { };
+    inherit dependencies network;
+  };
   storeStringAdapter = (mkAdapter false) {
     resources = { skills = [ storeStringSkill ]; plugins = [ storeStringPlugin ]; };
   };
@@ -157,6 +166,9 @@ assert custom.denOptions.docker.socketPath == "/tmp/docker.sock";
 assert custom.denOptions.docker.hostPorts == [ 2375 2376 ];
 assert custom.denOptions.podman.socketPath == "/tmp/podman.sock";
 assert custom.denOptions.podman.hostPorts == [ 8080 ];
+assert fails ((networkSandbox { extraAllowedDomains = [ "https://api.example.com" ]; }).outPath);
+assert fails ((networkSandbox { extraAllowedDomains = [ 42 ]; }).outPath);
+assert fails ((networkSandbox { unexpected = true; }).outPath);
 assert fails ((mkClaude { configDir = "relative"; }).outPath);
 assert fails ((mkClaude { configDir = ./.; }).outPath);
 assert fails ((mkClaude { extraPkgs = [ "not-a-package" ]; }).outPath);

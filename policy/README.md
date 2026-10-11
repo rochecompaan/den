@@ -21,6 +21,7 @@ JSON. Den then made only these policy changes:
 
 - Replaced `network.allowedDomains` with the approved Anthropic, npm, Yarn,
   Python, Rust, Go, and Homebrew service domain set.
+- Added exact `chatgpt.com`. This does not add its subdomains or `api.openai.com`.
 - Replaced `network.deniedDomains` with the protected GitHub, GitLab, and
   Bitbucket families plus the retained metadata and Statsig telemetry entries.
 - Kept `allowPty` and `filesystem.allowGitConfig` enabled.

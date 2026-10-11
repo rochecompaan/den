@@ -1,10 +1,10 @@
 { inputs, pkgs }:
 
-{ adapter, configDir, extraPkgs, docker, podman, dependencies ? null }:
+{ adapter, configDir, extraPkgs, docker, podman, network ? { }, dependencies ? null }:
 let
   lib = pkgs.lib;
   options = import ./options.nix { inherit pkgs; } {
-    inherit configDir extraPkgs docker podman;
+    inherit configDir extraPkgs docker podman network;
   };
   productionDependencies = let
     fence = import ./fence.nix { inherit pkgs; };
@@ -81,12 +81,22 @@ let
     ++ map (package: "${package}/bin") dockerPackages
     ++ map (package: "${package}/bin") podmanPackages
     ++ map (package: "${package}/bin") options.extraPkgs;
+  basePolicy = if options.network.extraAllowedDomains == [ ] then ../../policy/fence.json else
+    let
+      base = builtins.fromJSON (builtins.readFile ../../policy/fence.json);
+      policy = base // {
+        network = base.network // {
+          allowedDomains = lib.unique (base.network.allowedDomains ++ options.network.extraAllowedDomains);
+        };
+      };
+    in
+    pkgs.writeText "den-fence-policy.json" (builtins.toJSON policy);
   manifest = pkgs.writeText output.manifestName (builtins.toJSON {
     version = 2;
     platform = if pkgs.stdenv.isDarwin then "darwin" else "linux";
     fenceExecutable = "${deps.fence}/bin/fence";
     repoWolfClientDir = "${deps.repoWolfClient}";
-    basePolicy = "${../../policy/fence.json}";
+    basePolicy = "${basePolicy}";
     closurePathsFile = "${closure}/store-paths";
     scratchRoot = if pkgs.stdenv.isDarwin then "/private/tmp" else "/tmp";
     aclProbe = if pkgs.stdenv.isDarwin then [ "${deps.aclProbeDarwin}/bin/den-acl-probe" ] else [ "${deps.acl}/bin/getfacl" ];

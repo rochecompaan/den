@@ -1,10 +1,14 @@
-{ ... }:
+{ self, ... }:
 
 {
   perSystem = { pkgs, ... }:
     let
       den-launcher = import ../../nix/packages/den-launcher.nix { inherit pkgs; };
       fence = import ../../nix/lib/fence.nix { inherit pkgs; };
+      networkPolicyFixtures = import ../../nix/check-support/network-policy-fixtures.nix {
+        inherit pkgs;
+        den = self;
+      };
       fence-capabilities = import ../../nix/check-support/fence-capabilities.nix {
         inherit pkgs;
         fence = fence.package;
@@ -52,6 +56,12 @@
           cd fence-source
           DEN_POLICY_PATH="$denSource/policy/fence.json" \
             go test -mod=vendor ./internal/proxy -run '^TestDenPolicyDomainDecisions$' -count=1 -v
+          claudePolicy=$(jq -r .basePolicy ${networkPolicyFixtures.custom.claude.denManifest})
+          piPolicy=$(jq -r .basePolicy ${networkPolicyFixtures.custom.pi.denManifest})
+          DEN_POLICY_PATH="$claudePolicy" DEN_PROJECT_DOMAIN=claude.project.test \
+            go test -mod=vendor ./internal/proxy -run '^TestDenProjectPolicyDomainDecisions$' -count=1 -v
+          DEN_POLICY_PATH="$piPolicy" DEN_PROJECT_DOMAIN=pi.project.test \
+            go test -mod=vendor ./internal/proxy -run '^TestDenProjectPolicyDomainDecisions$' -count=1 -v
           touch "$out"
         '';
     };

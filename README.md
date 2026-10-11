@@ -136,6 +136,7 @@ Use `inputs.den.lib.${system}.mkClaude` when you need package customization:
       claude = inputs.den.lib.${system}.mkClaude {
         configDir = null;
         extraPkgs = [ pkgs.neovim ];
+        network.extraAllowedDomains = [ "api.example.com" ];
       };
     in
     {
@@ -162,6 +163,7 @@ Import `homeModules.den`, and then enable `programs.den.claude`:
     enable = true;
     configDir = null;
     extraPkgs = [ pkgs.neovim ];
+    network.extraAllowedDomains = [ "api.example.com" ];
   };
 }
 ```
@@ -186,6 +188,7 @@ Import `devenvModules.den` in the devenv module:
     enable = true;
     configDir = null;
     extraPkgs = [ pkgs.neovim ];
+    network.extraAllowedDomains = [ "api.example.com" ];
   };
 
   enterShell = ''
@@ -236,6 +239,10 @@ let
   pi = inputs.den.lib.${system}.mkPi {
     agentDir = null;
     sessionDir = null;
+    network.extraAllowedDomains = [
+      "api.example.com"
+      "*.internal.example.com"
+    ];
     stateFiles.agent = {
       "settings.json" = settingsFile;
       "profiles/pi-subagents/openai.json" = "${profiles}/openai.json";
@@ -262,6 +269,10 @@ programs.den.pi = {
   enable = true;
   agentDir = null;
   sessionDir = null;
+  network.extraAllowedDomains = [
+    "api.example.com"
+    "*.internal.example.com"
+  ];
   stateFiles.agent = {
     "settings.json" = settingsFile;
     "profiles/pi-subagents/openai.json" = "${profiles}/openai.json";
@@ -285,6 +296,7 @@ output directly without enabling the module:
 let
   customPi = inputs.den.lib.${pkgs.system}.mkPi {
     extraPkgs = [ pkgs.neovim ];
+    network.extraAllowedDomains = [ "api.example.com" ];
   };
 in {
   packages = [ inputs.den.packages.${pkgs.system}.pi ];
@@ -492,6 +504,7 @@ tree. All values are optional. These are the current defaults:
 {
   configDir = null;
   extraPkgs = [ ];
+  network.extraAllowedDomains = [ ];
 
   docker = {
     enable = false;
@@ -529,6 +542,58 @@ For Claude, put these values below `programs.den.claude`; put Pi values below
 `extraPkgs` is a list of Nix packages. Each `hostPorts` value is a unique list
 of integers from 1 through 65535. A non-empty list requires its container
 integration to be enabled.
+
+## Project network domains
+
+An allowlist is a list of permitted domains. Add extra domains with
+`network.extraAllowedDomains` in either constructor or module configuration.
+Den adds them to the bundled allowlist and removes duplicates. Bundled domains
+keep their order, followed by extra domains in their first-occurrence order.
+
+Hostnames must use lowercase ASCII and contain at least two dot-separated
+labels. Labels can contain letters, digits, and hyphens. A label cannot start
+or end with a hyphen. Each label has at most 63 characters. The hostname has
+at most 253 characters. The final label must contain a letter.
+
+A wildcard starts with exactly one `*.` followed by an accepted hostname.
+For example, `*.internal.example.com` permits `api.internal.example.com`.
+Fence uses its existing wildcard rules. The wildcard prefix does not count
+toward the hostname length limit.
+
+Nix evaluation rejects:
+
+- URLs, paths, queries, fragments, and port suffixes.
+- IPv4 and IPv6 addresses, including bracketed IPv6 forms.
+- Empty strings, whitespace, uppercase letters, and trailing dots.
+- Empty labels, oversized names, and single-label names such as `localhost`.
+- A bare `*`, embedded wildcards, and repeated wildcard prefixes.
+
+The list must contain strings, and `network` accepts no unknown attributes.
+Den rejects malformed values rather than trimming whitespace or changing case.
+It does not resolve hostnames during evaluation.
+
+Existing denials always win, even when the list explicitly includes a denied
+hostname or a matching wildcard. Git-host, metadata, and telemetry denials
+remain intact. RepoWolf remains the only route to the protected Git hosts.
+The default grant for `chatgpt.com` is exact. It does not add `*.chatgpt.com`
+or `api.openai.com`.
+
+Each built package owns its network permissions. A project selects its package
+through its development shell. A Home Manager package uses its permissions in
+every directory where it runs. Pi and Claude have separate lists.
+
+Den creates the extra-domain policy in the Nix store at build time.
+It changes only `network.allowedDomains` in the bundled policy. An empty list
+keeps the bundled policy path. The option does not change filesystem, command,
+socket, or localhost port permissions. The launcher still adds the exact
+RepoWolf endpoint and its other existing runtime grants.
+
+Den does not discover repository grants or accept environment overrides for
+this list. It does not replace arbitrary Fence policies or reload project
+configuration during a launch.
+
+Before you evaluate a project's Nix configuration, review its code and network
+grants. An immutable package policy does not make untrusted Nix code safe.
 
 ## Claude configuration directory
 
@@ -808,9 +873,10 @@ available. Den does not edit user settings to install the security hook.
 
 ## Network and filesystem limits
 
-Unmatched outbound traffic is denied. The static allow list contains:
+Unmatched outbound traffic is denied. The default allowlist contains:
 
 - `api.anthropic.com`, `*.anthropic.com`, `claude.ai`, and `*.claude.ai`
+- `chatgpt.com` (exact hostname only)
 - `registry.npmjs.org` and `*.npmjs.org`
 - `registry.yarnpkg.com`
 - `pypi.org` and `files.pythonhosted.org`
@@ -951,9 +1017,9 @@ direct route to GitLab or Bitbucket.
 ### The sandbox blocks an expected host or file
 
 Compare the target with the allow and deny lists above. Deny rules always win.
-There is no user option to weaken the base security policy. Move required
-state into the selected configuration directory only when it is not a
-protected credential path.
+For an otherwise unmatched host, add it through `network.extraAllowedDomains`.
+You cannot remove Den's denials. Move required state into the selected
+configuration directory only when it is not a protected credential path.
 
 ### A container command reaches more than expected
 

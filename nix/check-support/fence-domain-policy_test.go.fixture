@@ -8,6 +8,52 @@ import (
 	"github.com/Use-Tusk/fence/internal/config"
 )
 
+func TestDenProjectPolicyDomainDecisions(t *testing.T) {
+	policyPath := os.Getenv("DEN_POLICY_PATH")
+	projectDomain := os.Getenv("DEN_PROJECT_DOMAIN")
+	if policyPath == "" || projectDomain == "" {
+		t.Fatal("DEN_POLICY_PATH and DEN_PROJECT_DOMAIN are required")
+	}
+	cfg, err := config.Load(policyPath)
+	if err != nil {
+		t.Fatalf("load project policy with Fence config consumer: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("Fence config consumer returned no policy")
+	}
+	otherDomain := "pi.project.test"
+	if projectDomain == otherDomain {
+		otherDomain = "claude.project.test"
+	}
+	filter := CreateDomainFilter(cfg, false)
+	for _, test := range []struct {
+		host    string
+		allowed bool
+	}{
+		{host: "api.project.test", allowed: true},
+		{host: projectDomain, allowed: true},
+		{host: "worker.services.project.test", allowed: true},
+		{host: otherDomain, allowed: false},
+		{host: "unlisted.project.test", allowed: false},
+		{host: "github.com", allowed: false},
+		{host: "api.github.com", allowed: false},
+		{host: "raw.githubusercontent.com", allowed: false},
+		{host: "gitlab.com", allowed: false},
+		{host: "api.gitlab.com", allowed: false},
+		{host: "bitbucket.org", allowed: false},
+		{host: "api.bitbucket.org", allowed: false},
+		{host: "metadata.google.internal", allowed: false},
+		{host: "169.254.169.254", allowed: false},
+		{host: "statsig.anthropic.com", allowed: false},
+	} {
+		t.Run(test.host, func(t *testing.T) {
+			if got := filter(test.host, 443); got != test.allowed {
+				t.Fatalf("Fence CreateDomainFilter(%q) = %v, want %v", test.host, got, test.allowed)
+			}
+		})
+	}
+}
+
 func TestDenPolicyDomainDecisions(t *testing.T) {
 	policyPath := os.Getenv("DEN_POLICY_PATH")
 	if policyPath == "" {
@@ -41,6 +87,9 @@ func TestDenPolicyDomainDecisions(t *testing.T) {
 		{name: "denied Statsig wins over Anthropic wildcard", host: "statsig.anthropic.com", port: 443, allowed: false},
 		{name: "unmatched outbound is denied", host: "unlisted.example.test", port: 443, allowed: false},
 		{name: "non-denied Anthropic sibling is allowed", host: "api.anthropic.com", port: 443, allowed: true},
+		{name: "ChatGPT default is allowed", host: "chatgpt.com", port: 443, allowed: true},
+		{name: "ChatGPT subdomains are not implicit", host: "unlisted.chatgpt.com", port: 443, allowed: false},
+		{name: "OpenAI API is not implicit", host: "api.openai.com", port: 443, allowed: false},
 		{name: "configured IPv4 broker is allowed", host: "172.17.0.1", port: 8443, allowed: true},
 		{name: "other private IPv4 is denied", host: "172.17.0.2", port: 8443, allowed: false},
 		{name: "configured IPv4 loopback is allowed", host: "127.0.0.1", port: 8443, allowed: true},

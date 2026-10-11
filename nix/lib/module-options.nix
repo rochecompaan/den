@@ -2,6 +2,13 @@
 
 let
   inherit (lib) mkOption types;
+  normalizeNetwork = import ./network-options.nix { inherit lib; };
+  networkOptions.extraAllowedDomains = mkOption {
+    type = types.listOf types.str;
+    default = [ ];
+    apply = domains: (normalizeNetwork { extraAllowedDomains = domains; }).extraAllowedDomains;
+    description = "Extra lowercase hostnames or leading *. patterns added to the sandbox allowlist. Existing denials still take precedence.";
+  };
   containerOptions = agent: name: package: composePackage: {
     enable = mkOption {
       type = types.bool;
@@ -86,6 +93,7 @@ in
           description = "Claude settings fragments merged into the Den-owned settings file.";
         };
       };
+      network = networkOptions;
       docker = containerOptions "Claude" "Docker" pkgs.docker-client pkgs.docker-compose;
       podman = containerOptions "Claude" "Podman" pkgs.podman pkgs.podman-compose;
     };
@@ -128,11 +136,14 @@ in
         promptTemplates = mkOption { type = types.listOf resourceType; default = [ ]; description = "Immutable Pi prompt templates."; };
         themes = mkOption { type = types.listOf resourceType; default = [ ]; description = "Immutable Pi themes."; };
       };
+      network = networkOptions;
       docker = containerOptions "Pi" "Docker" pkgs.docker-client pkgs.docker-compose;
       podman = containerOptions "Pi" "Podman" pkgs.podman pkgs.podman-compose;
     };
   };
 
-  assertions = claude: containerAssertions "programs.den.claude" claude;
-  piAssertions = pi: containerAssertions "programs.den.pi" pi;
+  assertions = claude: builtins.deepSeq (normalizeNetwork (claude.network or { }))
+    (containerAssertions "programs.den.claude" claude);
+  piAssertions = pi: builtins.deepSeq (normalizeNetwork (pi.network or { }))
+    (containerAssertions "programs.den.pi" pi);
 }

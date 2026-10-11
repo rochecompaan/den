@@ -7,6 +7,7 @@ let
   moduleOptions = {
     programs.den.claude = {
       enable = true;
+      network.extraAllowedDomains = [ "claude.module.example.test" ];
       configDir = "/tmp/den-claude-config";
       extraPkgs = [ fakeExtra ];
       bundles = [ fixtureBundle ];
@@ -62,8 +63,9 @@ let
   };
   homeDisabled = mkHome den.homeModules.den [ ];
   devenvDisabled = mkDevenv den.devenvModules.den [ ];
-  homeDisabledLazy = mkHome (homeModule fakeDen) [ ];
-  devenvDisabledLazy = mkDevenv (devenvModule fakeDen) [ ];
+  disabledNetwork = { programs.den.claude.network.extraAllowedDomains = [ "disabled.claude.example.test" ]; };
+  homeDisabledLazy = mkHome (homeModule fakeDen) [ disabledNetwork ];
+  devenvDisabledLazy = mkDevenv (devenvModule fakeDen) [ disabledNetwork ];
   homeDefaultEnabled = mkHome den.homeModules.den [ defaultModuleOptions ];
   devenvDefaultEnabled = mkDevenv den.devenvModules.den [ defaultModuleOptions ];
   homeEnabled = mkHome den.homeModules.den [ moduleOptions ];
@@ -84,12 +86,27 @@ let
   succeeds = value: (builtins.tryEval (builtins.deepSeq value value)).success;
   hasOutPath = outPath: packages: lib.any (package: package.outPath == outPath) packages;
   countOutPath = outPath: packages: builtins.length (builtins.filter (package: package.outPath == outPath) packages);
-  fails = value: !(builtins.tryEval value).success;
+  fails = value: !(builtins.tryEval (builtins.deepSeq value true)).success;
+  declarations = import ../lib/module-options.nix { inherit lib pkgs; };
+  invalidNetworks = [
+    { extraAllowedDomains = [ "API.example.com" ]; }
+    { extraAllowedDomains = [ "https://api.example.com" ]; }
+    { extraAllowedDomains = [ 42 ]; }
+    { unexpected = true; }
+  ];
+  rejectsDisabledNetwork = network:
+    let value = { enable = false; inherit network; }; in
+    fails (invalidHome value).network
+    && fails (invalidDevenv value).network
+    && fails (invalidHomeAssertions value)
+    && fails (invalidDevenvAssertions value)
+    && fails (declarations.assertions (homeDisabled.config.programs.den.claude // { inherit network; }));
   invalidHome = value: (mkHome den.homeModules.den [ { programs.den.claude = value; } ]).config.programs.den.claude;
   invalidDevenv = value: (mkDevenv den.devenvModules.den [ { programs.den.claude = value; } ]).programs.den.claude;
   invalidHomeAssertions = value: (mkHome den.homeModules.den [ { programs.den.claude = value; } ]).config.assertions;
   invalidDevenvAssertions = value: (mkDevenv den.devenvModules.den [ { programs.den.claude = value; } ]).shell.drvPath;
 in
+assert lib.all rejectsDisabledNetwork invalidNetworks;
 assert succeeds (packageOutPaths homeDisabledLazy.config.home.packages);
 assert succeeds (packageOutPaths devenvDisabledLazy.packages);
 assert !hasOutPath expectedDefault.outPath homeDisabled.config.home.packages;

@@ -3,6 +3,7 @@
 raw:
 let
   lib = pkgs.lib;
+  normalizeNetwork = import ./network-options.nix { inherit lib; };
   defaults = {
     agentDir = null;
     sessionDir = null;
@@ -31,7 +32,7 @@ let
       hostPorts = [ ];
     };
   };
-  allowedRootOptions = [ "agentDir" "sessionDir" "stateFiles" "extraPkgs" "bundles" "resources" "docker" "podman" ];
+  allowedRootOptions = [ "agentDir" "sessionDir" "stateFiles" "extraPkgs" "bundles" "resources" "docker" "podman" "network" ];
   allowedResourceOptions = [ "extensions" "packages" "skills" "promptTemplates" "themes" ];
   allowedStateFileBindings = [ "agent" ];
   allowedContainerOptions = [ "enable" "package" "composePackage" "socketPath" "hostPorts" ];
@@ -101,6 +102,7 @@ assert lib.assertMsg (!(raw ? podman) || builtins.isAttrs raw.podman) "podman mu
   bundles = raw.bundles or defaults.bundles;
   inherit validResources;
   resources = validResources;
+  network = normalizeNetwork (raw.network or { });
   docker = validContainer "docker" docker;
   podman = validContainer "podman" podman;
 }
