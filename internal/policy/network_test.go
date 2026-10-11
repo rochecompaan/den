@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -41,6 +42,53 @@ func TestGenerateAllowsOnlyConfiguredRepoWolfIP(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestGenerateRetainsProjectDomains(t *testing.T) {
+	root := t.TempDir()
+	paths := makePaths(t, root)
+	resolv := filepath.Join(root, "resolv.conf")
+	if err := os.WriteFile(resolv, []byte("nameserver 127.0.0.1\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	originalResolver := resolveResolvConf
+	resolveResolvConf = func() (string, error) { return resolv, nil }
+	t.Cleanup(func() { resolveResolvConf = originalResolver })
+
+	var base document
+	if err := json.Unmarshal(readBase(t), &base); err != nil {
+		t.Fatal(err)
+	}
+	base.Network.AllowedDomains = append(base.Network.AllowedDomains,
+		"api.project.test", "*.services.project.test",
+	)
+	customBase, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, platform := range []string{"linux", "darwin"} {
+		t.Run(platform, func(t *testing.T) {
+			dynamic := testDynamic(paths)
+			dynamic.Platform = platform
+			dynamic.RepoWolfHostname = "broker.example.test"
+			encoded, err := Generate(Base(customBase), dynamic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got document
+			if err := json.Unmarshal(encoded, &got); err != nil {
+				t.Fatal(err)
+			}
+			for _, host := range []string{"api.project.test", "*.services.project.test", "broker.example.test"} {
+				if !contains(got.Network.AllowedDomains, host) {
+					t.Errorf("generated policy lost %q", host)
+				}
+			}
+			if !reflect.DeepEqual(got.Network.DeniedDomains, deniedDomains) {
+				t.Fatal("generated policy changed denied domains")
+			}
+		})
 	}
 }
 

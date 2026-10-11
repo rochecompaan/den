@@ -1,6 +1,6 @@
 { pkgs, fence, mkAgentSandbox, isDarwin ? pkgs.stdenv.isDarwin }:
 
-args@{ configDir ? null, extraPkgs ? [ ], resources ? { }, bundles ? [ ], docker ? { }, podman ? { }, ... }:
+args@{ configDir ? null, extraPkgs ? [ ], resources ? { }, bundles ? [ ], docker ? { }, podman ? { }, network ? { }, ... }:
 
 let
   lib = pkgs.lib;
@@ -41,7 +41,7 @@ in
 assert lib.assertMsg (claude.version == "2.1.158")
   "Den requires Claude Code 2.1.158; refusing unknown version ${claude.version}";
 mkAgentSandbox {
-  inherit (options) configDir extraPkgs docker podman;
+  inherit (options) configDir extraPkgs docker podman network;
   adapter = {
     output = {
       packageName = "claude";

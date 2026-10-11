@@ -22,6 +22,7 @@ let
   };
   piOptions = {
     enable = true;
+    network.extraAllowedDomains = [ "pi.module.example.test" ];
     agentDir = "/tmp/den-pi-agent";
     sessionDir = "/tmp/den-pi-sessions";
     stateFiles.agent."settings.json" = settings;
@@ -42,7 +43,10 @@ let
       hostPorts = [ 8081 8080 ];
     };
   };
-  claudeOptions = { programs.den.claude.enable = true; };
+  claudeOptions.programs.den.claude = {
+    enable = true;
+    network.extraAllowedDomains = [ "claude.module.example.test" ];
+  };
   homeModule = self: (import ../../modules/home/den.nix { inherit self; }).flake.homeModules.den;
   devenvModule = self: (import ../../modules/devenv/den.nix { inherit self; }).flake.devenvModules.den;
   mkHome = module: modules: inputs.home-manager.lib.homeManagerConfiguration {
@@ -72,7 +76,7 @@ let
   homePiDisabled = mkHome den.homeModules.den [ piDisabledWithClaude ];
   devenvPiDisabled = mkDevenv den.devenvModules.den [ piDisabledWithClaude ];
   expectedPi = den.lib.${pkgs.system}.mkPi (builtins.removeAttrs piOptions [ "enable" ]);
-  expectedClaude = den.lib.${pkgs.system}.mkClaude { };
+  expectedClaude = den.lib.${pkgs.system}.mkClaude (builtins.removeAttrs claudeOptions.programs.den.claude [ "enable" ]);
   paths = packages: map (package: package.outPath) packages;
   count = outPath: packages: builtins.length (builtins.filter (package: package.outPath == outPath) packages);
   fakeDen = den // {
@@ -80,9 +84,30 @@ let
       ${pkgs.system} = den.lib.${pkgs.system} // { mkPi = _: throw "disabled Pi module called mkPi"; };
     };
   };
-  homeDisabledLazy = mkHome (homeModule fakeDen) [ ];
-  devenvDisabledLazy = mkDevenv (devenvModule fakeDen) [ ];
+  disabledNetwork = { programs.den.pi.network.extraAllowedDomains = [ "disabled.pi.example.test" ]; };
+  homeDisabledLazy = mkHome (homeModule fakeDen) [ disabledNetwork ];
+  devenvDisabledLazy = mkDevenv (devenvModule fakeDen) [ disabledNetwork ];
+  fails = value: !(builtins.tryEval (builtins.deepSeq value true)).success;
+  declarations = import ../lib/module-options.nix { inherit lib pkgs; };
+  invalidNetworks = [
+    { extraAllowedDomains = [ "API.example.com" ]; }
+    { extraAllowedDomains = [ "https://api.example.com" ]; }
+    { extraAllowedDomains = [ 42 ]; }
+    { unexpected = true; }
+  ];
+  rejectsDisabledNetwork = network:
+    let
+      value = { programs.den.pi = { enable = false; inherit network; }; };
+      home = mkHome den.homeModules.den [ value ];
+      devenv = mkDevenv den.devenvModules.den [ value ];
+    in
+    fails home.config.programs.den.pi.network
+    && fails devenv.programs.den.pi.network
+    && fails home.config.assertions
+    && fails devenv.shell.drvPath
+    && fails (declarations.piAssertions (homeDisabled.config.programs.den.pi // { inherit network; }));
 in
+assert lib.all rejectsDisabledNetwork invalidNetworks;
 assert (builtins.tryEval (builtins.deepSeq (paths homeDisabledLazy.config.home.packages) true)).success;
 assert (builtins.tryEval (builtins.deepSeq (paths devenvDisabledLazy.packages) true)).success;
 assert !homeDisabled.config.programs.den.pi.enable;

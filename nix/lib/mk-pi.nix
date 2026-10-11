@@ -1,6 +1,6 @@
 { inputs, pkgs, mkAgentSandbox ? import ./mk-agent-sandbox.nix { inherit inputs pkgs; }, isDarwin ? pkgs.stdenv.isDarwin, darwinSecurityTestInputs ? null }:
 
-args@{ agentDir ? null, sessionDir ? null, extraPkgs ? [ ], resources ? { }, bundles ? [ ], docker ? { }, podman ? { }, ... }:
+args@{ agentDir ? null, sessionDir ? null, extraPkgs ? [ ], resources ? { }, bundles ? [ ], docker ? { }, podman ? { }, network ? { }, ... }:
 let
   lib = pkgs.lib;
   options = import ./pi-options.nix { inherit pkgs; } args;
@@ -72,7 +72,7 @@ assert lib.assertMsg (fenceInfo.capabilities.claudePreToolUse &&
   (if isDarwin then fenceInfo.capabilities.allowUnixSockets else fenceInfo.capabilities.linuxReadOnlyDenyReadMasks && fenceInfo.capabilities.argvRuntimePolicy))
   "Fence lacks mandatory Pi security capabilities";
 mkAgentSandbox {
-  inherit (options) extraPkgs docker podman;
+  inherit (options) extraPkgs docker podman network;
   configDir = null;
   adapter = {
     output = {
