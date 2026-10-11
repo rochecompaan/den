@@ -16,7 +16,8 @@
       "index.crates.io",
       "proxy.golang.org",
       "sum.golang.org",
-      "formulae.brew.sh"
+      "formulae.brew.sh",
+      "chatgpt.com"
     ],
     "deniedDomains": [
       "github.com",

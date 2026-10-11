@@ -18,7 +18,7 @@ var allowedDomains = []string{
 	"api.anthropic.com", "*.anthropic.com", "claude.ai", "*.claude.ai",
 	"registry.npmjs.org", "*.npmjs.org", "registry.yarnpkg.com", "pypi.org",
 	"files.pythonhosted.org", "crates.io", "static.crates.io", "index.crates.io",
-	"proxy.golang.org", "sum.golang.org", "formulae.brew.sh",
+	"proxy.golang.org", "sum.golang.org", "formulae.brew.sh", "chatgpt.com",
 }
 
 var deniedDomains = []string{
