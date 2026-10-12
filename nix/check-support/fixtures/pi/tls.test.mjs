@@ -53,11 +53,8 @@ export async function checkTrust() {
       const response = await fetch(target, { signal: AbortSignal.timeout(3000) });
       return response.text();
     };
-    const tls = await import('node:tls');
-    const providerRoot = readFileSync(join(fixtures, 'provider-ca.pem'), 'utf8').trim();
-    assert.ok(tls.getCACertificates('system').some(pem => pem.trim() === providerRoot),
-      `provider root absent: SSL_CERT_FILE=${process.env.SSL_CERT_FILE}; NODE_OPTIONS=${process.env.NODE_OPTIONS}`);
-    // Missing public CA selection fails here with UNABLE_TO_GET_ISSUER_CERT_LOCALLY.
+    // Test effective trust by handshake, not the platform's CA enumeration.
+    // Without public CA selection, this generated provider root is untrusted.
     const provider = await get(url(0)).catch(error => {
       throw new Error(`public/provider TLS failed: ${error.cause?.code}`, { cause: error });
     });
