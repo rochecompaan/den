@@ -22,7 +22,8 @@ let
   securityAdapterExtension = if adapterExtensionInjected then darwinSecurityTestInputs.adapterExtension else securityExtension;
   policyIdentityOverride = if darwinSecurityTestInputs != null && darwinSecurityTestInputs ? policyIdentity
     then darwinSecurityTestInputs.policyIdentity else null;
-  piAgentSource = builtins.replaceStrings [ "@pi@" ] [ "${pi}" ] (builtins.readFile ../pi/den-pi-agent.sh);
+  piAgentSource = builtins.replaceStrings [ "@pi@" "@publicCA@" ]
+    [ "${pi}" "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ] (builtins.readFile ../pi/den-pi-agent.sh);
   darwinInputValidation = lib.optionalString isDarwin ''
     validate_security_input() {
       path=$1
